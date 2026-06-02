@@ -24,7 +24,7 @@ Long agentic runs all die the same way. The model fills its window, starts **com
 
 Unlimited Context fixes the overflow, not the window. Instead of blindly summarizing what spills over, it **encodes and externalizes** it to a local pool on your disk, and pages the *right slice* back in exactly when the model needs it. Nothing load-bearing is silently lost — it's filed, and recoverable.
 
-**Compress & forget ✗  →  Encode & recover ✓**
+## **Compress & forget ✗  →  Encode & recover ✓**
 
 <img width="914" height="572" alt="image" src="https://github.com/user-attachments/assets/dadae038-5e1a-45c6-b16c-4763da4238a8" />
 
