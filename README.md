@@ -2,12 +2,13 @@
 
 # ⚡ Unlimited Context
 
-### Unlimited context for **Ollama** — give any local LLM a **billion-token memory**. Local-first, on your own machine, free.
-<img width="537" height="405" alt="image" src="https://github.com/user-attachments/assets/79758729-ead7-42ca-9784-831cae68ef06" />
+**Unlimited context for [Ollama](https://ollama.com)** — give any local LLM a **billion-token memory**. Local-first, on your own machine, free.
+
+<img width="537" height="405" alt="Unlimited Context" src="https://github.com/user-attachments/assets/79758729-ead7-42ca-9784-831cae68ef06" />
+
+[![License](https://img.shields.io/badge/license-Apache--2.0-06b6d4)](LICENSE) [![Python](https://img.shields.io/badge/python-3.10%2B-14b8a6)](https://www.python.org) [![Built by Aether](https://img.shields.io/badge/built%20by-Aether-7c3aed)](https://aethersystems.net)
 
 **An open project from [Aether](https://aethersystems.net)** · Apache-2.0 · `pip install aether-context`
-
-[![license](https://img.shields.io/badge/license-Apache--2.0-06b6d4)]() [![python](https://img.shields.io/badge/python-3.10+-14b8a6)]() [![built by](https://img.shields.io/badge/built%20by-Aether-7c3aed)]()
 
 </div>
 
@@ -24,13 +25,28 @@ Long agentic runs all die the same way. The model fills its window, starts **com
 
 Unlimited Context fixes the overflow, not the window. Instead of blindly summarizing what spills over, it **encodes and externalizes** it to a local pool on your disk, and pages the *right slice* back in exactly when the model needs it. Nothing load-bearing is silently lost — it's filed, and recoverable.
 
-## **Compress & forget ✗  →  Encode & recover ✓**
+<p align="center"><strong>Compress &amp; forget ✗ &nbsp;→&nbsp; Encode &amp; recover ✓</strong></p>
 
-<img width="914" height="572" alt="image" src="https://github.com/user-attachments/assets/dadae038-5e1a-45c6-b16c-4763da4238a8" />
+<div align="center">
+  <img width="880" alt="Compress and forget vs encode and recover" src="https://github.com/user-attachments/assets/dadae038-5e1a-45c6-b16c-4763da4238a8" />
+</div>
+
+## How it works (60 seconds)
+
+It's **virtual memory, for attention.** Map it to an OS and it clicks:
+
+| OS | Unlimited Context |
+|---|---|
+| RAM | the **resident window** the model sees now (small, fast) |
+| Disk | the **context pool** (~5 GB, ~1B tokens, encoded) |
+| Pager | the **slice loader** — prefetches the next slice from what the model is reasoning about *right now* |
+| Page-replacement | the **witnesses (+/−)** — salient slices *harden*, stale ones *fade*, anything relevant again *re-hardens* |
+
+All of it runs while the model generates, so reaching the pool costs you no extra wall-clock. → full explainer in [`docs/how-it-works.md`](docs/how-it-works.md).
 
 ## What you get
 
-- 🧠 **Unbounded reach** — ~1B tokens of encoded context in ~5GB on disk; the model reaches it in slices.
+- 🧠 **Unbounded reach** — ~1B tokens of encoded context in ~5 GB on disk; the model reaches it in slices.
 - ⚡ **Zero added latency** — the pager runs *concurrently* with generation, hidden behind the model's own thinking, so reaching the pool costs you no extra wall-clock.
 - 🪟 **Curated beats crammed** — a small, relevant resident window outperforms a stuffed one (no lost-in-the-middle) — and costs less.
 - 🔒 **Local-first** — your context never leaves your machine. Free storage, full privacy, works offline.
@@ -52,9 +68,11 @@ Rough ballpark — assuming a busy coding agent encodes ~300K–1M keep-worthy t
 
 For color: 5 GB of reach ≈ ~100M lines of code, or a shelf of ~8,000 books — you won't fill it in one sitting.
 
-<sub>\* Rough order of magnitude. Because the witnesses fade stale slices, the pool never hard-stops anyway — it just keeps what's relevant. Run a build as long as you want; it won't lose the plot. RAM and multi-session math live in [RAM & running many sessions](#ram--running-many-sessions) below.</sub>
+<sub>\* Rough order of magnitude. Because the witnesses fade stale slices, the pool never hard-stops anyway — it just keeps what's relevant. Run a build as long as you want; it won't lose the plot. RAM and multi-session math live in [RAM &amp; running many sessions](#ram--running-many-sessions) below.</sub>
 
-<img width="899" height="471" alt="image" src="https://github.com/user-attachments/assets/af626850-96b1-43a2-91fd-b5162bc21e5a" />
+<div align="center">
+  <img width="880" alt="Coding time per pool size" src="https://github.com/user-attachments/assets/af626850-96b1-43a2-91fd-b5162bc21e5a" />
+</div>
 
 ## Quickstart
 
@@ -125,7 +143,7 @@ RAM  ≈  ~180 MB   base (engine + shared static encoder)
 | 15 GB | ~436 MB |
 | 20 GB | ~582 MB |
 
-### Shared pool vs separated pools
+### Shared pool vs separate pools
 
 Running more than one session? You pick how the pool is shared — and it's the single biggest RAM lever:
 
@@ -145,20 +163,7 @@ Running more than one session? You pick how the pool is shared — and it's the 
 
 <sub>Reserves: ~2.5 GB held back on an 8 GB machine, ~6 GB on 16 GB — the rest stays for your OS and editor. ¹ With a shared pool, RAM stops being the limit (50–70+ sessions fit); you're bounded by CPU and good sense, not memory.</sub>
 
-> **TL;DR.** **Shared pool → RAM is not your limit**, spin up as many sessions as your CPU allows. **Separate pools → one index each**, so plan on ~3 (20 GB) to ~13 (5 GB) sessions on 8 GB, roughly double at 16 GB. A bigger pool always buys **reach**, never more sessions. Need more headroom? Shrink the pool, or run `--index tiered` to keep only warm graph nodes resident.
-
-## How it works (60 seconds)
-
-It's **virtual memory, for attention.** Map it to an OS and it clicks:
-
-| OS | Unlimited Context |
-|---|---|
-| RAM | the **resident window** the model sees now (small, fast) |
-| Disk | the **context pool** (~5GB, ~1B tokens, encoded) |
-| Pager | the **slice loader** — prefetches the next slice from what the model is reasoning about *right now* |
-| Page-replacement | the **witnesses (+/−)** — salient slices *harden*, stale ones *fade*, anything relevant again *re-hardens* |
-
-All of it runs while the model generates, so the reach costs you nothing in wall-clock. → full explainer in [`docs/how-it-works.md`](docs/how-it-works.md).
+> **TL;DR.** **Shared pool → RAM is not your limit** — spin up as many sessions as your CPU allows. **Separate pools → one index each**, so plan on ~3 (20 GB) to ~13 (5 GB) sessions on 8 GB, roughly double at 16 GB. A bigger pool always buys **reach**, never more sessions. Need more headroom? Shrink the pool, or run `--index tiered` to keep only warm graph nodes resident.
 
 ## Honest about the word "unlimited"
 
@@ -166,14 +171,15 @@ All of it runs while the model generates, so the reach costs you nothing in wall
 
 ## License
 
-**Apache-2.0.** Use it, fork it, ship it in your product. Built by [Aether](https://aethersystems.net).
+**Apache-2.0.** Use it, fork it, ship it in your product.
 
 ---
 
 <div align="center">
 
-Built by Brandon Barrante, Aether Ai  **[Aether](https://aethersystems.net)**
-<img width="2752" height="1536" alt="image" src="https://github.com/user-attachments/assets/4b7eef9a-8b1c-4dc7-b926-771ce53ed04d" />
+Built by **Brandon Barrante** · [Aether](https://aethersystems.net)
+
+<img width="880" alt="Unlimited Context" src="https://github.com/user-attachments/assets/4b7eef9a-8b1c-4dc7-b926-771ce53ed04d" />
 
 *Unbounded reach for the model you already run.*
 
