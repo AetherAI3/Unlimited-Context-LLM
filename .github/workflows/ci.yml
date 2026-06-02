@@ -30,7 +30,7 @@ jobs:
       - name: Types (mypy)
         run: python -m mypy aether_context
       - name: Tests
-        run: python -m pytest -q
+        run: python -m pytest -q --cov=aether_context --cov-report=term-missing
       - name: Bench smoke (hermetic mock model)
         run: python bench/drift_vs_window.py --model mock --quick
 

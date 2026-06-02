@@ -278,8 +278,8 @@ def test_ollama_name_and_host_defaults():
 
 
 def test_ollama_custom_host():
-    m = OllamaLLM("qwen2.5", host="http://192.168.1.2:11434")
-    assert m.host == "http://192.168.1.2:11434"
+    m = OllamaLLM("qwen2.5", host="http://127.0.0.2:11434")
+    assert m.host == "http://127.0.0.2:11434"
 
 
 # ---- guarded backends: friendly error when the optional dep is missing ------

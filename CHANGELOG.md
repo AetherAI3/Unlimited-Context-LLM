@@ -33,5 +33,5 @@ pool — local-first, numpy-only core.
   completion), hermetic via `MockLLM`.
 - Docs (`how-it-works`, `local-models`), examples, CI, Apache-2.0 license.
 
-[Unreleased]: https://github.com/aether/unlimited-context/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/aether/unlimited-context/releases/tag/v0.1.0
+[Unreleased]: https://github.com/DBarr3/Unlimited-Context/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/DBarr3/Unlimited-Context/releases/tag/v0.1.0

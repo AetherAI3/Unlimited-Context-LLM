@@ -124,6 +124,21 @@ For color: 5 GB of reach ≈ ~100M lines of code, or a shelf of ~8,000 books —
   <img width="880" alt="Coding time per pool size" src="https://github.com/user-attachments/assets/af626850-96b1-43a2-91fd-b5162bc21e5a" />
 </div>
 
+## Common commands
+
+A friendly cheat-sheet — the handful of commands you'll actually reach for:
+
+| Command | What it's for |
+|---|---|
+| `aether-context init` | Pick your pool size — the on-disk storage slider — on first run. |
+| `aether-context run "<task>"` | One-shot a task with full reach, then print the result. |
+| `aether-context chat` | Open an interactive session; type `/status` anytime, `/clear` to reset. |
+| `aether-context status` | See pool size, slices used, reach, and hit rate at a glance. |
+| `aether-context doctor` | Check Ollama, your model, disk, and RAM before a long run. |
+| `aether-context --pool 20` | Resize the pool anytime (non-destructive re-index). |
+
+> **Tip:** run `aether-context doctor` first — it catches the three things that ever go wrong (Ollama down, model not pulled, not enough disk) and prints the exact fix.
+
 ## Running many sessions
 
 Running more than one agent? How the pool is shared is the single biggest RAM lever:
@@ -168,6 +183,10 @@ RAM  ≈  ~180 MB   base (engine + shared static encoder)
 ## Honest about the word "unlimited"
 
 "Unlimited" means **reach, not attention.** Your model keeps its native window — we make it *reach* a billion-token pool in slices, via fast retrieval. The whole thing rides on retrieval **hit rate**; when it's high (and the loader is built to keep it high), the pool feels like one seamless context.
+
+## Status & community
+
+Published **as-is** under Apache-2.0. Bug reports are welcome via [Issues](https://github.com/DBarr3/Unlimited-Context/issues); pull requests aren't actively reviewed. If it's useful, a GitHub star helps others find it. Runnable examples live in [`examples/`](examples/) — start with [`quickstart.py`](examples/quickstart.py), then [`coding_agent.py`](examples/coding_agent.py).
 
 ## License
 

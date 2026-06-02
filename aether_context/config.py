@@ -16,6 +16,7 @@ Constants:
 from __future__ import annotations
 
 import json
+import shutil
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -55,6 +56,26 @@ def reach_tokens(pool_gb: int) -> int:
 def default_pool_dir() -> Path:
     """The default pool directory: ``~/.aether-context``."""
     return Path.home() / ".aether-context"
+
+
+#: Bytes per gigabyte (binary), for disk / RAM math.
+BYTES_PER_GB = 1024 ** 3
+
+
+def free_disk_bytes(path: "Path | str") -> int | None:
+    """Free bytes on the filesystem that holds ``path`` (nearest existing ancestor).
+
+    The pool directory may not exist yet, so we walk up to the closest existing parent before
+    probing. Returns ``None`` if free space cannot be read (so callers can skip the check
+    rather than wrongly block). Never raises.
+    """
+    try:
+        p = Path(path)
+        while not p.exists() and p != p.parent:
+            p = p.parent
+        return int(shutil.disk_usage(str(p)).free)
+    except (OSError, ValueError):
+        return None
 
 
 @dataclass
@@ -166,6 +187,8 @@ __all__ = [
     "SessionConfig",
     "reach_tokens",
     "default_pool_dir",
+    "free_disk_bytes",
+    "BYTES_PER_GB",
     "POOL_GB_FLOOR",
     "TOKENS_PER_GB",
     "TRIGGER_FRACTION",

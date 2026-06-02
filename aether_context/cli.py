@@ -47,11 +47,13 @@ from typing import Any, Sequence
 
 from aether_context import __version__
 from aether_context.config import (
+    BYTES_PER_GB,
     POOL_GB_FLOOR,
     PoolConfig,
+    free_disk_bytes,
     reach_tokens,
 )
-from aether_context.errors import AetherContextError
+from aether_context.errors import AetherContextError, PoolBudgetError
 from aether_context.session import Session
 
 #: Environment variable read for the pool size when no ``--pool`` flag is given (non-tty).
@@ -227,54 +229,70 @@ def _cmd_init(args: argparse.Namespace) -> int:
     ``$AETHER_POOL_GB`` → the 5 GB default. A size below the floor is rejected with the reason.
     """
     pool_dir = _resolve_dir(args.dir)
-    pool_gb = _resolve_pool_gb(getattr(args, "pool", None))
+    pool_gb = _resolve_pool_gb(getattr(args, "pool", None), pool_dir)
+    _check_disk_for_pool(pool_gb, pool_dir)  # reject a pool that won't fit on disk
     cfg = _write_config(pool_dir, pool_gb)  # raises PoolBudgetError if < floor
     reach = reach_tokens(cfg.pool_gb)
     print(f"initialized pool at {cfg.dir}")
     print(f"  pool size: {cfg.pool_gb} GB  (reach ~= {reach / 1e9:.2f}B tokens)")
     print(f"  index: {cfg.index}   dim: {cfg.dim}   slice: {cfg.slice_tokens} tok")
+    free = free_disk_bytes(pool_dir)
+    if free is not None:
+        print(f"  disk: {free / BYTES_PER_GB:.1f} GB free at {pool_dir}")
     return 0
 
 
-def _resolve_pool_gb(flag: int | None) -> int:
+def _resolve_pool_gb(flag: int | None, pool_dir: Path) -> int:
     """Resolve the pool size without ever blocking on a non-tty stdin.
 
-    ``flag`` (``--pool``) wins. Else, only if stdin is an interactive tty do we run the slider.
-    Else ``$AETHER_POOL_GB`` if set and numeric. Else the 5 GB default.
+    ``flag`` (``--pool``) wins. Else, only if stdin is an interactive tty do we run the slider
+    (which shows free disk and rejects a size that won't fit). Else ``$AETHER_POOL_GB`` if set
+    and numeric. Else the 5 GB default.
     """
     if flag is not None:
         return int(flag)
     if sys.stdin is not None and sys.stdin.isatty():
-        return _prompt_pool_gb()
+        return _prompt_pool_gb(pool_dir)
     env = os.environ.get(_ENV_POOL_GB)
     if env is not None and env.strip().isdigit():
         return int(env.strip())
     return POOL_GB_FLOOR
 
 
-def _prompt_pool_gb() -> int:
+def _prompt_pool_gb(pool_dir: Path) -> int:
     """Interactive pool-size selector (the README slider). Only called on a real tty.
 
-    Shows the reach for a few sizes and reads one line. Empty input takes the 5 GB default;
-    a value below the floor re-prompts once with the reason; EOF falls back to the default.
+    The pool is **local disk** the engine reserves for context reach, so the slider shows how
+    much disk is free, marks sizes that won't fit, and re-prompts (not just below the floor,
+    but also when a pick exceeds free disk). Empty input takes the 5 GB default; EOF falls back
+    to the default.
     """
-    print("Choose a pool size (reach, not window). Bigger pool = more reach:")
+    free = free_disk_bytes(pool_dir)
+    free_gb = (free / BYTES_PER_GB) if free is not None else None
+    print("Choose a pool size — this is the local DISK reserved for context reach:")
+    if free_gb is not None:
+        print(f"  ({free_gb:.1f} GB free at {pool_dir})")
     for gb in (5, 10, 15, 20):
-        print(f"  {gb:>2} GB  ->  reach ~= {reach_tokens(gb) / 1e9:.2f}B tokens")
-    for _attempt in range(2):
+        warn = "" if (free_gb is None or gb <= free_gb) else "   (won't fit — not enough free disk)"
+        print(f"  {gb:>2} GB  ->  reach ~= {reach_tokens(gb) / 1e9:.2f}B tokens{warn}")
+    for _attempt in range(3):
         try:
             raw = input(f"pool GB [default {POOL_GB_FLOOR}]: ").strip()
         except EOFError:
             return POOL_GB_FLOOR
         if not raw:
             return POOL_GB_FLOOR
-        if raw.isdigit():
-            value = int(raw)
-            if value >= POOL_GB_FLOOR:
-                return value
-            print(f"  {value} GB is below the {POOL_GB_FLOOR} GB floor; pick at least {POOL_GB_FLOOR}.")
-        else:
+        if not raw.isdigit():
             print("  enter a whole number of GB (e.g. 5, 10, 20).")
+            continue
+        value = int(raw)
+        if value < POOL_GB_FLOOR:
+            print(f"  {value} GB is below the {POOL_GB_FLOOR} GB floor; pick at least {POOL_GB_FLOOR}.")
+            continue
+        if free_gb is not None and value > free_gb:
+            print(f"  {value} GB won't fit — only {free_gb:.1f} GB free at {pool_dir}. Pick a smaller size.")
+            continue
+        return value
     return POOL_GB_FLOOR
 
 
@@ -290,6 +308,7 @@ def _cmd_resize(args: argparse.Namespace) -> int:
     """
     pool_dir = _resolve_dir(args.dir)
     existing = PoolConfig.load(pool_dir)  # preserves index/dim/slice; defaults if absent
+    _check_disk_for_pool(int(args.pool), pool_dir)  # reject a resize that won't fit on disk
     cfg = _write_config(
         pool_dir, int(args.pool),
         index=existing.index, dim=existing.dim, slice_tokens=existing.slice_tokens,
@@ -306,6 +325,34 @@ def _write_config(pool_dir: Path, pool_gb: int, **fields: object) -> PoolConfig:
     cfg = PoolConfig(pool_gb=pool_gb, dir=pool_dir, **fields)  # type: ignore[arg-type]
     cfg.save()
     return cfg
+
+
+def _check_disk_for_pool(pool_gb: int, pool_dir: Path) -> None:
+    """Reject a pool that won't fit on local disk (no-op if free space can't be probed).
+
+    The pool reserves ``pool_gb`` of disk for encoded context. If less than that is free on
+    the target filesystem, refuse loudly with a typed, hinted error rather than letting the
+    pool fill up and fail mid-run.
+    """
+    free = free_disk_bytes(pool_dir)
+    if free is None:
+        return  # cannot probe -> do not block
+    if free >= pool_gb * BYTES_PER_GB:
+        return
+    free_gb = free / BYTES_PER_GB
+    fits = int(free // BYTES_PER_GB)
+    if fits >= POOL_GB_FLOOR:
+        hint = f"free up disk, or pick a smaller pool that fits: aether-context --pool {fits}"
+    else:
+        hint = (
+            f"free up disk space — even the {POOL_GB_FLOOR} GB floor needs {POOL_GB_FLOOR} GB "
+            f"free (only {free_gb:.1f} GB available at {pool_dir})"
+        )
+    raise PoolBudgetError(
+        f"not enough disk: a {pool_gb} GB pool needs {pool_gb} GB free at {pool_dir}, "
+        f"but only {free_gb:.1f} GB is available",
+        hint=hint,
+    )
 
 
 def _resolve_dir(flag: str | None) -> Path:
@@ -733,6 +780,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     reachable = _probe_ollama(host)
     ok = _report_ollama(reachable, host) and ok
     ok = _report_model(reachable, host, model) and ok
+    ok = _report_disk_vs_pool(pool_dir) and ok
     ok = _report_ram_vs_index(pool_dir) and ok
 
     print("")
@@ -804,6 +852,23 @@ def _model_is_pulled(host: str, model: str) -> bool:
     # ollama tags carry a ':tag' suffix; match the bare name or any tag of it.
     base = model.split(":", 1)[0]
     return any(n == model or n.split(":", 1)[0] == base for n in names)
+
+
+def _report_disk_vs_pool(pool_dir: Path) -> bool:
+    """Check free disk against the configured pool size (the pool reserves that much disk)."""
+    cfg = PoolConfig.load(pool_dir)
+    free = free_disk_bytes(pool_dir)
+    if free is None:
+        print(f"  [ok]   {cfg.pool_gb} GB pool — free disk unknown (could not probe)")
+        return True
+    free_gb = free / BYTES_PER_GB
+    if free >= cfg.pool_gb * BYTES_PER_GB:
+        print(f"  [ok]   {cfg.pool_gb} GB pool fits ({free_gb:.1f} GB free at {pool_dir})")
+        return True
+    fits = max(POOL_GB_FLOOR, int(free // BYTES_PER_GB))
+    print(f"  [warn] {cfg.pool_gb} GB pool vs only {free_gb:.1f} GB free at {pool_dir}")
+    print(f"         fix: free up disk, or `aether-context --pool {fits}`")
+    return False
 
 
 def _report_ram_vs_index(pool_dir: Path) -> bool:

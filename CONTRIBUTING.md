@@ -1,20 +1,22 @@
 # Contributing to Unlimited Context
 
-Thanks for being here. `aether-context` is an open project from Brandon Barrante ([Aether Ai](https://aethersystems.net)),
-Apache-2.0, and we want it to be genuinely pleasant to hack on. This page gets you from a fresh
-clone to a green test run in under ten minutes, and points you at good first things to work on.
+`aether-context` is published **as-is** under Apache-2.0 by Brandon Barrante ([Aether Ai](https://aethersystems.net)).
+
+**Bug reports and issues are welcome.** Pull requests, however, are **not actively reviewed or merged** — this project ships as a finished artifact, not an open development effort. You're encouraged to **fork** it and take it wherever you need; the Apache-2.0 license makes that easy.
+
+**Security vulnerabilities:** please do **not** open a public issue. Report them privately as described in [SECURITY.md](SECURITY.md) (private advisory).
 
 > **The one promise:** the core is **numpy-only** and runs **offline**. A clean clone with zero
-> models installed must still pass `pytest` (the built-in `MockLLM` makes that true). If a change
-> breaks the offline/clean-clone path, it's wrong — see [Project ethos](#project-ethos).
+> models installed still passes `pytest` (the built-in `MockLLM` makes that true). If you fork and
+> change something, keep that path green — see [Project ethos](#project-ethos).
 
-## Quickstart for contributors
+## Dev setup (for forkers)
 
 You need **Python 3.10–3.13** and `git`. That's it. No GPU, no API key, no model download.
 
 ```bash
-git clone https://github.com/aether/unlimited-context.git
-cd unlimited-context
+git clone https://github.com/DBarr3/Unlimited-Context.git
+cd Unlimited-Context
 python -m venv .venv
 
 # activate the venv
@@ -26,8 +28,7 @@ pytest -q                          # should be green, offline, in well under 10 
 ```
 
 That's the whole loop. `pip install -e ".[dev]"` pulls `numpy` plus the three dev tools
-(`pytest`, `ruff`, `mypy`) and nothing else — no torch, no compile, no network. If `pytest` isn't
-green on a fresh clone, that's a bug; please open an issue.
+(`pytest`, `ruff`, `mypy`) and nothing else — no torch, no compile, no network.
 
 ### The inner loop
 
@@ -42,34 +43,19 @@ pytest tests/test_encoder.py -q    # run one file while iterating
 CI runs exactly these four steps on Python 3.10, 3.11, 3.12, and 3.13. If they pass locally, they
 should pass in CI.
 
-## How to make a change
-
-1. **Open or claim an issue** so we don't duplicate work. For anything non-trivial, a quick comment
-   describing your approach saves everyone time.
-2. **Branch** off `main`: `git checkout -b fix/short-description`.
-3. **Write the test first.** This repo is test-driven (see [Testing](#testing)). The test should fail
-   (red), then your change makes it pass (green), then you refactor.
-4. **Keep the change small and single-purpose.** One concern per PR is much easier to review and
-   merge.
-5. **Run the inner loop** (ruff + mypy + pytest) until it's all green.
-6. **Open a PR** against `main`. The PR template will ask you for a short "why", a test plan, and a
-   confirmation that the offline clean-clone path still works.
-
-We aim to give a first response on PRs quickly. Small, well-scoped, well-tested PRs merge fastest.
-
 ## Testing
 
 Tests live in `tests/` and use **pytest only** — no network, no GPU, no real model.
 
 - **No network, ever.** Use the built-in `MockLLM` (a deterministic, dependency-free model) and stub
-  servers. A test that reaches the network will be rejected.
+  servers. A test that reaches the network doesn't belong here.
 - **Use the fixtures.** `tests/conftest.py` provides a temp pool directory, a seeded RNG, and a
   `MockLLM`. Prefer those over hand-rolled setup so tests stay hermetic and reproducible.
 - **Import submodules directly** in tests (e.g. `from aether_context.encoder import StaticEncoder`),
   not via the package surface — the `__init__` export surface is intentionally finalized late.
 - **Arrange–Act–Assert.** Keep each test focused on one behavior with a descriptive name, e.g.
   `test_returns_empty_window_when_pool_is_cold`.
-- **Property tests are welcome** for the numeric modules (encoder, witness, pool): shape, unit-norm,
+- **Property tests** suit the numeric modules (encoder, witness, pool): shape, unit-norm,
   determinism, monotonicity, budget ceilings.
 
 ```bash
@@ -80,7 +66,7 @@ pytest -x -q               # stop on first failure while debugging
 
 ## Code style
 
-We keep the toolchain boring on purpose so contributions are easy to review.
+The toolchain is deliberately boring.
 
 | Tool | What it enforces | Command |
 |---|---|---|
@@ -88,7 +74,7 @@ We keep the toolchain boring on purpose so contributions are easy to review.
 | **mypy** | static types on the package | `mypy aether_context` |
 | **pytest** | the suite, offline | `pytest -q` |
 
-House rules (these mirror the build plan and are enforced in review):
+House rules baked into the code:
 
 - **Type hints on every public function.** mypy runs over `aether_context/` in CI.
 - **No bare `except:`.** Catch the specific exception and re-wrap it as a typed error from
@@ -103,57 +89,26 @@ House rules (these mirror the build plan and are enforced in review):
 
 ## Project ethos
 
-A few non-negotiables that shape what we accept:
+A few non-negotiables that shaped the project:
 
 - **numpy-only core.** The only runtime dependency of the core is `numpy`. The Ollama path uses the
   Python standard library (`urllib`) — no extra dependency. Everything else (`llama.cpp`, HF
-  `transformers`/`torch`, `hnswlib`) is an **opt-in extra**. Adding a core dependency is a big deal
-  and needs a strong, discussed reason.
+  `transformers`/`torch`, `hnswlib`) is an **opt-in extra**.
 - **dataclasses, not pydantic.** Config and data carriers are `@dataclass`es. This keeps the install
-  light and is a deliberate choice for OSS credibility — fewer deps, more installs.
+  light — fewer deps, more installs.
 - **Local-first, offline-first.** No network, no API key, and no account are required for the engine
-  to work. Honor that in every change.
+  to work.
 - **Honest naming.** "Unlimited" means **reach, not attention**. Names, docstrings, and metrics say
   so. We don't oversell.
 
-## Good first issues
+## Reporting bugs
 
-Friendly, well-scoped places to start. Look for the `good first issue` label on the tracker, or pick
-from these:
+Open an issue with your OS, Python version, and the smallest repro you can manage (ideally on
+`MockLLM` so it reproduces offline). Running `aether-context doctor` and pasting its output helps.
 
-- **Docs polish.** Tighten `docs/local-models.md`, fix a confusing sentence, add a missing example,
-  or improve a docstring. Always welcome.
-- **More encoder property tests.** Add labeled similar/dissimilar string pairs to the encoder
-  similarity-margin test, or add throughput/edge-case coverage (empty string, unicode, very long
-  input).
-- **`aether-context doctor` checks.** Add a friendly diagnostic for a common "it didn't work" case
-  (free disk vs pool size, RAM vs index, Ollama reachable) with an exact fix command in the output.
-- **A new backend adapter.** Implement the `LocalLLM` protocol for a backend we don't ship yet
-  (vLLM, text-generation-inference, an OpenAI-compatible local server). Keep it behind an opt-in
-  extra and guard the import.
-- **Bench scenarios.** Add a scripted long-build scenario to `bench/drift_vs_window.py`, or a new
-  metric (e.g. a sharper drift/contradiction detector) for the engine-on-vs-off comparison.
-- **Windows / macOS / Linux quirks.** The mmap pool layout must reopen identically across OSes —
-  reproduce and fix any platform-specific issue you hit.
-- **Example apps.** Add a small, self-contained example under `examples/` that runs on `MockLLM` so
-  it works on a clean clone.
-
-If you're not sure whether an idea fits, open an issue and ask. We'd rather talk early.
-
-## Reporting bugs and requesting features
-
-- **Bugs:** use the bug report template. Include your OS, Python version, and the smallest repro you
-  can manage (ideally on `MockLLM` so we can reproduce offline). Running `aether-context doctor` and
-  pasting its output helps a lot.
-- **Features:** use the feature request template. Tell us the problem first, then the proposed
-  solution. Features that keep the core numpy-only and offline-first are easiest to land.
-
-## Code of Conduct
-
-By participating you agree to abide by our [Code of Conduct](CODE_OF_CONDUCT.md). Be kind; assume good
-faith.
+For security vulnerabilities, use the private advisory in [SECURITY.md](SECURITY.md) — not a public
+issue.
 
 ## License
 
-By contributing, you agree that your contributions are licensed under the project's
-[Apache-2.0](LICENSE) license.
+This project is licensed under [Apache-2.0](LICENSE).

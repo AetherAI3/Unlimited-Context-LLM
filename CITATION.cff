@@ -1,0 +1,11 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "Unlimited Context (aether-context): virtual memory for LLM attention"
+authors:
+  - family-names: "Barrante"
+    given-names: "Brandon"
+version: "0.1.0"
+date-released: 2026-06-02
+license: Apache-2.0
+url: "https://github.com/DBarr3/Unlimited-Context"
+repository-code: "https://github.com/DBarr3/Unlimited-Context"

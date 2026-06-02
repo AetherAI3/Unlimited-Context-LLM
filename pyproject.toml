@@ -9,9 +9,29 @@ description = "Unlimited Context — virtual memory for an LLM's attention. Loca
 readme = "README.md"
 requires-python = ">=3.10,<3.15"
 license = { text = "Apache-2.0" }
-authors = [{ name = "Aether" }]
+authors = [{ name = "Brandon Barrante" }]
+maintainers = [{ name = "Aether AI" }]
 keywords = ["llm", "context", "retrieval", "ollama", "local", "rag", "agents"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dependencies = ["numpy>=1.24,<3.0"]       # CORE = numpy only. Works offline with MockLLM.
+
+[project.urls]
+Homepage = "https://github.com/DBarr3/Unlimited-Context"
+Repository = "https://github.com/DBarr3/Unlimited-Context.git"
+Documentation = "https://github.com/DBarr3/Unlimited-Context#readme"
+Issues = "https://github.com/DBarr3/Unlimited-Context/issues"
+Changelog = "https://github.com/DBarr3/Unlimited-Context/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 ollama   = []                              # primary path uses stdlib urllib — no extra dep needed
@@ -19,7 +39,7 @@ llamacpp = ["llama-cpp-python>=0.2"]
 hf       = ["transformers>=4.40", "torch>=2.2"]
 fast     = ["hnswlib>=0.8"]                # faster ANN; flat numpy index is the fallback
 all      = ["aether-context[llamacpp,hf,fast]"]
-dev      = ["pytest>=8", "ruff>=0.5", "mypy>=1.10"]
+dev      = ["pytest>=8", "pytest-cov", "ruff>=0.5", "mypy>=1.10"]
 
 [project.scripts]
 aether-context = "aether_context.cli:main"
@@ -27,6 +47,20 @@ aether-context = "aether_context.cli:main"
 [tool.setuptools]
 packages = ["aether_context"]
 
+[tool.setuptools.package-data]
+aether_context = ["py.typed"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 norecursedirs = [".git", "*.egg-info", "build", "dist"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
