@@ -34,6 +34,22 @@ Unlimited Context fixes the overflow, not the window. Instead of blindly summari
 - 🤖 **Any model** — Llama, Qwen, Mistral, Phi — via Ollama, llama.cpp, or HF. Bring your own brain.
 - 📉 **Coherence you can *measure*** — ship the head-to-head: same model, engine on vs off, watch the drift rate fall off a cliff.
 
+What that buys you in coding time
+The real win isn't the token count — it's that the wall disappears. A typical ~128K context window fills after well under an hour of active agent work, then starts compacting and forgetting. A 5 GB pool is ~9,000× bigger.
+Vast-ballpark — assuming a busy coding agent encodes ~300K–1M keep-worthy tokens/hour (chatty swarms burn more, careful single agents less):
+PoolReach≈ active autonomous coding before it even fills*5 GB~1.16B~1,200–3,900 hrs (weeks of nonstop building)10 GB~2.33B~2,300–7,800 hrs15 GB~3.49B~3,500–11,600 hrs20 GB~4.65B~4,700–15,500 hrs
+For color: 5 GB of reach ≈ ~100M lines of code, or a shelf of ~8,000 books — you won't fill it in one sitting. <sub>Rough order of magnitude. And because the witnesses fade stale slices, the pool never hard-stops anyway — it just keeps what's relevant. Translation: run a build as long as you want; it won't lose the plot.</sub>
+🧮 RAM & running many sessions
+Built to stay light: vectors live on disk (mmap'd) — only the small index graph and a hot working set are resident.
+RAM  ≈  ~180 MB base (engine + encoder)  +  ~29 MB per GB of pool  +  ~30 MB per session
+Shared pool vs separate pools — the biggest RAM lever when you run many sessions:
+
+--pool-mode shared — one pool, one index, all sessions reach the same memory. Index paid once; each session adds ~30 MB. RAM barely moves — spin up dozens. Great for related work or agent swarms. (No isolation between sessions.)
+--pool-mode separate (default) — each session its own pool + index, fully isolated/private. One index each, so RAM scales with N × pool.
+
+Pool8 GB · shared8 GB · separate16 GB · shared16 GB · separate5 GBdozens~13dozens~3310 GBdozens~7dozens~1815 GBdozens~4dozens~1220 GBdozens~3dozens~9
+TL;DR: shared pool → RAM isn't your limit. Separate pools → ~3–13 sessions on 8 GB, double on 16 GB. A bigger pool always buys reach, never more sessions. Need headroom? Smaller pool, or --index tiered.
+
 ## Quickstart
 
 ```bash
