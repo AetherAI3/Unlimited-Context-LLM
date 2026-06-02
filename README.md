@@ -28,7 +28,7 @@ Unlimited Context fixes the overflow, not the window. Instead of blindly summari
 ## What you get
 
 - 🧠 **Unbounded reach** — ~1B tokens of encoded context in ~5GB on disk; the model reaches it in slices.
-- ⚡ **Zero added latency** — the pager runs *concurrently* with generation, hidden behind the model's own thinking. Reach is effectively free.
+- ⚡ **Zero added latency** — the pager runs *concurrently* with generation, hidden behind the model's own thinking, so reaching the pool costs you no extra wall-clock.
 - 🪟 **Curated beats crammed** — a small, relevant resident window outperforms a stuffed one (no lost-in-the-middle) — and costs less.
 - 🔒 **Local-first** — your context never leaves your machine. Free storage, full privacy, works offline.
 - 🤖 **Any model** — Llama, Qwen, Mistral, Phi — via Ollama, llama.cpp, or HF. Bring your own brain.
