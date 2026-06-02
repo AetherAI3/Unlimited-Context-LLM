@@ -1,3 +1,6 @@
+# aether-context (Unlimited Context)
+# Copyright (c) 2026 Aether AI - Brandon Barrante
+# SPDX-License-Identifier: Apache-2.0
 """Tests for the +/- retention witness (page-replacement scoring + budget eviction).
 
 The witness is a *pure scoring function over access events*: each slice id carries a

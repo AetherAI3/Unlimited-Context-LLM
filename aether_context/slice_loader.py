@@ -1,3 +1,6 @@
+# aether-context (Unlimited Context)
+# Copyright (c) 2026 Aether AI - Brandon Barrante
+# SPDX-License-Identifier: Apache-2.0
 """B3 slice loader — the prefetch **pager** for virtual-memory-for-attention.
 
 Make context-slice retrieval fast by PRE-LOADING the slices the session is about to need,

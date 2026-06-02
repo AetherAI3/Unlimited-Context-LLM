@@ -1,3 +1,6 @@
+# aether-context (Unlimited Context)
+# Copyright (c) 2026 Aether AI - Brandon Barrante
+# SPDX-License-Identifier: Apache-2.0
 """End-to-end: the whole engine on a MockLLM, proving the pitch.
 
 This is the kill-gate property in miniature, hermetic (no GPU, no network): a planted

@@ -1,3 +1,6 @@
+# aether-context (Unlimited Context)
+# Copyright (c) 2026 Aether AI - Brandon Barrante
+# SPDX-License-Identifier: Apache-2.0
 """Tests for the B1 static encoder (numpy-only, 256-dim, stateless).
 
 Property tests for ``aether_context.encoder.StaticEncoder``:

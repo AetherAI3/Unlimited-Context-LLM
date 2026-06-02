@@ -1,3 +1,6 @@
+# aether-context (Unlimited Context)
+# Copyright (c) 2026 Aether AI - Brandon Barrante
+# SPDX-License-Identifier: Apache-2.0
 """Tests for the B5 lifecycle controller — :class:`aether_context.session.Session`.
 
 The session is the **process lifecycle** of the virtual-memory-for-attention design:

@@ -1,3 +1,6 @@
+# aether-context (Unlimited Context)
+# Copyright (c) 2026 Aether AI - Brandon Barrante
+# SPDX-License-Identifier: Apache-2.0
 """Logging seam for aether-context.
 
 Library discipline: a library never configures the root logger and never prints. Each

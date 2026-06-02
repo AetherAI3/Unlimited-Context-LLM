@@ -1,3 +1,6 @@
+# aether-context (Unlimited Context)
+# Copyright (c) 2026 Aether AI - Brandon Barrante
+# SPDX-License-Identifier: Apache-2.0
 """Shared pytest fixtures for the aether-context test suite.
 
 All tests are numpy-only and never touch the network or the real ``~/.aether-context``

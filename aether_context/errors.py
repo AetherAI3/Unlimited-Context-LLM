@@ -1,3 +1,6 @@
+# aether-context (Unlimited Context)
+# Copyright (c) 2026 Aether AI - Brandon Barrante
+# SPDX-License-Identifier: Apache-2.0
 """Typed errors for aether-context.
 
 Design intent: every failure in the library re-wraps the underlying cause into one of

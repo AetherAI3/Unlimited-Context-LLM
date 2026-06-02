@@ -1,3 +1,6 @@
+# aether-context (Unlimited Context)
+# Copyright (c) 2026 Aether AI - Brandon Barrante
+# SPDX-License-Identifier: Apache-2.0
 """``aether-context`` console script — init / pool-resize / doctor / bench.
 
 Thin by design: every command is a few lines that call into the library. The CLI never

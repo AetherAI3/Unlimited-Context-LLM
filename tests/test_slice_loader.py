@@ -1,3 +1,6 @@
+# aether-context (Unlimited Context)
+# Copyright (c) 2026 Aether AI - Brandon Barrante
+# SPDX-License-Identifier: Apache-2.0
 """Tests for the B3 slice loader — the prefetch pager.
 
 The pager is the **"pager" of the virtual-memory-for-attention design**: it keeps a small,

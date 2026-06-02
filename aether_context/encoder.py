@@ -1,3 +1,6 @@
+# aether-context (Unlimited Context)
+# Copyright (c) 2026 Aether AI - Brandon Barrante
+# SPDX-License-Identifier: Apache-2.0
 """B1 static encoder — Model2Vec-style, numpy-only, 256-dim, stateless.
 
 Maps text to a fixed-size retrieval embedding the rest of the engine indexes and

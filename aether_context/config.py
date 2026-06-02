@@ -1,3 +1,6 @@
+# aether-context (Unlimited Context)
+# Copyright (c) 2026 Aether AI - Brandon Barrante
+# SPDX-License-Identifier: Apache-2.0
 """Configuration dataclasses + ~/.aether-context persistence.
 
 ``PoolConfig`` governs the on-disk context pool (size = reach, index kind, slice size).

@@ -1,3 +1,6 @@
+# aether-context (Unlimited Context)
+# Copyright (c) 2026 Aether AI - Brandon Barrante
+# SPDX-License-Identifier: Apache-2.0
 """+/- retention witness — page-replacement scoring + budget eviction.
 
 This is the *fidelity field* that decides which encoded slices stay resident in the

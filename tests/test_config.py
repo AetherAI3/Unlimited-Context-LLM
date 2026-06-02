@@ -1,3 +1,6 @@
+# aether-context (Unlimited Context)
+# Copyright (c) 2026 Aether AI - Brandon Barrante
+# SPDX-License-Identifier: Apache-2.0
 """Tests for PoolConfig / SessionConfig dataclasses + JSON persistence + reach math."""
 import json
 from pathlib import Path

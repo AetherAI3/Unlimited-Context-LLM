@@ -1,3 +1,6 @@
+# aether-context (Unlimited Context)
+# Copyright (c) 2026 Aether AI - Brandon Barrante
+# SPDX-License-Identifier: Apache-2.0
 """aether-context — virtual memory for an LLM's attention (local-first, numpy-only core).
 
 "Unlimited" means *reach, not attention*: the model keeps its native window; the engine

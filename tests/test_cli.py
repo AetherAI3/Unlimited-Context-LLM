@@ -1,3 +1,6 @@
+# aether-context (Unlimited Context)
+# Copyright (c) 2026 Aether AI - Brandon Barrante
+# SPDX-License-Identifier: Apache-2.0
 """CLI surface tests — ``aether-context init / --pool / doctor / bench``.
 
 All tests are hermetic: no network, no real ``~/.aether-context`` (pool state lives under

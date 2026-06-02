@@ -1,3 +1,6 @@
+# aether-context (Unlimited Context)
+# Copyright (c) 2026 Aether AI - Brandon Barrante
+# SPDX-License-Identifier: Apache-2.0
 """THE WRAPPER — backend-agnostic local-LLM adapters.
 
 This is the surface a user actually touches. The whole engine talks to *one* protocol

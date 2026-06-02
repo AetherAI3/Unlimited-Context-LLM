@@ -1,3 +1,6 @@
+# aether-context (Unlimited Context)
+# Copyright (c) 2026 Aether AI - Brandon Barrante
+# SPDX-License-Identifier: Apache-2.0
 """Integration test for the Ollama wrapper against a local stub HTTP server.
 
 Exercises the REAL ``urllib`` HTTP path of :class:`aether_context.local_llm.OllamaLLM` — no

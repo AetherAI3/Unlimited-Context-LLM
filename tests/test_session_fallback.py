@@ -1,3 +1,6 @@
+# aether-context (Unlimited Context)
+# Copyright (c) 2026 Aether AI - Brandon Barrante
+# SPDX-License-Identifier: Apache-2.0
 """Session fallback-to-mock behavior (hermetic — load_model is monkeypatched, no network)."""
 
 from __future__ import annotations

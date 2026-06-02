@@ -1,3 +1,6 @@
+# aether-context (Unlimited Context)
+# Copyright (c) 2026 Aether AI - Brandon Barrante
+# SPDX-License-Identifier: Apache-2.0
 """B2 context pool — session-namespaced, mmap'd vector store + budget governor.
 
 This is the **"disk" of the virtual-memory-for-attention design**. Encoded

@@ -1,3 +1,6 @@
+# aether-context (Unlimited Context)
+# Copyright (c) 2026 Aether AI - Brandon Barrante
+# SPDX-License-Identifier: Apache-2.0
 """CLI-surface tests — ``run`` / ``status`` / ``clear`` / ``chat`` + the slash dispatcher.
 
 Every test is hermetic: numpy-only, NO network, NO tty, NO ``input()``. We drive
