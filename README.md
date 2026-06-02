@@ -1,6 +1,7 @@
 <div align="center">
 
 # ⚡ Unlimited Context
+<img width="537" height="405" alt="image" src="https://github.com/user-attachments/assets/4f3f95eb-f3e6-47cb-8278-b43a03076f74" />
 
 ### Unlimited context for **Ollama** — give any local LLM a **billion-token memory**. Local-first, on your own machine, free.
 
