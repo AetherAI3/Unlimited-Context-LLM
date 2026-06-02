@@ -142,14 +142,6 @@ All of it runs while the model generates, so the reach costs you nothing in wall
 
 "Unlimited" means **reach, not attention.** Your model keeps its native window — we make it *reach* a billion-token pool in slices, via fast retrieval. The whole thing rides on retrieval **hit rate**; when it's high (and the loader is built to keep it high), the pool feels like one seamless context.
 
-## Benchmark it yourself
-
-```bash
-python bench/drift_vs_window.py --model ollama/qwen2.5 --task examples/long_build.md
-```
-
-Same model, engine **on vs off**, one long build. It reports cross-stage contradictions (drift), per-stage correctness, retrieval hit rate, and whether it finished unattended.
-
 ## License
 
 **Apache-2.0.** Use it, fork it, ship it in your product. Built by [Aether](https://aethersystems.net).
@@ -158,7 +150,8 @@ Same model, engine **on vs off**, one long build. It reports cross-stage contrad
 
 <div align="center">
 
-Built by **[Aether](https://aethersystems.net)**
+Built by Brandon Barrante, Aether Ai  **[Aether](https://aethersystems.net)**
+<img width="2752" height="1536" alt="image" src="https://github.com/user-attachments/assets/4b7eef9a-8b1c-4dc7-b926-771ce53ed04d" />
 
 *Unbounded reach for the model you already run.*
 
