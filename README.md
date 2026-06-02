@@ -25,6 +25,7 @@ Long agentic runs all die the same way. The model fills its window, starts **com
 Unlimited Context fixes the overflow, not the window. Instead of blindly summarizing what spills over, it **encodes and externalizes** it to a local pool on your disk, and pages the *right slice* back in exactly when the model needs it. Nothing load-bearing is silently lost — it's filed, and recoverable.
 
 **Compress & forget ✗  →  Encode & recover ✓**
+<img width="914" height="572" alt="image" src="https://github.com/user-attachments/assets/dadae038-5e1a-45c6-b16c-4763da4238a8" />
 
 ## What you get
 
@@ -51,6 +52,7 @@ Rough ballpark — assuming a busy coding agent encodes ~300K–1M keep-worthy t
 For color: 5 GB of reach ≈ ~100M lines of code, or a shelf of ~8,000 books — you won't fill it in one sitting.
 
 <sub>\* Rough order of magnitude. Because the witnesses fade stale slices, the pool never hard-stops anyway — it just keeps what's relevant. Run a build as long as you want; it won't lose the plot. RAM and multi-session math live in [RAM & running many sessions](#ram--running-many-sessions) below.</sub>
+<img width="899" height="471" alt="image" src="https://github.com/user-attachments/assets/af626850-96b1-43a2-91fd-b5162bc21e5a" />
 
 ## Quickstart
 
