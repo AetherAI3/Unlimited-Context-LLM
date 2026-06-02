@@ -2,7 +2,7 @@
 
 `aether-context` is published **as-is** under Apache-2.0 by Brandon Barrante ([Aether Ai](https://aethersystems.net)).
 
-**Bug reports and issues are welcome.** Pull requests, however, are **not actively reviewed or merged** — this project ships as a finished artifact, not an open development effort. You're encouraged to **fork** it and take it wherever you need; the Apache-2.0 license makes that easy.
+**Bug reports, issues, and pull requests are welcome.** A small, focused PR with a passing test is the fastest way in — keep the offline / clean-clone path green (see below). You're also free to **fork** and take it wherever you need; the Apache-2.0 license makes that easy.
 
 **Security vulnerabilities:** please do **not** open a public issue. Report them privately as described in [SECURITY.md](SECURITY.md) (private advisory).
 

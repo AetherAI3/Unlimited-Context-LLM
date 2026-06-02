@@ -184,9 +184,9 @@ RAM  ≈  ~180 MB   base (engine + shared static encoder)
 
 "Unlimited" means **reach, not attention.** Your model keeps its native window — we make it *reach* a billion-token pool in slices, via fast retrieval. The whole thing rides on retrieval **hit rate**; when it's high (and the loader is built to keep it high), the pool feels like one seamless context.
 
-## Status & community
+## ⭐ Star, share, contribute
 
-Published **as-is** under Apache-2.0. Bug reports are welcome via [Issues](https://github.com/DBarr3/Unlimited-Context/issues); pull requests aren't actively reviewed. If it's useful, a GitHub star helps others find it. Runnable examples live in [`examples/`](examples/) — start with [`quickstart.py`](examples/quickstart.py), then [`coding_agent.py`](examples/coding_agent.py).
+If this gave your local model superpowers, **drop a star** — it's how other people find it. **PRs and issues are welcome** — see [CONTRIBUTING.md](CONTRIBUTING.md). Runnable examples live in [`examples/`](examples/) — start with [`quickstart.py`](examples/quickstart.py), then [`coding_agent.py`](examples/coding_agent.py).
 
 ## License
 
