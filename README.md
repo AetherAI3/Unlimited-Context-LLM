@@ -53,43 +53,6 @@ All of it runs while the model generates, so reaching the pool costs you no extr
 - 🤖 **Any model** — Llama, Qwen, Mistral, Phi — via Ollama, llama.cpp, or HF. Bring your own brain.
 - 📉 **Coherence you can *measure*** — ship the head-to-head: same model, engine on vs off, watch the drift rate fall off a cliff.
 
-## What that buys you in coding time
-
-The real win isn't the token count — it's that the wall disappears. A typical ~128K context window fills after well under an hour of active agent work, then starts compacting and forgetting. A 5 GB pool is **~9,000× bigger**.
-
-Rough ballpark — assuming a busy coding agent encodes ~300K–1M keep-worthy tokens/hour (chatty swarms burn more, careful single agents less):
-
-| Pool | Reach | Active autonomous coding before it even fills\* |
-|:----:|:-----:|:------------------------------------------------|
-| **5 GB** | ~1.16B | **~1,200–3,900 hrs** — weeks of nonstop building |
-| 10 GB | ~2.33B | ~2,300–7,800 hrs |
-| 15 GB | ~3.49B | ~3,500–11,600 hrs |
-| 20 GB | ~4.65B | ~4,700–15,500 hrs |
-
-For color: 5 GB of reach ≈ ~100M lines of code, or a shelf of ~8,000 books — you won't fill it in one sitting.
-
-<sub>\* Rough order of magnitude. Because the witnesses fade stale slices, the pool never hard-stops anyway — it just keeps what's relevant. Run a build as long as you want; it won't lose the plot. RAM and multi-session math live in [RAM &amp; running many sessions](#ram--running-many-sessions) below.</sub>
-
-<div align="center">
-  <img width="880" alt="Coding time per pool size" src="https://github.com/user-attachments/assets/af626850-96b1-43a2-91fd-b5162bc21e5a" />
-</div>
-
-## Quickstart
-
-```bash
-pip install aether-context
-```
-
-```python
-from aether_context import Session
-
-s = Session(model="ollama/qwen2.5", pool_gb=5)
-s.run("Build me a full-stack weightlifting tracker app.")
-# runs long. stays coherent. walk away.
-```
-
-That's the whole thing. One small model, one command, a billion tokens of reach behind it.
-
 ## Pick your memory size
 
 First run drops you into a slider — pick how much your model gets to remember:
@@ -124,9 +87,64 @@ How those numbers come out: ~2.2 KB per slice (a 256-dim vector + compressed tex
 
 > **Honest:** that's encoded **reach**, retrieved in slices — not a bigger attention window, and it rides on retrieval hit rate. A bigger pool buys more reachable codebase/corpus *per session* — not more concurrent sessions (those are RAM-bound, ~30 on 8 GB either way).
 
-## RAM & running many sessions
+## Quickstart
 
-The engine is built to stay light: **vectors live on disk (mmap'd)** — only the small HNSW index graph and a hot working set are ever resident. So RAM is a predictable formula, not a mystery:
+```bash
+pip install aether-context
+```
+
+```python
+from aether_context import Session
+
+s = Session(model="ollama/qwen2.5", pool_gb=5)
+s.run("Build me a full-stack weightlifting tracker app.")
+# runs long. stays coherent. walk away.
+```
+
+That's the whole thing. One small model, one command, a billion tokens of reach behind it.
+
+## What that buys you in coding time
+
+The real win isn't the token count — it's that the wall disappears. A typical ~128K context window fills after well under an hour of active agent work, then starts compacting and forgetting. A 5 GB pool is **~9,000× bigger**.
+
+Rough ballpark — assuming a busy coding agent encodes ~300K–1M keep-worthy tokens/hour (chatty swarms burn more, careful single agents less):
+
+| Pool | Reach | Active autonomous coding before it even fills\* |
+|:----:|:-----:|:------------------------------------------------|
+| **5 GB** | ~1.16B | **~1,200–3,900 hrs** — weeks of nonstop building |
+| 10 GB | ~2.33B | ~2,300–7,800 hrs |
+| 15 GB | ~3.49B | ~3,500–11,600 hrs |
+| 20 GB | ~4.65B | ~4,700–15,500 hrs |
+
+For color: 5 GB of reach ≈ ~100M lines of code, or a shelf of ~8,000 books — you won't fill it in one sitting.
+
+<sub>\* Rough order of magnitude. Because the witnesses fade stale slices, the pool never hard-stops anyway — it just keeps what's relevant. Run a build as long as you want; it won't lose the plot. The per-session RAM math is in [RAM footprint](#ram-footprint) below.</sub>
+
+<div align="center">
+  <img width="880" alt="Coding time per pool size" src="https://github.com/user-attachments/assets/af626850-96b1-43a2-91fd-b5162bc21e5a" />
+</div>
+
+## Running many sessions
+
+Running more than one agent? How the pool is shared is the single biggest RAM lever:
+
+- **`--pool-mode shared`** — one pool, one index, all sessions reach the same memory. The index is paid **once**; each extra session adds only ~30 MB, so RAM barely moves as you add sessions. Best for related work (same project) or max concurrency on a small machine. Trade-off: sessions can see each other's context (no isolation).
+- **`--pool-mode separate`** *(default)* — each session gets its own pool + index, fully **isolated and private**. Clean, but you pay one index **per session**, so RAM scales with `N × pool`. Best for unrelated tasks or when isolation matters.
+
+**How many actually fit:**
+
+| Pool | 8 GB · shared | 8 GB · separate | 16 GB · shared | 16 GB · separate |
+|------|---------------|-----------------|----------------|------------------|
+| 5 GB  | dozens¹ | **~13** | dozens¹ | **~33** |
+| 10 GB | dozens¹ | **~7**  | dozens¹ | **~18** |
+| 15 GB | dozens¹ | **~4**  | dozens¹ | **~12** |
+| 20 GB | dozens¹ | **~3**  | dozens¹ | **~9**  |
+
+<sub>Reserves: ~2.5 GB held back on an 8 GB machine, ~6 GB on 16 GB — the rest stays for your OS and editor. ¹ With a shared pool, RAM stops being the limit (50–70+ sessions fit); you're bounded by CPU and good sense, not memory.</sub>
+
+## RAM footprint
+
+The engine stays light: **vectors live on disk (mmap'd)** — only the small HNSW index graph and a hot working set are ever resident. So RAM is a predictable formula, not a mystery:
 
 ```
 RAM  ≈  ~180 MB   base (engine + shared static encoder)
@@ -143,25 +161,7 @@ RAM  ≈  ~180 MB   base (engine + shared static encoder)
 | 15 GB | ~436 MB |
 | 20 GB | ~582 MB |
 
-### Shared pool vs separate pools
-
-Running more than one session? You pick how the pool is shared — and it's the single biggest RAM lever:
-
-- **`--pool-mode shared`** — one pool, one index, all sessions reach the same memory. The index is paid **once**; each extra session adds only ~30 MB, so RAM barely moves as you add sessions. Best for related work (same project) or max concurrency on a small machine. Trade-off: sessions can see each other's context (no isolation).
-- **`--pool-mode separate`** *(default)* — each session gets its own pool + index, fully **isolated and private**. Clean, but you pay one index **per session**, so RAM scales with `N × pool`. Best for unrelated tasks or when isolation matters.
-
-(The encoder is always shared — it's stateless, ~31 MB, loaded once. Only the pool/index differs.)
-
-### How many sessions actually fit
-
-| Pool | 8 GB · shared | 8 GB · separate | 16 GB · shared | 16 GB · separate |
-|------|---------------|-----------------|----------------|------------------|
-| 5 GB  | dozens¹ | **~13** | dozens¹ | **~33** |
-| 10 GB | dozens¹ | **~7**  | dozens¹ | **~18** |
-| 15 GB | dozens¹ | **~4**  | dozens¹ | **~12** |
-| 20 GB | dozens¹ | **~3**  | dozens¹ | **~9**  |
-
-<sub>Reserves: ~2.5 GB held back on an 8 GB machine, ~6 GB on 16 GB — the rest stays for your OS and editor. ¹ With a shared pool, RAM stops being the limit (50–70+ sessions fit); you're bounded by CPU and good sense, not memory.</sub>
+(The encoder is always shared — stateless, ~31 MB, loaded once. Only the pool/index differs.)
 
 > **TL;DR.** **Shared pool → RAM is not your limit** — spin up as many sessions as your CPU allows. **Separate pools → one index each**, so plan on ~3 (20 GB) to ~13 (5 GB) sessions on 8 GB, roughly double at 16 GB. A bigger pool always buys **reach**, never more sessions. Need more headroom? Shrink the pool, or run `--index tiered` to keep only warm graph nodes resident.
 
