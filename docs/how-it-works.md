@@ -52,7 +52,7 @@ The working window is the model's native context — 8K, 32K, 128K tokens, whate
 with. We do not pretend it's bigger. It is *RAM*: small, fast, and the only thing the model can
 directly "see." Everything else is paged.
 
-The engine governs this window with three fractions (mirrored from AetherCloud, in `config.py`):
+The engine governs this window with three fractions (in `config.py`):
 
 - **`trigger_fraction` (0.75)** — once the window is 75% full, overflow encoding kicks in.
 - **`target_fraction` (0.50)** — a paged compaction drains the window back down to ~50% occupancy,
@@ -101,8 +101,7 @@ field**. Every slice carries a retention `score`:
 Under budget pressure the governor evicts **lowest-score-first**. So the slices that keep mattering
 stay reachable, and the ones that stopped mattering quietly make room. In coding-context terms the
 scoring weighs *surprise* (content density), *impact* (query relevance), and *uniqueness*
-(`1 / (1 + similar)`) — pure scoring over access events, with **no** atlas-cell, ground-truth, or
-trading coupling.
+(`1 / (1 + similar)`) — pure scoring over access events, nothing more.
 
 ### Encode-on-spill → the encoder
 
@@ -115,8 +114,8 @@ model download.
 Strings that share tokens share rows in the table, so the mean-pool gives you real lexical cosine
 structure: similar strings land closer together than dissimilar ones (we pin `ENCODER_VERSION` and
 test that the similar-pair margin beats the dissimilar-pair margin). The encoder produces the
-**256-dim retrieval embedding only** — it is *not* an attention mechanism and it is *not* the closed
-8-dim capability coordinate. Retrieval embedding in, slices out. That's the contract.
+**256-dim retrieval embedding only** — it is *not* an attention mechanism. Retrieval embedding in,
+slices out. That's the contract.
 
 ### Process lifecycle → the session
 
@@ -188,16 +187,12 @@ RAM-bound either way.
 
 ## Honest about "unlimited": reach, not attention
 
-We will not sell you a fairy tale, because in OSS a fake "infinite window" is fatal to credibility
-and a real mechanism is rewarded.
-
 **"Unlimited" means reach, not attention.** Your model keeps its native attention window — 8K stays
 8K. What becomes unbounded is what that window can *reach*: a billion-token local pool, retrieved in
 slices, paged in exactly when the reasoning calls for it. The whole thing rides on retrieval **hit
 rate**. When it's high — and the loader is built to keep it high — the pool feels like one seamless,
 enormous context. When it's low, you fall back to the native window and lose no correctness, just
-the reach. We hand you the real mechanism precisely because the real mechanism is the part that holds
-up over a long run.
+the reach.
 
 Don't take the claim on faith — measure it:
 
@@ -206,10 +201,8 @@ python bench/drift_vs_window.py --model ollama/qwen2.5 --task examples/long_buil
 ```
 
 Same model, engine **on vs off**, one long build. It reports cross-stage contradictions (drift),
-per-stage correctness, retrieval hit rate, and whether it finished unattended. **The delta is the
-pitch** — and it generates on your own hardware.
+per-stage correctness, retrieval hit rate, and whether it finished unattended.
 
 ## Where to go next
 
 - [`local-models.md`](local-models.md) — point the engine at your model (Ollama, llama.cpp, HF, mock).
-- [`aethercloud.md`](aethercloud.md) — the same engine, upgraded: a *verified* brain behind it.

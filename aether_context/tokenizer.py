@@ -1,7 +1,7 @@
 """Token-count seam.
 
 Budget math across the engine is backend-agnostic, so by default we estimate token
-counts with the AetherCloud ``CHARS_PER_TOKEN = 4`` rule (``len(text) // 4``). When a
+counts with the ``CHARS_PER_TOKEN = 4`` rule (``len(text) // 4``). When a
 backend exposes a real tokenizer (llama.cpp, HF), ``from_backend`` prefers it for more
 accurate budgeting and falls back — fail-soft — to the estimate if the backend has no
 counter or its counter raises.
@@ -14,7 +14,7 @@ from aether_context._log import get_logger
 
 _log = get_logger(__name__)
 
-#: AetherCloud constant: average characters per token for backend-agnostic budgeting.
+#: Average characters per token, used for backend-agnostic budgeting.
 CHARS_PER_TOKEN = 4
 
 

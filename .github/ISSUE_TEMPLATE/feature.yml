@@ -36,4 +36,4 @@ body:
       label: Scope check
       options:
         - label: This keeps the engine local-first and numpy-light (no heavy required deps).
-        - label: This does not require any closed/hosted AetherCloud feature to work.
+        - label: This stays local-first (no required network service).

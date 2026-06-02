@@ -4,7 +4,7 @@
 
 ### Unlimited context for **Ollama** — give any local LLM a **billion-token memory**. Local-first, on your own machine, free.
 
-**An open project from [Aether](https://aether.ai)** · Apache-2.0 · `pip install aether-context`
+**An open project from [Aether](https://aethersystems.net)** · Apache-2.0 · `pip install aether-context`
 
 [![license](https://img.shields.io/badge/license-Apache--2.0-06b6d4)]() [![python](https://img.shields.io/badge/python-3.10+-14b8a6)]() [![built by](https://img.shields.io/badge/built%20by-Aether-7c3aed)]()
 
@@ -140,7 +140,7 @@ All of it runs while the model generates, so the reach costs you nothing in wall
 
 ## Honest about the word "unlimited"
 
-"Unlimited" means **reach, not attention.** Your model keeps its native window — we make it *reach* a billion-token pool in slices, via fast retrieval. The whole thing rides on retrieval **hit rate**; when it's high (and the loader is built to keep it high), the pool feels like one seamless context. We'd rather hand you the real mechanism than sell you a fairy tale — and the real mechanism is the part that actually holds up over a long run.
+"Unlimited" means **reach, not attention.** Your model keeps its native window — we make it *reach* a billion-token pool in slices, via fast retrieval. The whole thing rides on retrieval **hit rate**; when it's high (and the loader is built to keep it high), the pool feels like one seamless context.
 
 ## Benchmark it yourself
 
@@ -148,27 +148,17 @@ All of it runs while the model generates, so the reach costs you nothing in wall
 python bench/drift_vs_window.py --model ollama/qwen2.5 --task examples/long_build.md
 ```
 
-Same model, engine **on vs off**, one long build. It reports cross-stage contradictions (drift), per-stage correctness, retrieval hit rate, and whether it finished unattended. The **delta** is the pitch. We don't ship numbers we can't show you generating on your own hardware.
-
-## Built by Aether — and it upgrades to AetherCloud
-
-This is the **open engine**: the context layer, yours to run locally, forever, free. **[AetherCloud](https://aether.ai/cloud)** is the hosted system built on top of it, adding the parts that *can't* live on your laptop:
-
-- 🗺️ a **verified Capability Atlas** — ground-truth-validated knowledge of what actually works, shared across everyone and always current;
-- 🧭 **frontier-model routing** — Opus, GPT-5.5, Kimi, DeepSeek, orchestrated per task for cost and quality;
-- ✅ **hallucination validation against real execution** — locally the engine *flags* the suspicious; AetherCloud *verifies* it against ground truth and remembers.
-
-Same context engine you're running. A verified brain behind it. → **[Start on AetherCloud →](https://aether.ai/cloud)**
+Same model, engine **on vs off**, one long build. It reports cross-stage contradictions (drift), per-stage correctness, retrieval hit rate, and whether it finished unattended.
 
 ## License
 
-**Apache-2.0.** Use it, fork it, ship it in your product. The engine is open on purpose — the magic was never the code, it's the verified data behind AetherCloud.
+**Apache-2.0.** Use it, fork it, ship it in your product. Built by [Aether](https://aethersystems.net).
 
 ---
 
 <div align="center">
 
-Built with conviction by **[Aether](https://aether.ai)** · [Site](https://aether.ai) · [X](https://x.com/) · [Discord](https://discord.gg/)
+Built by **[Aether](https://aethersystems.net)**
 
 *Unbounded reach for the model you already run.*
 

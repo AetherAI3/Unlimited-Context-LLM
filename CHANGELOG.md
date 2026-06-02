@@ -31,9 +31,7 @@ pool — local-first, numpy-only core.
   `bench`, plus `--pool` / `--pool-mode {separate,shared}` / `--index {flat,hnsw,tiered}` / `--model`.
 - `bench/drift_vs_window.py` — head-to-head engine ON vs OFF (drift / correctness / hit rate /
   completion), hermetic via `MockLLM`.
-- `atlas_client.py` — thin, optional, off-by-default client of the hosted AetherCloud API. Calls it;
-  contains none of it.
-- Docs (`how-it-works`, `local-models`, `aethercloud`), examples, CI, Apache-2.0 license.
+- Docs (`how-it-works`, `local-models`), examples, CI, Apache-2.0 license.
 
 [Unreleased]: https://github.com/aether/unlimited-context/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/aether/unlimited-context/releases/tag/v0.1.0

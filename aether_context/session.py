@@ -16,17 +16,14 @@ It ties the four other parts together into the virtual-memory-for-attention life
   * **paged reason** — the :class:`~aether_context.slice_loader.Pager` keeps the right slices
     resident, prefetched on a **background thread while the model generates** (the backend's
     HTTP/subprocess call releases the GIL, so the prefetch genuinely overlaps generation);
-  * **close** — flush the pool and, if an ``atlas_client`` is configured, hand it the run's
-    abstracted **harvest candidates** (text + vector + tags). With no client the session is
-    fully local and the candidates are simply retained for inspection.
+  * **close** — flush the pool and retain the run's abstracted **artifacts** (text + vector +
+    tags) locally for inspection. The session is fully local — nothing ever leaves your machine.
 
-Ported, generalized, scrubbed
------------------------------
-The cadence is the generic shape of the upstream trading ``SessionController``:
-**CONTINUOUS** (perceive + encode every step) / **EVENT** (do something on a real event) /
-**VERIFY** (occasional bookkeeping). All trading/PnL/hosted coupling is stripped — there is no
-P&L, no calibration verdict, no admission gate, no router, no closed low-dim coordinate.
-The only vector that crosses over is the 256-dim retrieval embedding (moat boundary).
+Lifecycle cadence
+-----------------
+The loop is a simple **CONTINUOUS** (perceive + encode every step) / **EVENT** (act on a real
+event) / **VERIFY** (occasional bookkeeping) cadence. The only vector the engine ever stores or
+compares is the 256-dim retrieval embedding.
 
 Fail-soft (design law 3)
 ------------------------
@@ -84,10 +81,10 @@ _EXTENDED_RESIDENT_BONUS: int = 8
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True)
 class HarvestCandidate:
-    """An abstracted, durable artifact of a run — the unit handed to an atlas client.
+    """An abstracted, durable artifact of a run, retained locally.
 
     Deliberately tiny and self-contained: ``text`` + its 256-dim retrieval ``vector`` + plain
-    ``tags``. No atlas cell, no ground truth, no provider state (moat boundary).
+    ``tags`` — nothing else, no external state.
     """
 
     text: str
@@ -125,8 +122,7 @@ class Session:
     Construct with a model spec (or a :class:`~aether_context.local_llm.LocalLLM` object) and
     a pool size; the session builds the local LLM (via
     :func:`~aether_context.local_llm.load_model`), a :class:`ContextPool`, a :class:`Witness`,
-    and a :class:`Pager`. The default session constructs **no** atlas client — it is fully
-    local and offline.
+    and a :class:`Pager`. The session is fully local and offline — nothing leaves your machine.
 
     Public surface:
       * :meth:`run` ``(task) -> RunResult`` — the full lifecycle for one task.
@@ -153,7 +149,6 @@ class Session:
         output_tokens: int | None = None,
         resident_k: int = DEFAULT_RESIDENT_K,
         pool_ceiling_bytes: int | None = None,
-        atlas_client: Any | None = None,
         session_id: str | None = None,
         **cfg: Any,
     ) -> None:
@@ -170,9 +165,6 @@ class Session:
         self.extended: bool = False
         # Conversation transcript: one (role, text) tuple per ask()/run() turn, used by export().
         self._transcript: list[tuple[str, str]] = []
-        # Moat-safe seam: None by default (fully local). Only set if the caller opts in.
-        self.atlas_client: Any | None = atlas_client
-
         # -- the model (THE WRAPPER) ------------------------------------------
         self.local_llm: LocalLLM = self._build_model(
             model,
@@ -279,7 +271,7 @@ class Session:
     # -- properties -----------------------------------------------------------
     @property
     def closed(self) -> bool:
-        """Whether the session has been closed (pool flushed, harvest handed off)."""
+        """Whether the session has been closed (pool flushed, artifacts retained)."""
         return self._closed
 
     @property
@@ -322,14 +314,9 @@ class Session:
 
         The hot path of recovery: embed ``query``, search the pool scoped to this session, and
         return the nearest slices. Fail-soft — an encoder/search error yields ``[]`` (the run
-        continues on the model's native window). If an atlas client is configured it is also
-        queried and its slices are merged in (hosted reach), but a hosted error is swallowed.
+        continues on the model's native window).
         """
-        local = self._recall_local(query, k)
-        hosted = self._recall_hosted(query, k)
-        if not hosted:
-            return local
-        return self._merge_unique(local, hosted, k)
+        return self._recall_local(query, k)
 
     def _recall_local(self, query: str, k: int) -> list[Slice]:
         try:
@@ -349,30 +336,6 @@ class Session:
         except AetherContextError as exc:
             logger.warning("recall pool search failed (%s); returning no local hits", exc)
             return []
-
-    def _recall_hosted(self, query: str, k: int) -> list[Slice]:
-        if self.atlas_client is None:
-            return []
-        try:
-            qvec = self.encoder.encode(query)
-            return list(self.atlas_client.retrieve(qvec, k))
-        except Exception as exc:  # noqa: BLE001 - hosted is best-effort, never fatal
-            logger.warning("hosted retrieve failed (%s); local-only", exc)
-            return []
-
-    @staticmethod
-    def _merge_unique(a: list[Slice], b: list[Slice], k: int) -> list[Slice]:
-        """Merge two slice lists, de-duplicating by id, preserving order, capped at ``k``."""
-        seen: set[str] = set()
-        out: list[Slice] = []
-        for sl in [*a, *b]:
-            if sl.id in seen:
-                continue
-            seen.add(sl.id)
-            out.append(sl)
-            if len(out) >= k:
-                break
-        return out
 
     # -- encode-on-spill ------------------------------------------------------
     def _encode_slice(
@@ -408,9 +371,8 @@ class Session:
             return None
         self._clock += 1.0
         self.witness.touch(sid, salience=score, now=self._clock)
-        # Every encoded durable artifact (planted fact or spill) is a harvest candidate:
-        # text + its 256-dim retrieval vector + tags. On close these flush locally or hand
-        # to a configured atlas client (the only seam to hosted).
+        # Every encoded durable artifact (planted fact or spill) is a run artifact:
+        # text + its 256-dim retrieval vector + tags, retained locally.
         self._harvest.append(
             HarvestCandidate(text=text, vector=sl.vector.copy(), tags=dict(meta))
         )
@@ -419,7 +381,7 @@ class Session:
     def _salience(self, text: str, base: float) -> float:
         """Retention salience for a slice: SURPRISE x IMPACT x UNIQUENESS, floored.
 
-        Generalized retention math (no atlas): surprise ~ content density (token variety),
+        Retention math: surprise ~ content density (token variety),
         impact ~ the caller's base weight, uniqueness ~ 1/(1+near-neighbors already in pool).
         Floored at :data:`_SPILL_SALIENCE_FLOOR` so real-but-cold context is never zeroed.
         """
@@ -628,8 +590,7 @@ class Session:
     def harvest_candidates(self) -> list[HarvestCandidate]:
         """The run's abstracted durable artifacts (text + 256-dim vector + tags).
 
-        These are what :meth:`close` hands to a configured ``atlas_client`` (the only seam to
-        hosted). Returned as a shallow copy so the caller cannot mutate session state.
+        Retained locally; returned as a shallow copy so the caller cannot mutate session state.
         """
         return list(self._harvest)
 
@@ -712,26 +673,15 @@ class Session:
 
     # -- close + context manager ----------------------------------------------
     def close(self) -> None:
-        """Flush the pool and hand harvest candidates to the atlas client (if any). Idempotent.
+        """Flush the pool and release its mmap. Idempotent.
 
-        Closing twice is a no-op. The pool flush is always attempted; the atlas hand-off is
-        wrapped fail-soft so a hosted outage never raises on close. After close the session
-        cannot ``run``/``stream`` again.
+        Closing twice is a no-op. After close the session cannot ``run``/``stream`` again; the
+        run's artifacts remain available via :meth:`harvest_candidates` until then.
         """
         if self._closed:
             return
         self._closed = True
-        self._handoff_harvest()
         self._flush_pool()
-
-    def _handoff_harvest(self) -> None:
-        """Hand harvest candidates to the atlas client if configured (fail-soft)."""
-        if self.atlas_client is None or not self._harvest:
-            return
-        try:
-            self.atlas_client.submit(self._harvest)
-        except Exception as exc:  # noqa: BLE001 - hosted best-effort, never fatal on close
-            logger.warning("atlas harvest hand-off failed (%s); candidates kept locally", exc)
 
     def _flush_pool(self) -> None:
         """Flush + release the pool's mmap (fail-soft; close must never raise)."""

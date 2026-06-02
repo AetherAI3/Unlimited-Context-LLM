@@ -5,7 +5,7 @@
 trigger/target/verbatim behavior). Both are plain dataclasses (no pydantic) to keep the
 core dependency surface at numpy-only.
 
-Constants mirror AetherCloud:
+Constants:
   * window fractions TRIGGER 0.75 / TARGET 0.50 / VERBATIM 0.30
   * pool reach math ``reach ≈ pool_gb × 233M tokens`` (README table)
   * the 5 GB pool floor (README minimum for a usable reach)
@@ -21,7 +21,7 @@ from aether_context.errors import PoolBudgetError, PoolCorrupt
 
 _log = get_logger(__name__)
 
-# --- AetherCloud-mirrored constants ------------------------------------------
+# --- engine constants --------------------------------------------------------
 #: Minimum usable pool size in GB (README floor).
 POOL_GB_FLOOR = 5
 #: Tokens of reach per GB of pool (README: reach ≈ pool_gb × 233M).
@@ -33,7 +33,7 @@ TARGET_FRACTION = 0.50
 #: Fraction of the window kept verbatim (never encoded away).
 VERBATIM_FRACTION = 0.30
 
-#: Default retrieval embedding dimensionality (the one value that crosses from atlas).
+#: Default retrieval embedding dimensionality (the 256-dim retrieval embedding).
 DEFAULT_DIM = 256
 #: Default tokens per encoded slice.
 DEFAULT_SLICE_TOKENS = 512
@@ -135,7 +135,7 @@ class SessionConfig:
     """Per-run configuration.
 
     ``model`` is required (a spec string like ``"ollama/qwen2.5"`` or ``"mock"``, or a
-    ``LocalLLM`` object). The window fractions mirror AetherCloud defaults.
+    ``LocalLLM`` object). The window fractions use the engine defaults.
     """
 
     model: object

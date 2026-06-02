@@ -16,10 +16,9 @@ to the same row, mean-pooling gives real lexical cosine structure — two string
 share tokens land closer than two that share none. Distinct tokens draw
 near-orthogonal rows in 256-d, so unrelated text sits near cosine 0.
 
-This is the **256-dim retrieval embedding only** (moat boundary): any closed low-dim
-coordinate from the hosted side is never computed here and never unified with this
-vector. Swapping in a trained Model2Vec table later is a drop-in replacement
-for ``_row_for_token`` / the lookup — the public API stays fixed.
+This produces the **256-dim retrieval embedding only** — it is purely a retrieval key
+and not an attention mechanism. Swapping in a trained Model2Vec table later is a drop-in
+replacement for ``_row_for_token`` / the lookup — the public API stays fixed.
 
 Stateless and shared: a single ``StaticEncoder`` instance is safe to reuse; it holds
 only a tiny in-memory cache of generated rows for speed.
@@ -42,7 +41,7 @@ logger = get_logger(__name__)
 #: not comparable). Retrieval indexes should record this alongside stored vectors.
 ENCODER_VERSION: str = "static_v1"
 
-#: Default embedding dimensionality (retrieval-only; never the closed 8-dim code).
+#: Default embedding dimensionality (the 256-dim retrieval embedding).
 DEFAULT_DIM: int = 256
 
 #: Master seed mixed into every per-token hash so the whole table is reproducible but

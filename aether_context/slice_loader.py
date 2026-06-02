@@ -11,27 +11,26 @@ rate; the pager's whole job is to push ``h → 1`` by prefetching from current s
 is a dict lookup (~µs); ``t_cold`` is the classical pool search (~ms). The hit rate is
 **measured**, not assumed.
 
-Ported, atlas coupling stripped
--------------------------------
-This ports the upstream ``core/slice_loader.py`` mechanism (a single-threaded, LRU-budgeted
-warm cache: ``prefetch``/``get``/``invalidate`` + hit-rate), plus two small disciplines:
+Design
+------
+A single-threaded, LRU-budgeted warm cache (``prefetch``/``get``/``invalidate`` + hit-rate),
+plus two small disciplines:
 
-  * the **idle-aware ε re-probe** from ``core/exploration.py``
-    (:func:`reprobe_probability` / :func:`should_reprobe`) — a key that has gone idle gets a
-    rising probability of being re-checked, so a stale-but-recoverable region never stays
-    dark forever; and
-  * the **depth-cap-1 provenance grounding verdict** from ``core/latency_budget.py``
-    (:func:`grounding_verdict`, capped at :data:`MAX_CORRECTION_DEPTH`) — a paged-back slice
-    is flagged only if it has *no provenance* or contradicts a *hard fact*; merely disagreeing
-    with recent (possibly stale) context is **not** a flag.
+  * the **idle-aware ε re-probe** (:func:`reprobe_probability` / :func:`should_reprobe`) — a
+    key that has gone idle gets a rising probability of being re-checked, so a
+    stale-but-recoverable region never stays dark forever; and
+  * the **depth-cap-1 provenance grounding verdict** (:func:`grounding_verdict`, capped at
+    :data:`MAX_CORRECTION_DEPTH`) — a paged-back slice is flagged only if it has *no
+    provenance* or contradicts a *hard fact*; merely disagreeing with recent (possibly
+    stale) context is **not** a flag.
 
-What is generalized away
-------------------------
-The trading ``SliceKey(regime, setup, symbol, timeframe)`` is replaced by a plain discrete
-:class:`SliceKey(session, topic)`; the cold path is injected as ``retrieve_fn`` defaulting to
-``context_pool.search`` (scoped to ``key.session``). Any closed low-dim coordinate / regime
-tuple is *forbidden* as a key coordinate (moat boundary) — :class:`SliceKey` rejects non-string
-coordinates with ``TypeError``.
+The key
+-------
+A :class:`SliceKey(session, topic)` is a plain discrete coordinate: ``session`` is the
+namespace and ``topic`` is a coarse phase/subject label. The cold path is injected as
+``retrieve_fn`` defaulting to ``context_pool.search`` (scoped to ``key.session``). Keys are
+**discrete strings only** — :class:`SliceKey` rejects non-string coordinates with
+``TypeError`` (vectors address slices only *inside* :meth:`Pager.get`, never as a key).
 
 Single-threaded by design
 -------------------------
@@ -86,13 +85,12 @@ class Grounding(str, Enum):
 class SliceKey:
     """A discrete, hashable coordinate that addresses a region of the pool.
 
-    Generalized from the trading ``SliceKey(regime, setup, symbol, timeframe)`` to a plain
-    ``(session, topic)`` pair: ``session`` is the namespace (scopes the cold search) and
-    ``topic`` is a coarse phase/subject label the session's own state machine assigns.
+    A plain ``(session, topic)`` pair: ``session`` is the namespace (scopes the cold search)
+    and ``topic`` is a coarse phase/subject label the session's own state machine assigns.
 
-    MOAT: the key is **discrete strings only**. A vector (the 256-dim retrieval embedding or,
-    worse, any closed low-dim coordinate) and a regime tuple are rejected with
-    ``TypeError`` — vectors address slices only *inside* :meth:`Pager.get`, never as a key.
+    The key is **discrete strings only**. A vector (the 256-dim retrieval embedding) is
+    rejected with ``TypeError`` — vectors address slices only *inside* :meth:`Pager.get`,
+    never as a key.
     """
 
     session: str
@@ -106,9 +104,9 @@ class SliceKey:
             )
         if not isinstance(self.topic, str):
             raise TypeError(
-                f"SliceKey.topic must be a str, got {type(self.topic).__name__}; a closed "
-                "low-dim coordinate / regime tuple is forbidden as a key (moat boundary). Use a "
-                "topic label; query vectors address slices only inside Pager.get/search."
+                f"SliceKey.topic must be a str, got {type(self.topic).__name__}; a key is a "
+                "discrete string coordinate, not a vector. Use a topic label; query vectors "
+                "address slices only inside Pager.get/search."
             )
 
 

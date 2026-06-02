@@ -125,12 +125,12 @@ def test_slice_key_equality_by_value():
     assert SliceKey("a", "b") != SliceKey("a", "c")
 
 
-def test_slice_key_rejects_eight_dim_vector_and_regime_tuple():
-    # MOAT: a closed low-dim coordinate / regime tuple must never address a slice.
+def test_slice_key_rejects_non_string_topic():
+    # A SliceKey addresses a slice by (session, topic) only; topic must be a string or None.
     with pytest.raises(TypeError):
         SliceKey(session="proj", topic=np.zeros(8))  # type: ignore[arg-type]
     with pytest.raises(TypeError):
-        SliceKey(session="proj", topic=("trend", "breakout", "NQ", "5m"))  # type: ignore[arg-type]
+        SliceKey(session="proj", topic=("a", "b", "c", "d"))  # type: ignore[arg-type]
 
 
 # --- warm hit is O(1), no cold call ------------------------------------------

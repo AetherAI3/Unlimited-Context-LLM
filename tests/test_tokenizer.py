@@ -6,7 +6,7 @@ from aether_context.tokenizer import estimate, from_backend, CHARS_PER_TOKEN
 
 # ---- estimate: the backend-agnostic chars/4 rule ----------------------------
 def test_chars_per_token_constant_is_four():
-    # AetherCloud CHARS_PER_TOKEN constant — keep the budget math stable.
+    # CHARS_PER_TOKEN constant — keep the budget math stable.
     assert CHARS_PER_TOKEN == 4
 
 

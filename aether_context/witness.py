@@ -1,16 +1,14 @@
 """+/- retention witness — page-replacement scoring + budget eviction.
 
 This is the *fidelity field* that decides which encoded slices stay resident in the
-context pool and which fade out. It is the local-first generalization of the
-AetherCloud context engine's eviction policy: a **pure scoring function over access
-events**, with no atlas-cell, ground-truth, tiering, or promotion coupling.
+context pool and which fade out. It is a **pure scoring function over access
+events**, with no external tiering or promotion coupling.
 
 Why score on salience, not recency
 -----------------------------------
 The naive cache evicts on recency/frequency (LRU/LFU). For a long coding run that is
 exactly backwards: the load-bearing fact established an hour ago is rare and old, so an
-LRU policy throws it out first. Two rules fix it (ported from the upstream retention
-policy, atlas coupling stripped):
+LRU policy throws it out first. Two rules fix it:
 
   1. **Score retention on SURPRISE x IMPACT x UNIQUENESS, not frequency.** The geometric
      mean (see :func:`retention_score`) means one weak driver can't be masked by a strong
@@ -41,9 +39,9 @@ from aether_context._log import get_logger
 
 _log = get_logger(__name__)
 
-# --- retention math constants (ported from upstream, atlas coupling stripped) ---
+# --- retention math constants -----------------------------------------------
 #: At or above this retention score a slice is considered salient ("hardened"): it is
-#: the last thing the budget governor will evict. Mirrors the upstream SALIENT_THRESHOLD.
+#: the last thing the budget governor will evict.
 SALIENT_THRESHOLD: float = 0.60
 #: Exponential fade rate per unit of idle time. Tuned so a unit-salience slice retains
 #: ~37% of its score after ~20 idle units (1 / DEFAULT_DECAY_RATE), i.e. a slow, steady

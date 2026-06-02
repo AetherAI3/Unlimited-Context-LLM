@@ -29,7 +29,4 @@ packages = ["aether_context"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# qosc/ is the closed-source atlas reference we port mechanism from; it is not
-# part of the OSS package and must never be collected, packaged, or scrubbed.
-addopts = "--ignore=qosc"
-norecursedirs = ["qosc", ".git", "*.egg-info", "build", "dist"]
+norecursedirs = [".git", "*.egg-info", "build", "dist"]

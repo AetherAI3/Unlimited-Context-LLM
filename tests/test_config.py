@@ -88,7 +88,7 @@ def test_session_config_defaults():
     assert cfg.target_fraction == 0.50
 
 
-def test_window_fraction_constants_mirror_aethercloud():
+def test_window_fraction_constants():
     assert TRIGGER_FRACTION == 0.75
     assert TARGET_FRACTION == 0.50
     assert VERBATIM_FRACTION == 0.30

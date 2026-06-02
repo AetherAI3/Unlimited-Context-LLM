@@ -4,15 +4,15 @@ The session is the **process lifecycle** of the virtual-memory-for-attention des
 ``open`` a fresh window, then as the model streams (and as input arrives) **encode** the
 spill into the pool while the **witness** fades the cold; the **pager** keeps the right
 slices resident (prefetched on a background thread while the model generates, since the
-backend call releases the GIL); ``close`` flushes and optionally hands harvest candidates
-to an ``atlas_client`` if one is configured.
+backend call releases the GIL); ``close`` flushes the pool and retains the run's artifacts
+locally — the session is fully local.
 
 These tests are numpy-only and never hit the network — every model is a ``MockLLM`` (or a
 tiny in-proc stub), every pool lives under pytest's ``tmp_path``. The headline property is
 **encode-and-recover**: a planted load-bearing fact stays reachable past a deliberately small
 ``context_window`` *with* the engine, and is lost *without* it (proven in test_end_to_end).
 
-Style mirrors ``qosc/aether-atlas/tests/`` and the package's own ``test_slice_loader.py``.
+Style mirrors the package's own ``test_slice_loader.py``.
 """
 from __future__ import annotations
 
@@ -136,29 +136,17 @@ def test_pool_budget_held_throughout_a_run(tmp_pool_dir):
         s.close()
 
 
-# --- atlas_client is None by default -----------------------------------------
-def test_atlas_client_is_none_by_default(tmp_pool_dir):
-    """Default Session is fully local: it constructs NO atlas client (moat: the closed API
-    is opt-in only)."""
+def test_close_does_not_raise(tmp_pool_dir):
+    """Closing a session flushes the pool locally and never raises."""
     s = _mock_session(tmp_pool_dir)
-    try:
-        assert s.atlas_client is None
-    finally:
-        s.close()
-
-
-def test_close_with_no_atlas_client_does_not_raise(tmp_pool_dir):
-    """Closing a fully-local session (no atlas client) flushes locally and never raises."""
-    s = _mock_session(tmp_pool_dir)
-    s.run("task that produces harvest candidates")
-    s.close()  # must not raise even though atlas_client is None
+    s.run("task that produces durable artifacts")
+    s.close()  # must not raise
     assert s.closed
 
 
-# --- harvest candidates ------------------------------------------------------
+# --- durable run artifacts ---------------------------------------------------
 def test_run_emits_harvest_candidates(tmp_pool_dir):
-    """A run accumulates harvest candidates (text + vector + tags) the session can flush
-    locally or hand to an atlas client if configured."""
+    """A run accumulates durable artifacts (text + vector + tags) retained locally."""
     s = _mock_session(tmp_pool_dir, context_window=64, output_tokens=400)
     try:
         s.run("a long build with durable facts to harvest")
@@ -172,28 +160,6 @@ def test_run_emits_harvest_candidates(tmp_pool_dir):
         assert isinstance(cand.tags, dict)
     finally:
         s.close()
-
-
-def test_close_hands_candidates_to_atlas_client_when_configured(tmp_pool_dir):
-    """If an atlas client is configured, close() hands it the harvest candidates (the only
-    seam to the closed API — a dumb request, no atlas logic in the session)."""
-    received: list = []
-
-    class RecordingAtlas:
-        def submit(self, candidates):
-            received.extend(candidates)
-
-    s = Session(
-        model="mock",
-        pool_gb=5,
-        pool_dir=tmp_pool_dir,
-        context_window=64,
-        output_tokens=400,
-        atlas_client=RecordingAtlas(),
-    )
-    s.run("a long build")
-    s.close()
-    assert len(received) > 0  # candidates were handed off on close
 
 
 # --- fail-soft: a pager error never crashes a run ----------------------------

@@ -14,9 +14,7 @@ What it is / is not
     works**; if ``hnswlib`` is importable and ``config.index == "hnsw"`` it uses HNSW for
     speed, otherwise it transparently falls back to flat. A missing optional dependency is
     never a hard failure.
-  * It is **not** the hosted store. A :class:`Slice` is a self-contained dataclass over
-    the 256-dim retrieval embedding only — never a hosted cell, never any closed low-dim
-    coordinate (moat boundary).
+  * A :class:`Slice` is a self-contained dataclass over the 256-dim retrieval embedding.
 
 On-disk layout
 --------------
@@ -104,8 +102,7 @@ class Slice:
 
       id       stable identifier, unique within the pool
       session  namespace; ``search(session=...)`` isolates one session from the rest
-      vector   the 256-dim float32 retrieval embedding (moat: *only* this, never any
-               closed low-dim coordinate)
+      vector   the 256-dim float32 retrieval embedding
       text     the original text the vector encodes (paged back to the model on a hit)
       tokens   token count of ``text`` (for window/budget math)
       meta     arbitrary JSON-serializable tags (phase, source, etc.)

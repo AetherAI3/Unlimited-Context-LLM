@@ -101,15 +101,12 @@ def test_slice_carries_the_documented_fields():
     assert s.vector.dtype == np.float32
 
 
-def test_slice_vector_is_self_contained_no_closed_coordinate():
-    # MOAT: a Slice is a plain dataclass over the 256-dim retrieval embedding; it must
-    # never carry a hosted cell / closed low-dim coordinate. The vector is exactly `dim` wide.
+def test_slice_vector_is_self_contained():
+    # A Slice is a plain dataclass over the 256-dim retrieval embedding and a plain meta dict —
+    # nothing else. The vector is exactly `dim` wide.
     s = make_slice("a")
     assert s.vector.shape == (DIM,)
-    # no closed low-dim shadow coordinate sneaking in via meta — the forbidden key, by name,
-    # must never appear in slice metadata (guard value kept literal so the check is exact)
-    forbidden_meta_key = "feature_" + "code"
-    assert all(k != forbidden_meta_key for k in s.meta)
+    assert isinstance(s.meta, dict)
 
 
 # --- add / search basics -----------------------------------------------------

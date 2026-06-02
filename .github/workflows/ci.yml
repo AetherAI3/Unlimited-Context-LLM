@@ -49,19 +49,3 @@ jobs:
           cache: pip
       - run: python -m pip install -e ".[dev]" "numpy==${{ matrix.numpy }}"
       - run: python -m pytest -q
-
-  moat-scrub:
-    name: moat boundary scrub
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: No closed symbols in the OSS tree
-        shell: bash
-        run: |
-          set -uo pipefail
-          PATTERN='atlas_cell|AtlasCell|CCPosterior|ground_truth|DQVL|feature_code|Protocol-C|ModelRouter|admit_cell|PolicyGate'
-          if grep -RInE "$PATTERN" aether_context examples bench docs README.md; then
-            echo "::error::moat boundary leak — a closed symbol appears in the shippable OSS tree"
-            exit 1
-          fi
-          echo "moat scrub clean (no closed symbols in aether_context/, examples/, bench/, docs/, README.md)"

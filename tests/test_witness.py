@@ -6,8 +6,8 @@ idle time elapses, and **re-hardens** when the slice is relevant again. Eviction
 the lowest-score slices first, stopping the instant the pool is back under its ceiling.
 
 All tests are numpy-only and never touch the network. Math (geometric mean of
-surprise x impact x uniqueness, tanh squash, uniqueness = 1/(1+neighbors)) is ported
-from the upstream retention policy with all atlas-cell / ground-truth coupling stripped.
+surprise x impact x uniqueness, tanh squash, uniqueness = 1/(1+neighbors)) is a pure
+retention policy over access events.
 """
 from aether_context.witness import (
     Witness,
@@ -19,7 +19,7 @@ from aether_context.witness import (
 )
 
 
-# ---- pure scoring math (ported, strip atlas coupling) -----------------------
+# ---- pure scoring math ------------------------------------------------------
 def test_retention_score_is_geometric_mean_of_drivers():
     # geometric mean: a single weak driver can't be masked by strong others
     assert retention_score(1.0, 1.0, 1.0) == 1.0
