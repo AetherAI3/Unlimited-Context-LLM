@@ -1,6 +1,6 @@
 # Contributing to Unlimited Context
 
-Thanks for being here. `aether-context` is an open project from [Aether](https://aether.ai),
+Thanks for being here. `aether-context` is an open project from Brandon Barrante [Aether Ai](www.aethersystems.net),
 Apache-2.0, and we want it to be genuinely pleasant to hack on. This page gets you from a fresh
 clone to a green test run in under ten minutes, and points you at good first things to work on.
 
