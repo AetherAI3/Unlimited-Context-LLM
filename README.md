@@ -2,7 +2,7 @@
 
 # ⚡ Unlimited Context
 
-**Unlimited context for [Ollama](https://ollama.com)** — give any local LLM a **billion-token memory**. Local-first, on your own machine, free.
+Give your Ai superpowers with **Unlimited context for [Ollama](https://ollama.com)** — give any local LLM a **billion-token memory**. Local-first, on your own machine, free.
 
 <img width="537" height="405" alt="Unlimited Context" src="https://github.com/user-attachments/assets/79758729-ead7-42ca-9784-831cae68ef06" />
 
