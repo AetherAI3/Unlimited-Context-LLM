@@ -1,6 +1,6 @@
 <div align="center">
 
-# ⚡ Unlimited Context
+# ⚡ Unlimited Context LLM
 
 Give your Ai superpowers with **Unlimited context for [Ollama](https://ollama.com)** — give any local LLM a **billion-token memory**. Local-first, on your own machine, free.
 
