@@ -304,10 +304,10 @@ def test_reopen_corrupt_metadata_raises_pool_corrupt(tmp_pool_dir):
 # --- flat top-k matches a known fixture --------------------------------------
 def test_flat_topk_matches_known_fixture(rng, tmp_path):
     """The flat numpy brute-force index must return the exact top-k a hand-computed
-    cosine ranking gives — this is the ground-truth correctness fixture."""
+    cosine ranking gives — this is the reference correctness fixture."""
     vectors = _unit_matrix(rng.standard_normal((6, DIM)).astype(np.float32))
     query = _unit(rng.standard_normal(DIM).astype(np.float32))
-    # ground-truth cosine ranking (vectors are unit, so cosine == dot)
+    # reference cosine ranking (vectors are unit, so cosine == dot)
     cosines = vectors @ query
     expected_order = [int(i) for i in np.argsort(-cosines)]
 
