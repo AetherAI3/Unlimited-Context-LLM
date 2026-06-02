@@ -2,7 +2,7 @@
 
 # ⚡ Unlimited Context
 
-### Give any local LLM a **billion-token memory** — on your own machine, for free.
+### Unlimited context for **Ollama** — give any local LLM a **billion-token memory**. Local-first, on your own machine, free.
 
 **An open project from [Aether](https://aether.ai)** · Apache-2.0 · `pip install aether-context`
 

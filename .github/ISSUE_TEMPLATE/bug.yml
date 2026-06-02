@@ -1,0 +1,51 @@
+name: Bug report
+description: Something in aether-context isn't working
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug. First, please run `aether-context doctor` — it catches the three
+        most common issues (Ollama not running, model not pulled, pool too big for RAM) and prints
+        the fix. If that doesn't solve it, fill this in.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you expect, and what happened instead?
+      placeholder: "Session.run() raised ... / output drifted after stage 3 / ..."
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: The smallest snippet that reproduces it. Prefer model="mock" if it reproduces there.
+      render: python
+      placeholder: |
+        from aether_context import Session
+        s = Session(model="mock", pool_gb=5)
+        s.run("...")
+    validations:
+      required: true
+  - type: input
+    id: model
+    attributes:
+      label: Model / backend
+      placeholder: "ollama/qwen2.5 · llamacpp:/path.gguf · hf/org/model · mock"
+    validations:
+      required: true
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: "Run: python -c \"import sys,platform,numpy,aether_context as a; print(sys.version, platform.platform(), numpy.__version__, a.__version__)\""
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: "aether-context doctor output"
+      render: text

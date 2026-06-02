@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aether-context"
+version = "0.1.0"
+description = "Unlimited Context — virtual memory for an LLM's attention. Local-first, numpy-only core."
+readme = "README.md"
+requires-python = ">=3.10,<3.15"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Aether" }]
+keywords = ["llm", "context", "retrieval", "ollama", "local", "rag", "agents"]
+dependencies = ["numpy>=1.24,<3.0"]       # CORE = numpy only. Works offline with MockLLM.
+
+[project.optional-dependencies]
+ollama   = []                              # primary path uses stdlib urllib — no extra dep needed
+llamacpp = ["llama-cpp-python>=0.2"]
+hf       = ["transformers>=4.40", "torch>=2.2"]
+fast     = ["hnswlib>=0.8"]                # faster ANN; flat numpy index is the fallback
+all      = ["aether-context[llamacpp,hf,fast]"]
+dev      = ["pytest>=8", "ruff>=0.5", "mypy>=1.10"]
+
+[project.scripts]
+aether-context = "aether_context.cli:main"
+
+[tool.setuptools]
+packages = ["aether_context"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# qosc/ is the closed-source atlas reference we port mechanism from; it is not
+# part of the OSS package and must never be collected, packaged, or scrubbed.
+addopts = "--ignore=qosc"
+norecursedirs = ["qosc", ".git", "*.egg-info", "build", "dist"]

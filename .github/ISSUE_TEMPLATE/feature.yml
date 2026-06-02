@@ -1,0 +1,39 @@
+name: Feature request
+description: Suggest an improvement or a new capability
+title: "[feature] "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do that's hard or impossible today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What would the API / behavior look like? A code sketch helps.
+      render: python
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - local model wrapper (ollama / llama.cpp / hf)
+        - encoder / context pool / retrieval
+        - witness / eviction / budget
+        - session lifecycle
+        - CLI / installer / docs
+        - benchmark
+        - other
+    validations:
+      required: true
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope check
+      options:
+        - label: This keeps the engine local-first and numpy-light (no heavy required deps).
+        - label: This does not require any closed/hosted AetherCloud feature to work.
