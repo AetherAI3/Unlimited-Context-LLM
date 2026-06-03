@@ -236,7 +236,7 @@ If this gave your local model superpowers, **drop a star** — it's how other pe
 
 <div align="center">
 
-Built by **Brandon Barrante** · [Aether](https://aethersystems.net)
+Built by [Aether](https://aethersystems.net)
 
 <img width="880" alt="Unlimited Context" src="https://github.com/user-attachments/assets/4b7eef9a-8b1c-4dc7-b926-771ce53ed04d" />
 
