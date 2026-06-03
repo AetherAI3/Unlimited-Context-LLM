@@ -186,6 +186,45 @@ run. Only the pool/index differs between modes:
 A bigger pool always buys more **reach** per session — never more concurrent sessions. Those are
 RAM-bound either way.
 
+## I/O & scaling: why a 20 GB pool doesn't seek the disk to death
+
+A natural worry as the pool grows: *won't navigating the index across a 20 GB file thrash the disk
+with random seeks?* No — and it's worth being precise about why, because it pins down what actually
+scales (RAM) versus what doesn't (per-query I/O).
+
+The pool keeps **two** things apart:
+
+- **`vectors.f32`** — the raw 256-dim vectors, `mmap`'d. This is the cold persistence layer.
+- **The ANN graph** — for `--index hnsw`, built and held **in process RAM** by `hnswlib`. `add_items`
+  copies the vectors into the index's own arena; the graph links live there too.
+
+A query (`knn_query`) traverses the **resident** graph. It does **not** read the mmap. Trace a warm
+search: `_live_matrix()` hands the index a memmap *view* (`np.asarray` on a memmap copies nothing and
+faults no pages), and the HNSW path only reads `matrix.shape` (the empty/lazy-build guard) — never an
+element. So a warm HNSW query faults **zero pages** off disk. The mmap is read only when the graph is
+*built*, and even then incrementally: a new slice adds just its own row to the graph
+(`add_rows(matrix[built:])`), a sequential tail read, not a rescan of the whole pool.
+
+The math seals it. HNSW visit count is **`O(ef · log N)`** — *logarithmic* in pool size:
+
+```
+N = 9.09M slices (20 GB),  log₂N ≈ 23,  ef = min(200, n),  M = 16
+  → a query visits a few hundred to ~2,000 nodes — INDEPENDENT of 5 GB vs 20 GB
+```
+
+Even in the fiction where every visited vector were a cold random disk read: ~2,000 × 1 KB ≈ **2 MB**
+per query (~2,000 IOPS rounded to 4 KB pages). A consumer NVMe sustains 300K–1M random-read IOPS, so
+that worst case is **~2–7 ms** — and it's fiction, because the graph is in RAM, so the real number is
+microseconds. On top of that the loader runs the search on a **background thread while the model
+generates** (the backend call releases the GIL), so even a genuine cold miss overlaps generation.
+
+The honest takeaway: **growing 5 GB → 20 GB barely moves per-query work** (it's `log N`), so there is
+no random-seek explosion. The thing that *does* grow linearly with pool size is **resident RAM** —
+stock `hnswlib` keeps its vector copy in memory — which is exactly the lever `--index tiered`
+(resident cluster heads + lazily-paged subgraphs) is reserved for. Until that ships, `tiered` warns
+and runs flat rather than pretending to page the graph. A linear-seek story only applies to the
+**flat** fallback index (a full `matrix @ query` scan), never to HNSW.
+
 ## Honest about "unlimited": reach, not attention
 
 **"Unlimited" means reach, not attention.** Your model keeps its native attention window — 8K stays
