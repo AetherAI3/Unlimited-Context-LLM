@@ -14,6 +14,8 @@ Give your Ai superpowers with **Unlimited context for [Ollama](https://ollama.co
 
 ---
 
+<div align="center">
+
 > **Your context window didn't get bigger. Its *reach* became unbounded.**
 > Unlimited Context is virtual memory for an LLM's attention — a small, fast resident window over a vast local store, paged in and out *while the model reasons*. So an 8B model on your laptop stays coherent across a build that would blow past any context window on earth.
 
@@ -191,6 +193,8 @@ If this gave your local model superpowers, **drop a star** — it's how other pe
 ## License
 
 **Apache-2.0.** Use it, fork it, ship it in your product.
+
+</div>
 
 ---
 
