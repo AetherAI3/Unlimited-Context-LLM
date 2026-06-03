@@ -130,10 +130,6 @@ Running more than one agent? How the pool is shared is the single biggest RAM le
 
 <sub>Reserves: ~2.5 GB held back on an 8 GB machine, ~6 GB on 16 GB — the rest stays for your OS and editor. ¹ With a shared pool, RAM stops being the limit (50–70+ sessions fit); you're bounded by CPU and good sense, not memory.</sub>
 
-<div align="center">
-  <img width="880" alt="Coding time per pool size" src="https://github.com/user-attachments/assets/af626850-96b1-43a2-91fd-b5162bc21e5a" />
-</div>
-
 ## The math, per tier
 
 Derived, not vibes:
@@ -174,7 +170,9 @@ RAM  ≈  ~180 MB   base (engine + shared static encoder)
 
 ## Common commands
 
-A friendly cheat-sheet — the handful of commands you'll actually reach for:
+<div align="center">
+  <img width="880" alt="Coding time per pool size" src="https://github.com/user-attachments/assets/af626850-96b1-43a2-91fd-b5162bc21e5a" />
+</div>
 
 | Command | What it's for |
 |---|---|
