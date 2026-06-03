@@ -37,6 +37,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -166,8 +167,19 @@ class _HnswIndex:
         self._index: Any = None
         self._rows: list[int] = []
 
+    @property
+    def is_built(self) -> bool:
+        """Whether a graph has been built yet (``False`` before the first add/rebuild)."""
+        return self._index is not None
+
+    def size(self) -> int:
+        """Number of vectors currently in the graph (``0`` before it is built)."""
+        if self._index is None:
+            return 0
+        return int(self._index.get_current_count())
+
     def rebuild(self, matrix: np.ndarray, rows: list[int]) -> None:
-        """(Re)build the HNSW graph from ``matrix`` rows labelled by ``rows``."""
+        """(Re)build the HNSW graph from ``matrix`` rows labelled by ``rows`` (from scratch)."""
         n = matrix.shape[0]
         index = _hnswlib.Index(space="cosine", dim=self._dim)
         index.init_index(max_elements=max(1, n), ef_construction=200, M=16)
@@ -176,6 +188,28 @@ class _HnswIndex:
         index.set_ef(max(16, min(200, n)))
         self._index = index
         self._rows = list(rows)
+
+    def add_rows(self, new_matrix: np.ndarray, rows: list[int]) -> None:
+        """Incrementally insert ``new_matrix`` (labelled by ``rows``) into the existing graph.
+
+        This is the scaling fix: appending the few new rows since the last sync is ``O(new)``,
+        versus an ``O(N)`` full :meth:`rebuild` of the whole pool on every add. The graph is
+        grown via ``resize_index`` when it would overflow its current capacity. Falls back to a
+        fresh init when no graph exists yet.
+        """
+        n_new = new_matrix.shape[0]
+        if n_new == 0:
+            return
+        if self._index is None:
+            self._index = _hnswlib.Index(space="cosine", dim=self._dim)
+            self._index.init_index(max_elements=max(1, n_new), ef_construction=200, M=16)
+        cur = int(self._index.get_current_count())
+        if cur + n_new > int(self._index.get_max_elements()):
+            self._index.resize_index(cur + n_new)
+        self._index.add_items(new_matrix, np.asarray(rows, dtype=np.int64))
+        total = cur + n_new
+        self._index.set_ef(max(16, min(200, total)))
+        self._rows.extend(rows)
 
     def search(
         self, matrix: np.ndarray, query: np.ndarray, k: int
@@ -216,8 +250,19 @@ class ContextPool:
         self._config = config
         self._dim = config.dim
         self._dir = Path(config.dir)
-        # Resolve the index kind: honor 'hnsw' only when the lib is importable.
+        # Resolve the index kind: honor 'hnsw' only when the lib is importable. 'tiered' is
+        # accepted by config but not yet built — rather than silently masquerade as a paged
+        # index (a silent capability claim), it announces the fallback and runs flat.
         requested = config.index
+        if requested == "tiered":
+            warnings.warn(
+                "index='tiered' is not implemented yet and currently runs the flat index "
+                "(no graph paging). RAM/latency match --index flat for now. Use 'hnsw' for "
+                "approximate speed, or shrink --pool to fit the resident index.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            requested = "flat"
         if requested == "hnsw" and _HNSWLIB_AVAILABLE:
             self._index: _FlatIndex | _HnswIndex = _HnswIndex(self._dim)
         else:
@@ -245,7 +290,14 @@ class ContextPool:
         self._mmap: np.memmap | None = None
         self._capacity = 0
         self._dirty = False
-        self._index_dirty = True
+        # Monotone write clock: bumped on every add so the witness can tell a freshly paged-in
+        # slice from a stale one and apply its temporal lock-in (anti-thrash) on eviction.
+        self._tick = 0.0
+        # Two index-staleness signals (see _refresh_index): `_index_dirty` means rows were
+        # *appended* (an incremental add suffices); `_index_rebuild` means rows were
+        # *renumbered* (eviction/compaction/load) so the HNSW graph must be rebuilt wholesale.
+        self._index_dirty = False
+        self._index_rebuild = True
         # Restore from disk if a pool already exists in this dir.
         if self._metadata_file().exists():
             self._load()
@@ -297,6 +349,7 @@ class ContextPool:
                 hint=f"Encode with the pool's dim ({self._dim}); the 256-dim retrieval "
                 f"embedding is the only vector the pool stores.",
             )
+        self._tick += 1.0
         row = self._row_of.get(sl.id)
         if row is None:
             row = len(self._order)
@@ -315,7 +368,9 @@ class ContextPool:
             meta=dict(sl.meta),
             score=float(sl.score),
         )
-        self._witness.touch(sl.id, salience=float(sl.score), now=0.0)
+        # Touch at the current write tick so the witness's temporal lock-in can protect this
+        # freshly written slice from immediate eviction (the anti-thrash guarantee).
+        self._witness.touch(sl.id, salience=float(sl.score), now=self._tick)
         self._dirty = True
         self._index_dirty = True
         self.evict_to_budget()
@@ -381,18 +436,20 @@ class ContextPool:
         max_slices = max(0, self._ceiling_bytes // cost)
         if len(self._order) <= max_slices:
             return []
-        # Lowest-retention first = the tail of the witness ranking (highest first).
-        ranked = self._witness.rank()  # highest score first
-        known = set(ranked)
+        # Most-evictable first, honoring the witness's temporal lock-in at the current tick.
+        order = self._witness.eviction_order(now=self._tick)
+        known = set(order)
+        # Any live id with no witness entry has no retention signal -> evict it first.
         unranked = [sid for sid in self._order if sid not in known]
-        full_ranking = ranked + unranked
-        evict_ids = full_ranking[max_slices:]
+        full_order = unranked + order
+        n_evict = len(self._order) - max_slices
+        evict_ids = full_order[:n_evict]
         for sid in evict_ids:
             self._remove(sid)
         if evict_ids:
             self._compact_rows()
             self._dirty = True
-            self._index_dirty = True
+            self._index_rebuild = True  # rows renumbered by compaction -> full graph rebuild
             logger.debug(
                 "evicted %d slice(s) to hold pool at <=%d bytes",
                 len(evict_ids), self._ceiling_bytes,
@@ -423,7 +480,7 @@ class ContextPool:
             self._remove(sid)
         self._compact_rows()
         self._dirty = True
-        self._index_dirty = True
+        self._index_rebuild = True  # rows renumbered by compaction -> full graph rebuild
         logger.debug(
             "cleared %d slice(s) for session %r", len(removed), session_id
         )
@@ -570,12 +627,15 @@ class ContextPool:
                 self._order.append(sid)
                 self._row_of[sid] = row
                 self._slices[sid] = sl
-                self._witness.touch(sid, salience=sl.score, now=0.0)
+                # Advance the write tick per restored record so the on-disk insertion order
+                # becomes the recency gradient the temporal lock-in reads after a reopen.
+                self._tick += 1.0
+                self._witness.touch(sid, salience=sl.score, now=self._tick)
         except (KeyError, TypeError, ValueError, IndexError) as exc:
             raise PoolCorrupt(
                 f"pool metadata at {path} has a malformed slice record: {exc}"
             ) from exc
-        self._index_dirty = True
+        self._index_rebuild = True
 
     # -- mmap management -------------------------------------------------------
     def _ensure_capacity(self, n_rows: int) -> None:
@@ -653,10 +713,28 @@ class ContextPool:
         return np.asarray(self._mmap[:n])
 
     def _refresh_index(self, matrix: np.ndarray) -> None:
-        """Rebuild the ANN index from ``matrix`` if it is stale (flat index is a no-op)."""
-        if isinstance(self._index, _HnswIndex) and self._index_dirty:
-            self._index.rebuild(matrix, list(range(matrix.shape[0])))
+        """Sync the ANN index to ``matrix`` if it is stale (flat index is a no-op).
+
+        Two paths keep HNSW cheap over a long run:
+
+          * ``_index_rebuild`` — rows were renumbered (eviction/compaction/load) so labels are
+            stale; the graph is rebuilt wholesale.
+          * ``_index_dirty`` — rows were only *appended*; the new tail is inserted incrementally
+            (``O(new)``) instead of rebuilding the whole graph (``O(N)``) on every add.
+        """
+        if not isinstance(self._index, _HnswIndex):
+            self._index_dirty = False
+            self._index_rebuild = False
+            return
+        n = matrix.shape[0]
+        if self._index_rebuild or not self._index.is_built:
+            self._index.rebuild(matrix, list(range(n)))
+        elif self._index_dirty:
+            built = self._index.size()
+            if n > built:
+                self._index.add_rows(matrix[built:], list(range(built, n)))
         self._index_dirty = False
+        self._index_rebuild = False
 
     @staticmethod
     def _unit(vec: np.ndarray) -> np.ndarray:
