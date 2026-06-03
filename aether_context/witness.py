@@ -20,6 +20,18 @@ LRU policy throws it out first. Two rules fix it:
   2. **A salient slice fades by *idle time*, never by raw frequency**, and **re-hardens**
      the instant it is relevant again.
 
+Temporal lock-in (anti-thrash)
+------------------------------
+A pure score-ranked governor can *thrash*: a slice paged in from disk on this turn, with
+only a floor-level salience, becomes eligible for eviction on the very next turn — so the
+attention loop evicts it, immediately cold-misses it back, and the window flaps. To break
+that loop a freshly touched slice gets a short **temporal lock-in**: for ``pin_periods``
+after its last touch it carries a :data:`DEFAULT_PIN_BONUS` *immunity bonus* on its
+eviction score. The bonus is deliberately small — it lets a just-paged-in slice survive a
+wave of *comparable-salience* churn, but it never lets a low slice outrank a genuinely
+load-bearing one, so salience still wins where it matters. The bonus affects **eviction
+ordering only** — :meth:`rank` / :meth:`score` (used for retrieval) are unchanged.
+
 The lifecycle of a slice id
 ---------------------------
   * :meth:`Witness.touch` — **harden** (or re-harden): register the slice and lift its
@@ -50,6 +62,14 @@ SALIENT_THRESHOLD: float = 0.60
 #: ~37% of its score after ~20 idle units (1 / DEFAULT_DECAY_RATE), i.e. a slow, steady
 #: fade rather than a cliff — old-but-salient slices survive a long run.
 DEFAULT_DECAY_RATE: float = 0.05
+#: How many idle units a slice stays *temporally locked in* (immune-boosted) after a touch.
+#: Short by design: just long enough that a freshly paged-in slice survives the immediate
+#: next eviction pass rather than flapping straight back to disk.
+DEFAULT_PIN_PERIODS: float = 3.0
+#: Eviction-score bonus a locked-in (recently touched) slice carries. Small on purpose: it
+#: lets a fresh slice beat *comparable-salience* churn, but cannot lift a low slice above a
+#: genuinely load-bearing one — salience still wins where it counts.
+DEFAULT_PIN_BONUS: float = 0.25
 
 
 def _clamp_unit(x: float) -> float:
@@ -111,14 +131,27 @@ class Witness:
     callers feed it ids + saliences and read back rankings / eviction lists.
     """
 
-    def __init__(self, decay_rate: float = DEFAULT_DECAY_RATE) -> None:
+    def __init__(
+        self,
+        decay_rate: float = DEFAULT_DECAY_RATE,
+        *,
+        pin_periods: float = DEFAULT_PIN_PERIODS,
+        pin_bonus: float = DEFAULT_PIN_BONUS,
+    ) -> None:
         """Create an empty witness.
 
         ``decay_rate`` (> 0) sets how fast idle slices fade; the default gives a slow,
         steady fade so old-but-salient slices survive a long run. A non-positive value
         falls back to :data:`DEFAULT_DECAY_RATE`.
+
+        ``pin_periods`` / ``pin_bonus`` configure the temporal lock-in (anti-thrash): a
+        slice touched within ``pin_periods`` of the eviction ``now`` carries ``pin_bonus``
+        on its eviction score. Pass ``pin_periods <= 0`` (or ``pin_bonus <= 0``) to disable
+        the lock-in entirely — eviction then ranks on pure salience.
         """
         self._decay_rate: float = decay_rate if decay_rate > 0 else DEFAULT_DECAY_RATE
+        self._pin_periods: float = max(0.0, float(pin_periods))
+        self._pin_bonus: float = max(0.0, float(pin_bonus))
         self._entries: dict[str, _Entry] = {}
 
     # -- harden / re-harden ----------------------------------------------------
@@ -193,29 +226,60 @@ class Witness:
         """Drop a slice id from the witness. A no-op if it is unknown (safe to call)."""
         self._entries.pop(slice_id, None)
 
+    # -- temporal lock-in ------------------------------------------------------
+    def _is_pinned(self, entry: _Entry, now: float | None) -> bool:
+        """Whether ``entry`` is temporally locked in (touched within ``pin_periods`` of ``now``)."""
+        if now is None or self._pin_periods <= 0.0 or self._pin_bonus <= 0.0:
+            return False
+        return (float(now) - entry.last_touch) < self._pin_periods
+
+    def _eviction_score(self, entry: _Entry, now: float | None) -> float:
+        """Eviction-ranking score: base salience plus the lock-in bonus if pinned.
+
+        Distinct from :meth:`score`: this drives **eviction order only** and never affects
+        retrieval ranking. The bonus is *added* (not multiplied) so it lifts a fresh slice
+        above comparable churn without overriding a genuinely load-bearing salience.
+        """
+        if self._is_pinned(entry, now):
+            return entry.base + self._pin_bonus
+        return entry.base
+
+    def eviction_order(self, now: float | None = None) -> list[str]:
+        """Slice ids ordered **most-evictable first** (lowest eviction score first).
+
+        Ranks on :meth:`_eviction_score`, so when ``now`` is given a temporally locked-in
+        slice is held back behind comparable-salience churn (see the module docstring).
+        Ties break on insertion order for determinism. With ``now=None`` (or the lock-in
+        disabled) this is simply ascending salience.
+        """
+        scored = [(sid, self._eviction_score(e, now)) for sid, e in self._entries.items()]
+        # stable ascending sort; ties keep dict insertion order (most-evictable first)
+        scored.sort(key=lambda pair: pair[1])
+        return [sid for sid, _ in scored]
+
     # -- budget eviction -------------------------------------------------------
     def budget_evict(
         self, ceiling_bytes: int, bytes_per_slice: int, now: float | None = None
     ) -> list[str]:
-        """Evict the **lowest-score** slices first until the pool fits under ``ceiling_bytes``.
+        """Evict the **most-evictable** slices first until the pool fits under ``ceiling_bytes``.
 
-        Each retained slice costs ``bytes_per_slice``. Slices are dropped from the bottom
-        of the ranking (least retained first) and eviction **stops the instant** the
-        remaining count fits — so the survivors are always the highest-score slices and
-        the pool is exactly at or below the ceiling. The witness drops the evicted ids
+        Each retained slice costs ``bytes_per_slice``. Slices are dropped in
+        :meth:`eviction_order` (least-retained first, with the temporal lock-in applied
+        when ``now`` is given) and eviction **stops the instant** the remaining count fits,
+        so the pool ends exactly at or below the ceiling. The witness drops the evicted ids
         from its own bookkeeping.
 
-        Returns the evicted ids in eviction order (lowest score first). A no-op (``[]``)
-        when the pool already fits or ``bytes_per_slice`` is non-positive.
+        Returns the evicted ids in eviction order (most-evictable / lowest score first). A
+        no-op (``[]``) when the pool already fits or ``bytes_per_slice`` is non-positive.
         """
         if bytes_per_slice <= 0:
             return []
         max_slices = max(0, ceiling_bytes // bytes_per_slice)
-        ranked = self.rank(now=now)  # highest score first
-        if len(ranked) <= max_slices:
+        order = self.eviction_order(now=now)  # most-evictable first
+        if len(order) <= max_slices:
             return []
-        # keep the top `max_slices`; evict the rest (these are the lowest scores)
-        evicted = ranked[max_slices:]
+        # drop the most-evictable prefix; keep the `max_slices` most-retained survivors
+        evicted = order[: len(order) - max_slices]
         for sid in evicted:
             del self._entries[sid]
         _log.debug(
@@ -232,4 +296,6 @@ __all__ = [
     "uniqueness_from_neighbors",
     "SALIENT_THRESHOLD",
     "DEFAULT_DECAY_RATE",
+    "DEFAULT_PIN_PERIODS",
+    "DEFAULT_PIN_BONUS",
 ]

@@ -355,3 +355,58 @@ def test_hnsw_request_without_lib_falls_back_to_flat(tmp_pool_dir, monkeypatch):
     assert pool.index_kind == "flat"
     pool.add(make_slice("a", vector=_basis(0)))
     assert pool.search(_basis(0), k=1)[0].id == "a"
+
+
+# --- hnsw incremental add: still agrees with flat across interleaved adds -----
+def test_hnsw_incremental_adds_agree_with_flat(rng, tmp_path):
+    """Adds between searches must be inserted incrementally (not a full rebuild) yet still
+    return the same top-k as the flat index — across two add batches and after an eviction
+    (which renumbers rows and forces a wholesale rebuild). Skipped cleanly without hnswlib."""
+    pytest.importorskip("hnswlib")
+    vectors = _unit_matrix(rng.standard_normal((24, DIM)).astype(np.float32))
+    query = _unit(rng.standard_normal(DIM).astype(np.float32))
+
+    flat = ContextPool(PoolConfig(pool_gb=5, dim=DIM, index="flat", dir=tmp_path / "flat"))
+    hnsw = ContextPool(PoolConfig(pool_gb=5, dim=DIM, index="hnsw", dir=tmp_path / "hnsw"))
+
+    def _add(i):
+        for pool in (flat, hnsw):
+            pool.add(make_slice(f"v{i}", vector=vectors[i], score=0.5))
+
+    # batch 1, then a search (first build), then batch 2, then a search (incremental tail).
+    for i in range(12):
+        _add(i)
+    assert [h.id for h in hnsw.search(query, k=5)] == [h.id for h in flat.search(query, k=5)]
+    assert hnsw._index.size() == 12  # the graph holds every live row after the first search
+    for i in range(12, 24):
+        _add(i)
+    assert [h.id for h in hnsw.search(query, k=5)] == [h.id for h in flat.search(query, k=5)]
+    assert hnsw._index.size() == 24  # tail was inserted, not rebuilt away
+
+
+def test_hnsw_search_correct_after_eviction_rebuild(rng, tmp_path):
+    """After an eviction compacts/renumbers rows, the next hnsw search rebuilds the graph and
+    still matches the flat index over the survivors."""
+    pytest.importorskip("hnswlib")
+    vectors = _unit_matrix(rng.standard_normal((10, DIM)).astype(np.float32))
+    query = _unit(rng.standard_normal(DIM).astype(np.float32))
+    ceiling = 6 * _slice_cost(PoolConfig(pool_gb=5, dim=DIM))
+    flat = ContextPool(PoolConfig(pool_gb=5, dim=DIM, index="flat", dir=tmp_path / "f"),
+                       ceiling_bytes=ceiling)
+    hnsw = ContextPool(PoolConfig(pool_gb=5, dim=DIM, index="hnsw", dir=tmp_path / "h"),
+                       ceiling_bytes=ceiling)
+    for i in range(10):  # forces eviction down to 6 survivors in both pools
+        flat.add(make_slice(f"v{i}", vector=vectors[i], score=(i + 1) / 10.0))
+        hnsw.add(make_slice(f"v{i}", vector=vectors[i], score=(i + 1) / 10.0))
+    assert [h.id for h in hnsw.search(query, k=4)] == [h.id for h in flat.search(query, k=4)]
+
+
+# --- tiered index is honest: it warns and runs flat (not a silent claim) ------
+def test_tiered_index_warns_and_runs_flat(tmp_pool_dir):
+    """`index='tiered'` is accepted but not yet implemented; it must announce the fallback
+    (never a silent capability claim) and behave exactly like the flat index."""
+    with pytest.warns(RuntimeWarning, match="tiered"):
+        pool = ContextPool(small_config(tmp_pool_dir, index="tiered"))
+    assert pool.index_kind == "flat"
+    pool.add(make_slice("a", vector=_basis(0)))
+    assert pool.search(_basis(0), k=1)[0].id == "a"
