@@ -19,6 +19,23 @@ Give your Ai superpowers with **Unlimited context for [Ollama](https://ollama.co
 > **Your context window didn't get bigger. Its *reach* became unbounded.**
 > Unlimited Context is virtual memory for an LLM's attention — a small, fast resident window over a vast local store, paged in and out *while the model reasons*. So an 8B model on your laptop stays coherent across a build that would blow past any context window on earth.
 
+<p align="center">
+  <a href="#the-problem-everyone-hits">Problem</a> ·
+  <a href="#how-it-works-60-seconds">How it works</a> ·
+  <a href="#pick-your-memory-size">Pick your memory size</a> ·
+  <a href="#quickstart">Quickstart</a> ·
+  <a href="#common-commands">Commands</a> ·
+  <a href="#running-many-sessions">Many sessions</a> ·
+  <a href="#ram-footprint">RAM</a> ·
+  <a href="#citation">Cite</a>
+</p>
+
+</div>
+
+---
+
+<div align="center">
+
 ## The problem everyone hits
 
 Long agentic runs all die the same way. The model fills its window, starts **compressing** its own history, silently drops the one detail that mattered three steps ago — and drifts. You've seen it: the runaway PR, the agent that confidently rewrites a function it already wrote, the build that falls apart at hour two. Bigger windows just delay it, and a crammed 1M-token window **rots in the middle** anyway.
@@ -76,6 +93,27 @@ $ aether-context init
   ✓ 10 GB  →  your model can now reach ~2.33 billion tokens
 ```
 
+### What that buys you in coding time
+
+The real win isn't the token count — it's that the wall disappears. A typical ~128K context window fills after well under an hour of active agent work, then starts compacting and forgetting. A 5 GB pool is **~9,000× bigger**.
+
+Rough ballpark — assuming a busy coding agent encodes ~300K–1M keep-worthy tokens/hour (chatty swarms burn more, careful single agents less):
+
+| Pool | Reach | Active autonomous coding before it even fills\* |
+|:----:|:-----:|:------------------------------------------------|
+| **5 GB** | ~1.16B | **~1,200–3,900 hrs** — weeks of nonstop building |
+| 10 GB | ~2.33B | ~2,300–7,800 hrs |
+| 15 GB | ~3.49B | ~3,500–11,600 hrs |
+| 20 GB | ~4.65B | ~4,700–15,500 hrs |
+
+For color: 5 GB of reach ≈ ~100M lines of code, or a shelf of ~8,000 books — you won't fill it in one sitting.
+
+<sub>\* Rough order of magnitude. Because the witnesses fade stale slices, the pool never hard-stops anyway — it just keeps what's relevant. Run a build as long as you want; it won't lose the plot. The per-session RAM math is in [RAM footprint](#ram-footprint) below.</sub>
+
+<div align="center">
+  <img width="880" alt="Coding time per pool size" src="https://github.com/user-attachments/assets/af626850-96b1-43a2-91fd-b5162bc21e5a" />
+</div>
+
 **The math, per tier** (derived, not vibes):
 
 | Pool | Slices | Encoded reach | Slider |
@@ -104,27 +142,6 @@ s.run("Build me a full-stack weightlifting tracker app.")
 ```
 
 That's the whole thing. One small model, one command, a billion tokens of reach behind it.
-
-## What that buys you in coding time
-
-The real win isn't the token count — it's that the wall disappears. A typical ~128K context window fills after well under an hour of active agent work, then starts compacting and forgetting. A 5 GB pool is **~9,000× bigger**.
-
-Rough ballpark — assuming a busy coding agent encodes ~300K–1M keep-worthy tokens/hour (chatty swarms burn more, careful single agents less):
-
-| Pool | Reach | Active autonomous coding before it even fills\* |
-|:----:|:-----:|:------------------------------------------------|
-| **5 GB** | ~1.16B | **~1,200–3,900 hrs** — weeks of nonstop building |
-| 10 GB | ~2.33B | ~2,300–7,800 hrs |
-| 15 GB | ~3.49B | ~3,500–11,600 hrs |
-| 20 GB | ~4.65B | ~4,700–15,500 hrs |
-
-For color: 5 GB of reach ≈ ~100M lines of code, or a shelf of ~8,000 books — you won't fill it in one sitting.
-
-<sub>\* Rough order of magnitude. Because the witnesses fade stale slices, the pool never hard-stops anyway — it just keeps what's relevant. Run a build as long as you want; it won't lose the plot. The per-session RAM math is in [RAM footprint](#ram-footprint) below.</sub>
-
-<div align="center">
-  <img width="880" alt="Coding time per pool size" src="https://github.com/user-attachments/assets/af626850-96b1-43a2-91fd-b5162bc21e5a" />
-</div>
 
 ## Common commands
 
@@ -185,6 +202,23 @@ RAM  ≈  ~180 MB   base (engine + shared static encoder)
 ## Honest about the word "unlimited"
 
 "Unlimited" means **reach, not attention.** Your model keeps its native window — we make it *reach* a billion-token pool in slices, via fast retrieval. The whole thing rides on retrieval **hit rate**; when it's high (and the loader is built to keep it high), the pool feels like one seamless context.
+
+## Citation
+
+If Unlimited Context helps your work, please cite it. Built and maintained by **Aether AI**.
+
+```bibtex
+@software{unlimited_context_2026,
+  title        = {Unlimited Context (aether-context): virtual memory for LLM attention},
+  author       = {Barrante, Brandon},
+  organization = {Aether Ai LLC.},
+  year         = {2026},
+  url          = {https://github.com/DBarr3/Unlimited-Context},
+  license      = {Apache-2.0}
+}
+```
+
+GitHub's "Cite this repository" button reads [`CITATION.cff`](CITATION.cff) directly.
 
 ## ⭐ Star, share, contribute
 
