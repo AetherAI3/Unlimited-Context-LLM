@@ -114,6 +114,49 @@ For color: 5 GB of reach ≈ ~100M lines of code, or a shelf of ~8,000 books —
   <img width="880" alt="Coding time per pool size" src="https://github.com/user-attachments/assets/af626850-96b1-43a2-91fd-b5162bc21e5a" />
 </div>
 
+
+## Running many sessions
+
+Running more than one agent? How the pool is shared is the single biggest RAM lever:
+
+- **`--pool-mode shared`** — one pool, one index, all sessions reach the same memory. The index is paid **once**; each extra session adds only ~30 MB, so RAM barely moves as you add sessions. Best for related work (same project) or max concurrency on a small machine. Trade-off: sessions can see each other's context (no isolation).
+- **`--pool-mode separate`** *(default)* — each session gets its own pool + index, fully **isolated and private**. Clean, but you pay one index **per session**, so RAM scales with `N × pool`. Best for unrelated tasks or when isolation matters.
+
+**How many actually fit:**
+
+| Pool | 8 GB · shared | 8 GB · separate | 16 GB · shared | 16 GB · separate |
+|------|---------------|-----------------|----------------|------------------|
+| 5 GB  | dozens¹ | **~13** | dozens¹ | **~33** |
+| 10 GB | dozens¹ | **~7**  | dozens¹ | **~18** |
+| 15 GB | dozens¹ | **~4**  | dozens¹ | **~12** |
+| 20 GB | dozens¹ | **~3**  | dozens¹ | **~9**  |
+
+<sub>Reserves: ~2.5 GB held back on an 8 GB machine, ~6 GB on 16 GB — the rest stays for your OS and editor. ¹ With a shared pool, RAM stops being the limit (50–70+ sessions fit); you're bounded by CPU and good sense, not memory.</sub>
+
+## RAM footprint
+
+The engine stays light: **vectors live on disk (mmap'd)** — only the small HNSW index graph and a hot working set are ever resident. So RAM is a predictable formula, not a mystery:
+
+```
+RAM  ≈  ~180 MB   base (engine + shared static encoder)
+      +  ~29 MB   per GB of pool   (resident index)
+      +  ~30 MB   per active session
+```
+
+**Resident index cost by pool size:**
+
+| Pool | Index RAM (resident) |
+|------|----------------------|
+| 5 GB | ~146 MB |
+| 10 GB | ~291 MB |
+| 15 GB | ~436 MB |
+| 20 GB | ~582 MB |
+
+(The encoder is always shared — stateless, ~31 MB, loaded once. Only the pool/index differs.)
+
+> **TL;DR.** **Shared pool → RAM is not your limit** — spin up as many sessions as your CPU allows. **Separate pools → one index each**, so plan on ~3 (20 GB) to ~13 (5 GB) sessions on 8 GB, roughly double at 16 GB. A bigger pool always buys **reach**, never more sessions. Need more headroom? Shrink the pool, or run `--index tiered` to keep only warm graph nodes resident.
+
+
 **The math, per tier** (derived, not vibes):
 
 | Pool | Slices | Encoded reach | Slider |
@@ -157,47 +200,6 @@ A friendly cheat-sheet — the handful of commands you'll actually reach for:
 | `aether-context --pool 20` | Resize the pool anytime (non-destructive re-index). |
 
 > **Tip:** run `aether-context doctor` first — it catches the three things that ever go wrong (Ollama down, model not pulled, not enough disk) and prints the exact fix.
-
-## Running many sessions
-
-Running more than one agent? How the pool is shared is the single biggest RAM lever:
-
-- **`--pool-mode shared`** — one pool, one index, all sessions reach the same memory. The index is paid **once**; each extra session adds only ~30 MB, so RAM barely moves as you add sessions. Best for related work (same project) or max concurrency on a small machine. Trade-off: sessions can see each other's context (no isolation).
-- **`--pool-mode separate`** *(default)* — each session gets its own pool + index, fully **isolated and private**. Clean, but you pay one index **per session**, so RAM scales with `N × pool`. Best for unrelated tasks or when isolation matters.
-
-**How many actually fit:**
-
-| Pool | 8 GB · shared | 8 GB · separate | 16 GB · shared | 16 GB · separate |
-|------|---------------|-----------------|----------------|------------------|
-| 5 GB  | dozens¹ | **~13** | dozens¹ | **~33** |
-| 10 GB | dozens¹ | **~7**  | dozens¹ | **~18** |
-| 15 GB | dozens¹ | **~4**  | dozens¹ | **~12** |
-| 20 GB | dozens¹ | **~3**  | dozens¹ | **~9**  |
-
-<sub>Reserves: ~2.5 GB held back on an 8 GB machine, ~6 GB on 16 GB — the rest stays for your OS and editor. ¹ With a shared pool, RAM stops being the limit (50–70+ sessions fit); you're bounded by CPU and good sense, not memory.</sub>
-
-## RAM footprint
-
-The engine stays light: **vectors live on disk (mmap'd)** — only the small HNSW index graph and a hot working set are ever resident. So RAM is a predictable formula, not a mystery:
-
-```
-RAM  ≈  ~180 MB   base (engine + shared static encoder)
-      +  ~29 MB   per GB of pool   (resident index)
-      +  ~30 MB   per active session
-```
-
-**Resident index cost by pool size:**
-
-| Pool | Index RAM (resident) |
-|------|----------------------|
-| 5 GB | ~146 MB |
-| 10 GB | ~291 MB |
-| 15 GB | ~436 MB |
-| 20 GB | ~582 MB |
-
-(The encoder is always shared — stateless, ~31 MB, loaded once. Only the pool/index differs.)
-
-> **TL;DR.** **Shared pool → RAM is not your limit** — spin up as many sessions as your CPU allows. **Separate pools → one index each**, so plan on ~3 (20 GB) to ~13 (5 GB) sessions on 8 GB, roughly double at 16 GB. A bigger pool always buys **reach**, never more sessions. Need more headroom? Shrink the pool, or run `--index tiered` to keep only warm graph nodes resident.
 
 ## Honest about the word "unlimited"
 
