@@ -23,10 +23,12 @@ Give your Ai superpowers with **Unlimited context for [Ollama](https://ollama.co
   <a href="#the-problem-everyone-hits">Problem</a> ·
   <a href="#how-it-works-60-seconds">How it works</a> ·
   <a href="#pick-your-memory-size">Pick your memory size</a> ·
-  <a href="#quickstart">Quickstart</a> ·
-  <a href="#common-commands">Commands</a> ·
+  <a href="#what-that-buys-you-in-coding-time">Coding time</a> ·
   <a href="#running-many-sessions">Many sessions</a> ·
+  <a href="#the-math-per-tier">The math</a> ·
   <a href="#ram-footprint">RAM</a> ·
+  <a href="#common-commands">Commands</a> ·
+  <a href="#quickstart">Install</a> ·
   <a href="#citation">Cite</a>
 </p>
 
@@ -132,6 +134,21 @@ Running more than one agent? How the pool is shared is the single biggest RAM le
   <img width="880" alt="Coding time per pool size" src="https://github.com/user-attachments/assets/af626850-96b1-43a2-91fd-b5162bc21e5a" />
 </div>
 
+## The math, per tier
+
+Derived, not vibes:
+
+| Pool | Slices | Encoded reach | Slider |
+|------|--------|---------------|--------|
+| **5 GB** *(floor)* | 2.27M | **~1.16B tokens** | `████░░░░░░░░░░░░` |
+| 10 GB | 4.55M | **~2.33B tokens** | `████████░░░░░░░░` |
+| 15 GB | 6.82M | **~3.49B tokens** | `████████████░░░░` |
+| 20 GB | 9.09M | **~4.65B tokens** | `████████████████` |
+
+How those numbers come out: ~2.2 KB per slice (a 256-dim vector + compressed text + metadata) ÷ 512 tokens per slice → **~455K slices/GB → ~233M tokens of reach per GB**. So `reach ≈ pool_GB × 233M`. 5 GB is the floor; bump anytime with `aether-context --pool 20`.
+
+> **Honest:** that's encoded **reach**, retrieved in slices — not a bigger attention window, and it rides on retrieval hit rate. A bigger pool buys more reachable codebase/corpus *per session* — not more concurrent sessions (those are RAM-bound, ~30 on 8 GB either way).
+
 ## RAM footprint
 
 The engine stays light: **vectors live on disk (mmap'd)** — only the small HNSW index graph and a hot working set are ever resident. So RAM is a predictable formula, not a mystery:
@@ -155,19 +172,20 @@ RAM  ≈  ~180 MB   base (engine + shared static encoder)
 
 > **TL;DR.** **Shared pool → RAM is not your limit** — spin up as many sessions as your CPU allows. **Separate pools → one index each**, so plan on ~3 (20 GB) to ~13 (5 GB) sessions on 8 GB, roughly double at 16 GB. A bigger pool always buys **reach**, never more sessions. Need more headroom? Shrink the pool. (`--index tiered` is reserved for a future paged-graph index and currently runs the flat index — it does not yet reduce resident RAM.)
 
+## Common commands
 
-**The math, per tier** (derived, not vibes):
+A friendly cheat-sheet — the handful of commands you'll actually reach for:
 
-| Pool | Slices | Encoded reach | Slider |
-|------|--------|---------------|--------|
-| **5 GB** *(floor)* | 2.27M | **~1.16B tokens** | `████░░░░░░░░░░░░` |
-| 10 GB | 4.55M | **~2.33B tokens** | `████████░░░░░░░░` |
-| 15 GB | 6.82M | **~3.49B tokens** | `████████████░░░░` |
-| 20 GB | 9.09M | **~4.65B tokens** | `████████████████` |
+| Command | What it's for |
+|---|---|
+| `aether-context init` | Pick your pool size — the on-disk storage slider — on first run. |
+| `aether-context run "<task>"` | One-shot a task with full reach, then print the result. |
+| `aether-context chat` | Open an interactive session; type `/status` anytime, `/clear` to reset. |
+| `aether-context status` | See pool size, slices used, reach, and hit rate at a glance. |
+| `aether-context doctor` | Check Ollama, your model, disk, and RAM before a long run. |
+| `aether-context --pool 20` | Resize the pool anytime (non-destructive re-index). |
 
-How those numbers come out: ~2.2 KB per slice (a 256-dim vector + compressed text + metadata) ÷ 512 tokens per slice → **~455K slices/GB → ~233M tokens of reach per GB**. So `reach ≈ pool_GB × 233M`. 5 GB is the floor; bump anytime with `aether-context --pool 20`.
-
-> **Honest:** that's encoded **reach**, retrieved in slices — not a bigger attention window, and it rides on retrieval hit rate. A bigger pool buys more reachable codebase/corpus *per session* — not more concurrent sessions (those are RAM-bound, ~30 on 8 GB either way).
+> **Tip:** run `aether-context doctor` first — it catches the three things that ever go wrong (Ollama down, model not pulled, not enough disk) and prints the exact fix.
 
 ## Quickstart
 
@@ -185,21 +203,6 @@ s.run("Build me a full-stack weightlifting tracker app.")
 
 That's the whole thing. One small model, one command, a billion tokens of reach behind it.
 
-## Common commands
-
-A friendly cheat-sheet — the handful of commands you'll actually reach for:
-
-| Command | What it's for |
-|---|---|
-| `aether-context init` | Pick your pool size — the on-disk storage slider — on first run. |
-| `aether-context run "<task>"` | One-shot a task with full reach, then print the result. |
-| `aether-context chat` | Open an interactive session; type `/status` anytime, `/clear` to reset. |
-| `aether-context status` | See pool size, slices used, reach, and hit rate at a glance. |
-| `aether-context doctor` | Check Ollama, your model, disk, and RAM before a long run. |
-| `aether-context --pool 20` | Resize the pool anytime (non-destructive re-index). |
-
-> **Tip:** run `aether-context doctor` first — it catches the three things that ever go wrong (Ollama down, model not pulled, not enough disk) and prints the exact fix.
-
 ## Honest about the word "unlimited"
 
 "Unlimited" means **reach, not attention.** Your model keeps its native window — we make it *reach* a billion-token pool in slices, via fast retrieval. The whole thing rides on retrieval **hit rate**; when it's high (and the loader is built to keep it high), the pool feels like one seamless context.
@@ -212,7 +215,7 @@ If Unlimited Context helps your work, please cite it. Built and maintained by **
 @software{unlimited_context_2026,
   title        = {Unlimited Context (aether-context): virtual memory for LLM attention},
   author       = {Barrante, Brandon},
-  organization = {Aether Ai LLC.},
+  organization = {Aether AI},
   year         = {2026},
   url          = {https://github.com/DBarr3/Unlimited-Context},
   license      = {Apache-2.0}
@@ -235,7 +238,7 @@ If this gave your local model superpowers, **drop a star** — it's how other pe
 
 <div align="center">
 
-Built by [Aether](https://aethersystems.net)
+Built by **Aether AI** · [Aether](https://aethersystems.net)
 
 <img width="880" alt="Unlimited Context" src="https://github.com/user-attachments/assets/4b7eef9a-8b1c-4dc7-b926-771ce53ed04d" />
 

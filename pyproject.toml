@@ -9,7 +9,7 @@ description = "Unlimited Context — virtual memory for an LLM's attention. Loca
 readme = "README.md"
 requires-python = ">=3.10,<3.15"
 license = { text = "Apache-2.0" }
-authors = [{ name = "Brandon Barrante" }]
+authors = [{ name = "Aether AI" }]
 maintainers = [{ name = "Aether AI" }]
 keywords = ["llm", "context", "retrieval", "ollama", "local", "rag", "agents"]
 classifiers = [

@@ -4,8 +4,8 @@ title: "Unlimited Context (aether-context): virtual memory for LLM attention"
 authors:
   - family-names: "Barrante"
     given-names: "Brandon"
-    affiliation: "Aether Ai LLC."
-  - name: "Aether Ai LLC."
+    affiliation: "Aether AI"
+  - name: "Aether AI"
 version: "0.1.0"
 date-released: 2026-06-02
 license: Apache-2.0
