@@ -174,7 +174,8 @@ def _add_session_flags(sub: argparse.ArgumentParser) -> None:
     )
     sub.add_argument(
         "--index", type=str, default="flat", choices=_INDEX_KINDS,
-        metavar="{flat,hnsw,tiered}", help="ANN index kind (default: flat).",
+        metavar="{flat,hnsw,tiered}",
+        help="ANN index kind (default: flat). 'tiered' is reserved and runs flat for now.",
     )
     sub.add_argument("--dir", type=str, default=None, metavar="D", help="pool directory.")
 
@@ -892,7 +893,7 @@ def _report_ram_vs_index(pool_dir: Path) -> bool:
         print(f"  [ok]   index RAM ~= {index_mb:.0f} MB fits in {free_mb:.0f} MB free")
         return True
     print(f"  [warn] index RAM ~= {index_mb:.0f} MB vs only {free_mb:.0f} MB free")
-    print("         fix: use a smaller --pool, or `--index tiered` to page the index")
+    print("         fix: use a smaller --pool (a paged 'tiered' index is not built yet)")
     return False
 
 

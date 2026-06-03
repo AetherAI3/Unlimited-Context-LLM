@@ -154,7 +154,7 @@ RAM  ≈  ~180 MB   base (engine + shared static encoder)
 
 (The encoder is always shared — stateless, ~31 MB, loaded once. Only the pool/index differs.)
 
-> **TL;DR.** **Shared pool → RAM is not your limit** — spin up as many sessions as your CPU allows. **Separate pools → one index each**, so plan on ~3 (20 GB) to ~13 (5 GB) sessions on 8 GB, roughly double at 16 GB. A bigger pool always buys **reach**, never more sessions. Need more headroom? Shrink the pool, or run `--index tiered` to keep only warm graph nodes resident.
+> **TL;DR.** **Shared pool → RAM is not your limit** — spin up as many sessions as your CPU allows. **Separate pools → one index each**, so plan on ~3 (20 GB) to ~13 (5 GB) sessions on 8 GB, roughly double at 16 GB. A bigger pool always buys **reach**, never more sessions. Need more headroom? Shrink the pool. (`--index tiered` is reserved for a future paged-graph index and currently runs the flat index — it does not yet reduce resident RAM.)
 
 
 **The math, per tier** (derived, not vibes):

@@ -202,3 +202,46 @@ def test_forget_unknown_id_is_a_safe_noop():
     w = Witness()
     w.forget("ghost")  # must not raise
     assert w.ids() == []
+
+
+# ---- temporal lock-in (anti-thrash) -----------------------------------------
+def test_pin_protects_a_fresh_slice_from_comparable_churn():
+    """A just-touched (paged-in) slice survives a wave of equal-salience churn: the
+    lock-in bonus lifts it above older slices of the same base score."""
+    w = Witness(pin_periods=3.0, pin_bonus=0.25)
+    w.touch("old1", salience=0.30, now=0.0)
+    w.touch("old2", salience=0.30, now=1.0)
+    w.touch("fresh", salience=0.30, now=10.0)  # just paged in -> locked in
+    # room for two; evaluate eviction at the fresh slice's tick
+    evicted = w.budget_evict(ceiling_bytes=200, bytes_per_slice=100, now=10.0)
+    assert evicted == ["old1"]              # an unpinned, comparable-score slice went first
+    assert "fresh" in w.ids()               # the freshly paged-in slice was protected
+
+
+def test_pin_never_overrides_a_load_bearing_salience():
+    """The lock-in is a *small* bonus: it cannot save a fresh low slice at the expense of a
+    genuinely high-salience one, so salience still wins where it matters."""
+    w = Witness(pin_periods=3.0, pin_bonus=0.25)
+    w.touch("load_bearing", salience=0.95, now=0.0)  # old, high salience, not re-touched
+    w.touch("fresh_lo", salience=0.30, now=10.0)     # just paged in, but low value
+    evicted = w.budget_evict(ceiling_bytes=100, bytes_per_slice=100, now=10.0)
+    assert evicted == ["fresh_lo"]          # 0.30+0.25 still loses to 0.95
+    assert w.ids() == ["load_bearing"]
+
+
+def test_pin_disabled_falls_back_to_pure_score_eviction():
+    """With the lock-in disabled the governor is pure salience order, ignoring recency."""
+    w = Witness(pin_periods=0.0, pin_bonus=0.0)
+    w.touch("old_hi", salience=0.90, now=0.0)
+    w.touch("fresh_lo", salience=0.10, now=10.0)
+    evicted = w.budget_evict(ceiling_bytes=100, bytes_per_slice=100, now=10.0)
+    assert evicted == ["fresh_lo"]          # recency is irrelevant; lowest score goes
+
+
+def test_eviction_order_without_now_is_ascending_score():
+    """eviction_order(now=None) is simply most-evictable (lowest score) first."""
+    w = Witness()
+    w.touch("hi", salience=0.9, now=0.0)
+    w.touch("lo", salience=0.1, now=0.0)
+    w.touch("mid", salience=0.5, now=0.0)
+    assert w.eviction_order() == ["lo", "mid", "hi"]
