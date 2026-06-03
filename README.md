@@ -110,11 +110,6 @@ For color: 5 GB of reach ≈ ~100M lines of code, or a shelf of ~8,000 books —
 
 <sub>\* Rough order of magnitude. Because the witnesses fade stale slices, the pool never hard-stops anyway — it just keeps what's relevant. Run a build as long as you want; it won't lose the plot. The per-session RAM math is in [RAM footprint](#ram-footprint) below.</sub>
 
-<div align="center">
-  <img width="880" alt="Coding time per pool size" src="https://github.com/user-attachments/assets/af626850-96b1-43a2-91fd-b5162bc21e5a" />
-</div>
-
-
 ## Running many sessions
 
 Running more than one agent? How the pool is shared is the single biggest RAM lever:
@@ -132,6 +127,10 @@ Running more than one agent? How the pool is shared is the single biggest RAM le
 | 20 GB | dozens¹ | **~3**  | dozens¹ | **~9**  |
 
 <sub>Reserves: ~2.5 GB held back on an 8 GB machine, ~6 GB on 16 GB — the rest stays for your OS and editor. ¹ With a shared pool, RAM stops being the limit (50–70+ sessions fit); you're bounded by CPU and good sense, not memory.</sub>
+
+<div align="center">
+  <img width="880" alt="Coding time per pool size" src="https://github.com/user-attachments/assets/af626850-96b1-43a2-91fd-b5162bc21e5a" />
+</div>
 
 ## RAM footprint
 
