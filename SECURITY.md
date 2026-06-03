@@ -9,7 +9,7 @@
 ## Reporting a Vulnerability
 
 Please report security vulnerabilities **privately**. Do **not** open a public
-issue for a suspected vulnerability.
+issue for a suspected vulnerability. aetherai@aethersystems.net
 
 Use GitHub's private vulnerability reporting via the repository's **Security**
 tab ("Report a vulnerability"):
