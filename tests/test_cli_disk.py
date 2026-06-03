@@ -1,5 +1,5 @@
 # aether-context (Unlimited Context)
-# Copyright (c) 2026 Aether AI - Brandon Barrante
+# Copyright (c) 2026 Aether AI
 # SPDX-License-Identifier: Apache-2.0
 """The pool selector reserves local disk, so it must reject a size that won't fit.
 

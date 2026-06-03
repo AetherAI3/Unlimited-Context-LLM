@@ -215,7 +215,7 @@ If Unlimited Context helps your work, please cite it. Built and maintained by **
 @software{unlimited_context_2026,
   title        = {Unlimited Context (aether-context): virtual memory for LLM attention},
   author       = {Barrante, Brandon},
-  organization = {Aether Ai LLC.},
+  organization = {Aether AI},
   year         = {2026},
   url          = {https://github.com/DBarr3/Unlimited-Context},
   license      = {Apache-2.0}
@@ -238,7 +238,7 @@ If this gave your local model superpowers, **drop a star** — it's how other pe
 
 <div align="center">
 
-Built by **Brandon Barrante** · [Aether](https://aethersystems.net)
+Built by **Aether AI** · [Aether](https://aethersystems.net)
 
 <img width="880" alt="Unlimited Context" src="https://github.com/user-attachments/assets/4b7eef9a-8b1c-4dc7-b926-771ce53ed04d" />
 

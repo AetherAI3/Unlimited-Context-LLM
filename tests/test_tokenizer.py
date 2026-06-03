@@ -1,5 +1,5 @@
 # aether-context (Unlimited Context)
-# Copyright (c) 2026 Aether AI - Brandon Barrante
+# Copyright (c) 2026 Aether AI
 # SPDX-License-Identifier: Apache-2.0
 """Tests for the token-count seam (chars/4 estimate + backend preference)."""
 import pytest

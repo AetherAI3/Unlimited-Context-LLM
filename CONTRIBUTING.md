@@ -1,6 +1,6 @@
 # Contributing to Unlimited Context
 
-`aether-context` is published **as-is** under Apache-2.0 by Brandon Barrante ([Aether Ai](https://aethersystems.net)).
+`aether-context` is published **as-is** under Apache-2.0 by **Aether AI** ([Aether AI](https://aethersystems.net)).
 
 **Bug reports, issues, and pull requests are welcome.** A small, focused PR with a passing test is the fastest way in — keep the offline / clean-clone path green (see below). You're also free to **fork** and take it wherever you need; the Apache-2.0 license makes that easy.
 

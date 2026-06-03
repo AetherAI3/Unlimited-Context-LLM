@@ -1,5 +1,5 @@
 # aether-context (Unlimited Context)
-# Copyright (c) 2026 Aether AI - Brandon Barrante
+# Copyright (c) 2026 Aether AI
 # SPDX-License-Identifier: Apache-2.0
 """B5 lifecycle controller — :class:`Session`, the process lifecycle of the engine.
 
