@@ -93,7 +93,7 @@ $ aether-context init
   ✓ 10 GB  →  your model can now reach ~2.33 billion tokens
 ```
 
-### What that buys you in coding time
+## What that buys you in coding time
 
 The real win isn't the token count — it's that the wall disappears. A typical ~128K context window fills after well under an hour of active agent work, then starts compacting and forgetting. A 5 GB pool is **~9,000× bigger**.
 
