@@ -1,4 +1,5 @@
 # How it works — virtual memory, for attention
+<img width="889" height="551" alt="image" src="https://github.com/user-attachments/assets/d3d8df4d-d902-46b3-b3c6-215689366ae3" />
 
 > The one-line model: **Unlimited Context is virtual memory for an LLM's attention.** A small, fast
 > *resident window* over a vast *local pool*, paged in and out **while the model reasons**. Your
