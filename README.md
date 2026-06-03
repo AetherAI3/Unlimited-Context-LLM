@@ -23,10 +23,12 @@ Give your Ai superpowers with **Unlimited context for [Ollama](https://ollama.co
   <a href="#the-problem-everyone-hits">Problem</a> ·
   <a href="#how-it-works-60-seconds">How it works</a> ·
   <a href="#pick-your-memory-size">Pick your memory size</a> ·
-  <a href="#quickstart">Quickstart</a> ·
-  <a href="#common-commands">Commands</a> ·
+  <a href="#what-that-buys-you-in-coding-time">Coding time</a> ·
   <a href="#running-many-sessions">Many sessions</a> ·
+  <a href="#the-math-per-tier">The math</a> ·
   <a href="#ram-footprint">RAM</a> ·
+  <a href="#common-commands">Commands</a> ·
+  <a href="#quickstart">Install</a> ·
   <a href="#citation">Cite</a>
 </p>
 
@@ -93,7 +95,7 @@ $ aether-context init
   ✓ 10 GB  →  your model can now reach ~2.33 billion tokens
 ```
 
-### What that buys you in coding time
+## What that buys you in coding time
 
 The real win isn't the token count — it's that the wall disappears. A typical ~128K context window fills after well under an hour of active agent work, then starts compacting and forgetting. A 5 GB pool is **~9,000× bigger**.
 
@@ -114,50 +116,6 @@ For color: 5 GB of reach ≈ ~100M lines of code, or a shelf of ~8,000 books —
   <img width="880" alt="Coding time per pool size" src="https://github.com/user-attachments/assets/af626850-96b1-43a2-91fd-b5162bc21e5a" />
 </div>
 
-**The math, per tier** (derived, not vibes):
-
-| Pool | Slices | Encoded reach | Slider |
-|------|--------|---------------|--------|
-| **5 GB** *(floor)* | 2.27M | **~1.16B tokens** | `████░░░░░░░░░░░░` |
-| 10 GB | 4.55M | **~2.33B tokens** | `████████░░░░░░░░` |
-| 15 GB | 6.82M | **~3.49B tokens** | `████████████░░░░` |
-| 20 GB | 9.09M | **~4.65B tokens** | `████████████████` |
-
-How those numbers come out: ~2.2 KB per slice (a 256-dim vector + compressed text + metadata) ÷ 512 tokens per slice → **~455K slices/GB → ~233M tokens of reach per GB**. So `reach ≈ pool_GB × 233M`. 5 GB is the floor; bump anytime with `aether-context --pool 20`.
-
-> **Honest:** that's encoded **reach**, retrieved in slices — not a bigger attention window, and it rides on retrieval hit rate. A bigger pool buys more reachable codebase/corpus *per session* — not more concurrent sessions (those are RAM-bound, ~30 on 8 GB either way).
-
-## Quickstart
-
-```bash
-pip install aether-context
-```
-
-```python
-from aether_context import Session
-
-s = Session(model="ollama/qwen2.5", pool_gb=5)
-s.run("Build me a full-stack weightlifting tracker app.")
-# runs long. stays coherent. walk away.
-```
-
-That's the whole thing. One small model, one command, a billion tokens of reach behind it.
-
-## Common commands
-
-A friendly cheat-sheet — the handful of commands you'll actually reach for:
-
-| Command | What it's for |
-|---|---|
-| `aether-context init` | Pick your pool size — the on-disk storage slider — on first run. |
-| `aether-context run "<task>"` | One-shot a task with full reach, then print the result. |
-| `aether-context chat` | Open an interactive session; type `/status` anytime, `/clear` to reset. |
-| `aether-context status` | See pool size, slices used, reach, and hit rate at a glance. |
-| `aether-context doctor` | Check Ollama, your model, disk, and RAM before a long run. |
-| `aether-context --pool 20` | Resize the pool anytime (non-destructive re-index). |
-
-> **Tip:** run `aether-context doctor` first — it catches the three things that ever go wrong (Ollama down, model not pulled, not enough disk) and prints the exact fix.
-
 ## Running many sessions
 
 Running more than one agent? How the pool is shared is the single biggest RAM lever:
@@ -175,6 +133,21 @@ Running more than one agent? How the pool is shared is the single biggest RAM le
 | 20 GB | dozens¹ | **~3**  | dozens¹ | **~9**  |
 
 <sub>Reserves: ~2.5 GB held back on an 8 GB machine, ~6 GB on 16 GB — the rest stays for your OS and editor. ¹ With a shared pool, RAM stops being the limit (50–70+ sessions fit); you're bounded by CPU and good sense, not memory.</sub>
+
+## The math, per tier
+
+Derived, not vibes:
+
+| Pool | Slices | Encoded reach | Slider |
+|------|--------|---------------|--------|
+| **5 GB** *(floor)* | 2.27M | **~1.16B tokens** | `████░░░░░░░░░░░░` |
+| 10 GB | 4.55M | **~2.33B tokens** | `████████░░░░░░░░` |
+| 15 GB | 6.82M | **~3.49B tokens** | `████████████░░░░` |
+| 20 GB | 9.09M | **~4.65B tokens** | `████████████████` |
+
+How those numbers come out: ~2.2 KB per slice (a 256-dim vector + compressed text + metadata) ÷ 512 tokens per slice → **~455K slices/GB → ~233M tokens of reach per GB**. So `reach ≈ pool_GB × 233M`. 5 GB is the floor; bump anytime with `aether-context --pool 20`.
+
+> **Honest:** that's encoded **reach**, retrieved in slices — not a bigger attention window, and it rides on retrieval hit rate. A bigger pool buys more reachable codebase/corpus *per session* — not more concurrent sessions (those are RAM-bound, ~30 on 8 GB either way).
 
 ## RAM footprint
 
@@ -198,6 +171,37 @@ RAM  ≈  ~180 MB   base (engine + shared static encoder)
 (The encoder is always shared — stateless, ~31 MB, loaded once. Only the pool/index differs.)
 
 > **TL;DR.** **Shared pool → RAM is not your limit** — spin up as many sessions as your CPU allows. **Separate pools → one index each**, so plan on ~3 (20 GB) to ~13 (5 GB) sessions on 8 GB, roughly double at 16 GB. A bigger pool always buys **reach**, never more sessions. Need more headroom? Shrink the pool, or run `--index tiered` to keep only warm graph nodes resident.
+
+## Common commands
+
+A friendly cheat-sheet — the handful of commands you'll actually reach for:
+
+| Command | What it's for |
+|---|---|
+| `aether-context init` | Pick your pool size — the on-disk storage slider — on first run. |
+| `aether-context run "<task>"` | One-shot a task with full reach, then print the result. |
+| `aether-context chat` | Open an interactive session; type `/status` anytime, `/clear` to reset. |
+| `aether-context status` | See pool size, slices used, reach, and hit rate at a glance. |
+| `aether-context doctor` | Check Ollama, your model, disk, and RAM before a long run. |
+| `aether-context --pool 20` | Resize the pool anytime (non-destructive re-index). |
+
+> **Tip:** run `aether-context doctor` first — it catches the three things that ever go wrong (Ollama down, model not pulled, not enough disk) and prints the exact fix.
+
+## Quickstart
+
+```bash
+pip install aether-context
+```
+
+```python
+from aether_context import Session
+
+s = Session(model="ollama/qwen2.5", pool_gb=5)
+s.run("Build me a full-stack weightlifting tracker app.")
+# runs long. stays coherent. walk away.
+```
+
+That's the whole thing. One small model, one command, a billion tokens of reach behind it.
 
 ## Honest about the word "unlimited"
 
