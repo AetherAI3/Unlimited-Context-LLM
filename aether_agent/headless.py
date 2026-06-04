@@ -82,15 +82,25 @@ class StdioTransport:
                 return msg
 
 
-def _call_args(call: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
-    """Extract (id, name, args) from an OpenAI tool_call, tolerating bad JSON."""
+def _call_args(call: dict[str, Any]) -> tuple[str, str, dict[str, Any], bool]:
+    """Extract (id, name, args, malformed) from an OpenAI tool_call.
+
+    `malformed` is True when the model emitted a non-empty arguments string that
+    is not valid JSON — the small-model failure signature. We still coerce args
+    to {} and proceed (so a single bad call doesn't kill the run), but the marker
+    is surfaced so a long run's emission quality is measurable (the kill-gate /
+    stress test buckets these by session position)."""
     fn = call.get("function", {})
     name = fn.get("name", "")
+    raw = fn.get("arguments")
+    malformed = False
     try:
-        args = json.loads(fn.get("arguments") or "{}")
+        args = json.loads(raw or "{}")
+        if not isinstance(args, dict):
+            args, malformed = {}, True
     except (json.JSONDecodeError, TypeError):
-        args = {}
-    return call.get("id", ""), name, args
+        args, malformed = {}, bool(raw and str(raw).strip())
+    return call.get("id", ""), name, args, malformed
 
 
 def run_brain(
@@ -159,7 +169,10 @@ def run_brain(
                 {"role": "assistant", "content": msg.get("content") or "", "tool_calls": calls}
             )
             for call in calls:
-                call_id, name, args = _call_args(call)
+                call_id, name, args, malformed = _call_args(call)
+                if malformed:
+                    # countable signal: the model produced un-parseable tool args
+                    transport.send(protocol.monologue(f"malformed-args: {name}", depth=1))
                 phase = _PHASE_BY_TOOL.get(name, "reasoning")
                 transport.send(protocol.status(phase, pool_used, pool_cap))
                 transport.send(protocol.tool_call(call_id, name, args))

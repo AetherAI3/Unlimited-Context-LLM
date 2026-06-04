@@ -192,6 +192,24 @@ def test_two_sequential_tool_calls_stay_correlated():
     assert [c["id"] for c in calls] == ["A", "B"]  # emitted in order, each id distinct
 
 
+def test_malformed_tool_args_emit_a_countable_marker():
+    """Un-parseable tool-call args are coerced to {} but surfaced as a marker
+    (the small-model emission-failure signal the stress test buckets)."""
+    bad = {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [{"id": "A", "function": {"name": "read_file", "arguments": "{not json"}}],
+    }
+    turns = iter([bad, {"role": "assistant", "content": "done", "tool_calls": []}])
+    transport = FakeTransport([
+        {"type": protocol.CMD_TASK, "text": "x", "pool_gb": 5},
+        {"type": protocol.CMD_TOOL_RESULT, "id": "A", "output": "[no such file]", "exit_code": 1},
+    ])
+    assert run_brain(transport, chat_fn=lambda m, t: next(turns)) == 0
+    markers = [m for m in transport.sent if m["type"] == protocol.EV_MONOLOGUE and "malformed-args" in m["text"]]
+    assert len(markers) == 1 and "read_file" in markers[0]["text"]
+
+
 def test_tool_result_id_mismatch_fails_loud():
     """A tool_result with the wrong id is a protocol violation — error, not skip."""
     one = {
