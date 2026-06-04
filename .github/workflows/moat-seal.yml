@@ -1,0 +1,22 @@
+name: moat-seal
+
+# The public engine is clean-room. This gate makes the moat leak mechanically impossible:
+# the build FAILS if any private AETHER-ATLAS / qosc namespace appears in a tracked file.
+# One-way dependency — private aether_atlas consumes this public aether_context, never the
+# reverse. Canonical rule: AETHER-ATLAS specs/CONTRACTS.md -> "Moat seal".
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  moat-seal:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: No private aether_atlas/qosc references in the public tree
+        run: python tools/moat_seal_check.py
