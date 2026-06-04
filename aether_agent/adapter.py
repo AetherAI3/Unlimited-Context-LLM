@@ -14,6 +14,8 @@ import urllib.error
 import urllib.request
 from typing import Any, Optional
 
+from aether_agent.profiles import for_model
+
 DEFAULT_HOST = "http://localhost:11434"
 DEFAULT_MODEL = "qwen3-coder:30b"  # depth build; 256K ctx, Apache-2.0
 
@@ -23,20 +25,29 @@ class OllamaChat:
         self.model = model
         self.host = host.rstrip("/")
         self.timeout = timeout
+        # Per-model sampling (Gemma wants Google's; Qwen wants low-temp determinism).
+        self.profile = for_model(model)
 
     def chat(
         self,
         messages: list[dict],
         tools: Optional[list[dict]] = None,
-        temperature: float = 0.2,
+        temperature: Optional[float] = None,
     ) -> dict[str, Any]:
         """One turn against /v1/chat/completions. Returns the assistant message
         dict ({role, content, tool_calls?}). Raises with a clear hint if Ollama
-        is down or the model isn't pulled."""
+        is down or the model isn't pulled.
+
+        Sampling comes from the model's profile; `temperature` overrides it when
+        given (back-compat). top_p/top_k ride along — Ollama's OpenAI-compat layer
+        honors them for local models."""
+        samp = self.profile.sampling
         body: dict[str, Any] = {
             "model": self.model,
             "messages": messages,
-            "temperature": temperature,
+            "temperature": samp["temperature"] if temperature is None else temperature,
+            "top_p": samp["top_p"],
+            "top_k": samp["top_k"],
             "stream": False,
         }
         if tools:

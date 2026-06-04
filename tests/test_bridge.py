@@ -210,6 +210,24 @@ def test_malformed_tool_args_emit_a_countable_marker():
     assert len(markers) == 1 and "read_file" in markers[0]["text"]
 
 
+def test_invented_tool_emits_a_countable_marker():
+    """A call to a tool that doesn't exist is surfaced as a marker (emission fray
+    signal, distinct from malformed args)."""
+    bad = {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [{"id": "A", "function": {"name": "make_coffee", "arguments": "{}"}}],
+    }
+    turns = iter([bad, {"role": "assistant", "content": "done", "tool_calls": []}])
+    transport = FakeTransport([
+        {"type": protocol.CMD_TASK, "text": "x", "pool_gb": 5},
+        {"type": protocol.CMD_TOOL_RESULT, "id": "A", "output": "[unknown tool: make_coffee]", "exit_code": 1},
+    ])
+    assert run_brain(transport, chat_fn=lambda m, t: next(turns)) == 0
+    markers = [m for m in transport.sent if m["type"] == protocol.EV_MONOLOGUE and "invented-tool" in m["text"]]
+    assert len(markers) == 1 and "make_coffee" in markers[0]["text"]
+
+
 def test_tool_result_id_mismatch_fails_loud():
     """A tool_result with the wrong id is a protocol violation — error, not skip."""
     one = {

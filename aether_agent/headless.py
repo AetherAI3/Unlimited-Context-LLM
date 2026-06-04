@@ -173,6 +173,9 @@ def run_brain(
                 if malformed:
                     # countable signal: the model produced un-parseable tool args
                     transport.send(protocol.monologue(f"malformed-args: {name}", depth=1))
+                elif name and name not in protocol.TOOLS:
+                    # countable signal: the model invented a tool that doesn't exist
+                    transport.send(protocol.monologue(f"invented-tool: {name}", depth=1))
                 phase = _PHASE_BY_TOOL.get(name, "reasoning")
                 transport.send(protocol.status(phase, pool_used, pool_cap))
                 transport.send(protocol.tool_call(call_id, name, args))
