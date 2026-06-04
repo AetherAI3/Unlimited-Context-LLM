@@ -38,12 +38,21 @@ def tool_schema() -> list[dict]:
 
 class Tools:
     def __init__(self, cwd: str, test_cmd: str = "pytest -q"):
-        self.cwd = os.path.abspath(cwd)
+        # Canonicalize the root (resolve symlinks in the workspace path itself).
+        self.cwd = os.path.realpath(cwd)
         self.test_cmd = test_cmd
 
     def _safe(self, path: str) -> str:
+        """Resolve a workspace-relative path, refusing any escape. Canonicalizes
+        BEFORE the allowlist check so `..`, absolute paths, and symlinks pointing
+        outside the worktree are all rejected. The nearest existing ancestor is
+        realpath'd (the non-existent tail of a write target can't be a symlink)."""
         ap = os.path.abspath(os.path.join(self.cwd, path))
-        if ap != self.cwd and not ap.startswith(self.cwd + os.sep):
+        ancestor = ap
+        while not os.path.exists(ancestor) and os.path.dirname(ancestor) != ancestor:
+            ancestor = os.path.dirname(ancestor)
+        real_ancestor = os.path.realpath(ancestor)
+        if real_ancestor != self.cwd and not real_ancestor.startswith(self.cwd + os.sep):
             raise ValueError(f"refusing path outside workspace: {path}")
         return ap
 

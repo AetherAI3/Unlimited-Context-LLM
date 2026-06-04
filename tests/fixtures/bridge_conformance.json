@@ -1,0 +1,21 @@
+{
+  "_note": "Canonical bridge wire fixture. IDENTICAL copy lives in Unlimited-Context/tests/fixtures/bridge_conformance.json. Both test suites load their copy and assert their codec round-trips every message here. If you change a message shape, change docs/CONTRACTS.md, bump protocol_version in BOTH protocol files, and update BOTH fixture copies. A failing conformance test = drift.",
+  "protocol_version": 1,
+  "events": [
+    { "type": "stage", "name": "execute", "face": "(test)" },
+    { "type": "monologue", "text": "reading auth.ts", "depth": 1 },
+    { "type": "skill", "name": "fix-failing-tests", "reason": "trigger matched" },
+    { "type": "tool_call", "id": "c1", "name": "read_file", "args": { "path": "a.py" } },
+    { "type": "telemetry", "tokens": 10, "tps": 4.5, "ctx_used": 1, "ctx_cap": 2, "vram": 0.5 },
+    { "type": "status", "phase": "grounding", "pool_used": 100, "pool_cap": 1165000000 },
+    { "type": "checkpoint", "git_sha": "a1b2c3d4e5" },
+    { "type": "done", "ok": true, "result": "all green" },
+    { "type": "error", "msg": "boom" }
+  ],
+  "commands": [
+    { "type": "task", "text": "fix the failing tests", "cwd": ".", "pool_gb": 5, "effort": "MAX", "model": "qwen3-coder:30b" },
+    { "type": "tool_result", "id": "c1", "output": "[exit 0]\nok", "exit_code": 0 },
+    { "type": "control", "action": "steer", "note": "focus on the auth path" }
+  ],
+  "unicode_round_trip": ["你好世界", "🚀✨", "(ง'̀-'́)ง", "café résumé"]
+}

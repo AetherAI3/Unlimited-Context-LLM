@@ -24,7 +24,15 @@ def main(argv: Optional[list[str]] = None) -> int:
     c.add_argument("--max-steps", type=int, default=40)
     c.add_argument("--test-cmd", default="pytest -q", help="Command the test-gate runs.")
 
+    # Headless brain for the AetherCode TS host: emits protocol events on stdout,
+    # reads commands on stdin, executes no tools, renders nothing. Not for humans.
+    sub.add_parser("brain", help="Run the headless event-emitting brain over stdio (for AetherCode).")
+
     args = p.parse_args(argv)
+    if args.cmd == "brain":
+        from aether_agent.headless import main as brain_main
+
+        return brain_main()
     if args.cmd != "code":
         p.print_help()
         return 0
