@@ -263,3 +263,28 @@ def test_unicode_round_trips_losslessly():
         # wire is ASCII-escaped (no raw non-ascii bytes) but decodes back exactly
         assert wire.isascii()
         assert protocol.decode(wire)["text"] == s
+
+
+# --- staged lifecycle + steer control -------------------------------------
+def test_stage_order_and_steer_injection():
+    """Stages run recon -> execute -> ... -> reveal, and a /steer arriving mid
+    tool-wait is injected into the thread as high-priority user guidance."""
+    saw_steer: dict[str, bool] = {}
+
+    def fake_chat(messages, tools):
+        if any("User steer" in m.get("content", "") for m in messages):
+            saw_steer["yes"] = True
+            return {"role": "assistant", "content": "done", "tool_calls": []}
+        return _assistant_tool_call("read_file", '{"path": "a"}')
+
+    transport = FakeTransport([
+        {"type": protocol.CMD_TASK, "text": "read a", "pool_gb": 5},
+        {"type": protocol.CMD_CONTROL, "action": "steer", "note": "focus on the auth path"},
+        {"type": protocol.CMD_TOOL_RESULT, "id": "call-1", "output": "contents", "exit_code": 0},
+    ])
+    assert run_brain(transport, chat_fn=fake_chat) == 0
+    assert saw_steer.get("yes") is True  # steer reached the model's messages
+    stages = [m["name"] for m in transport.sent if m["type"] == protocol.EV_STAGE]
+    assert stages[0] == "recon"
+    assert "execute" in stages
+    assert stages[-1] == "reveal"

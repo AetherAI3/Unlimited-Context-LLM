@@ -129,8 +129,16 @@ def run_brain(
     loaded_skills: set[str] = set()
     _load_skills(transport, task, messages, loaded_skills)
 
-    transport.send(protocol.stage("execute", "(ง'̀-'́)ง"))
+    # Staged lifecycle. These are the stages this loop ACTUALLY performs: RECON
+    # (the model's first orientation), EXECUTE (the act/test loop), then
+    # SELF-REVIEW + REVEAL bracketing a clean finish. The full per-stage context
+    # profiles (parse/brainstorm/write-plans with their own retrieval tiers) are
+    # an engine-side pass, deferred. Stage markers give the host its pause/steer
+    # boundaries (specs/neo_lite_context_lifecycle_logs_killgate.md §3-4).
+    transport.send(protocol.stage("recon", "( ⚆ _ ⚆ )"))
     pool_used = 0
+    steers: list[str] = []
+    in_execute = False
 
     try:
         for step in range(1, max_steps + 1):
@@ -138,8 +146,14 @@ def run_brain(
             msg = chat(messages, schema)
             calls = msg.get("tool_calls") or []
             if not calls:
+                transport.send(protocol.stage("self-review", "(¬_¬\")→[•‿•]"))
+                transport.send(protocol.stage("reveal", "ᕙ(`▽`)ᕗ"))
                 transport.send(protocol.done(True, (msg.get("content") or "(done)").strip()))
                 return 0
+
+            if not in_execute:
+                transport.send(protocol.stage("execute", "(ง'̀-'́)ง"))
+                in_execute = True
 
             messages.append(
                 {"role": "assistant", "content": msg.get("content") or "", "tool_calls": calls}
@@ -150,7 +164,7 @@ def run_brain(
                 transport.send(protocol.status(phase, pool_used, pool_cap))
                 transport.send(protocol.tool_call(call_id, name, args))
 
-                reply = _await_result(transport, call_id)
+                reply = _await_result(transport, call_id, steers)
                 if reply is _MISMATCH:
                     return 1  # error already emitted by _await_result
                 if reply is None:
@@ -166,6 +180,9 @@ def run_brain(
                 messages.append(
                     {"role": "tool", "tool_call_id": call_id, "content": output}
                 )
+                # Any /steer notes that arrived while waiting are injected as
+                # high-priority user guidance (never faded — the spec's user slice).
+                _drain_steers(steers, messages)
 
                 if name == "run_tests":
                     _grounding_gate(transport, output, exit_code, step, stuck, messages, loaded_skills)
@@ -177,7 +194,14 @@ def run_brain(
         return 1
 
 
-def _await_result(transport: Transport, call_id: str):
+def _drain_steers(steers: list[str], messages: list[dict]) -> None:
+    """Inject any pending /steer notes into the thread as user guidance."""
+    while steers:
+        note = steers.pop(0)
+        messages.append({"role": "user", "content": f"User steer (high priority): {note}"})
+
+
+def _await_result(transport: Transport, call_id: str, steers: list[str]):
     """Read commands until the matching tool_result arrives; apply controls.
     Returns the result dict, None on EOF, or `_MISMATCH` on a wrong-id reply.
 
@@ -186,6 +210,11 @@ def _await_result(transport: Transport, call_id: str):
     carries the WRONG id is therefore a protocol violation, not something to
     skip — skipping would mis-pair results to calls (a brutal intermittent bug).
     We fail loud instead: emit an error and abort.
+
+    A `steer` control that arrives while waiting is collected into `steers` (the
+    caller drains it into the message thread) and echoed as monologue. `pause` is
+    realized by the host simply withholding its reply; `resume` is the reply
+    arriving — so they need no explicit handling here.
     """
     while True:
         cmd = transport.recv()
@@ -199,10 +228,9 @@ def _await_result(transport: Transport, call_id: str):
             transport.send(protocol.error(f"tool_result id mismatch: expected {call_id!r} got {got!r}"))
             return _MISMATCH
         if kind == protocol.CMD_CONTROL:
-            # pause/resume are handled by the host blocking its reply; a steer
-            # note is surfaced back as monologue so it stays in the thread.
             note = str(cmd.get("note", "")).strip()
             if cmd.get("action") == "steer" and note:
+                steers.append(note)
                 transport.send(protocol.monologue(f"steer: {note}", depth=1))
         # ignore anything else (unknown) and keep waiting for our result
 
@@ -252,7 +280,7 @@ def _checkpoint(transport: Transport, message: str) -> str:
     """Round-trip a git_commit through the host; return the short sha if any."""
     cid = f"ckpt-{abs(hash(message)) % 100000}"
     transport.send(protocol.tool_call(cid, "git_commit", {"message": message}))
-    reply = _await_result(transport, cid)
+    reply = _await_result(transport, cid, [])  # checkpoint round-trip ignores steers
     if not isinstance(reply, dict):
         return ""  # None (EOF) or _MISMATCH — no sha to report
     out = str(reply.get("output", ""))
