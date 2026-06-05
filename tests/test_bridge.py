@@ -302,6 +302,47 @@ def test_every_fixture_message_is_in_the_vocab_and_round_trips():
         assert protocol.decode(protocol.encode(cmd)) == cmd
 
 
+def test_fixture_shapes_match_canonical_keysets_exactly():
+    """STRONG drift detector: every fixture message's KEY-SET must equal the canonical
+    constructor's, and the fixture must COVER every event/command type. The weak
+    `decode(encode(ev)) == ev` round-trip above is a pass-through no-op for shape, so it
+    missed the v1->v2 drift (a wire field added without updating the fixture). This catches it.
+    """
+    canon_ev = {
+        m["type"]: frozenset(m.keys())
+        for m in (
+            protocol.stage("s", "f"),
+            protocol.monologue("t", 1),
+            protocol.skill("n", "r"),
+            protocol.turn(1, 2, 0, 0, False, None),
+            protocol.tool_call("c", "n", {}),
+            protocol.telemetry(),
+            protocol.status("p", 1, 2),
+            protocol.checkpoint("sha"),
+            protocol.done(True, "r", 0, ""),
+            protocol.error("m"),
+        )
+    }
+    canon_cmd = {
+        protocol.CMD_TASK: frozenset({"type", "text", "cwd", "pool_gb", "effort", "model", "test_cmd"}),
+        protocol.CMD_TOOL_RESULT: frozenset({"type", "id", "output", "exit_code"}),
+        protocol.CMD_CONTROL: frozenset({"type", "action", "note"}),
+    }
+    fx = json.loads(_FIXTURE.read_text(encoding="utf-8"))
+    seen_ev = set()
+    for ev in fx["events"]:
+        t = ev["type"]
+        assert frozenset(ev.keys()) == canon_ev[t], f"{t} fixture shape drift: {set(ev.keys()) ^ canon_ev[t]}"
+        seen_ev.add(t)
+    assert seen_ev == protocol.BRAIN_EVENTS, f"fixture missing event types: {protocol.BRAIN_EVENTS - seen_ev}"
+    seen_cmd = set()
+    for cmd in fx["commands"]:
+        t = cmd["type"]
+        assert frozenset(cmd.keys()) == canon_cmd[t], f"{t} command shape drift: {set(cmd.keys()) ^ canon_cmd[t]}"
+        seen_cmd.add(t)
+    assert seen_cmd == protocol.HOST_COMMANDS, f"fixture missing command types: {protocol.HOST_COMMANDS - seen_cmd}"
+
+
 # --- probe 5: escaping is lossless (escape-not-strip), CJK + emoji ---------
 def test_unicode_round_trips_losslessly():
     fx = json.loads(_FIXTURE.read_text(encoding="utf-8"))
