@@ -115,6 +115,8 @@ def test_brain_emits_tool_call_then_done():
     transport = FakeTransport([
         {"type": protocol.CMD_TASK, "text": "write x.py", "pool_gb": 5},
         {"type": protocol.CMD_TOOL_RESULT, "id": "call-1", "output": "[wrote x.py]", "exit_code": 0},
+        # the no-call turn triggers a FINAL VERIFY run_tests (id auto-stamped) — green:
+        {"type": protocol.CMD_TOOL_RESULT, "id": None, "output": "[exit 0]\nall passed", "exit_code": 0},
     ])
 
     assert run_brain(transport, chat_fn=fake_chat) == 0
@@ -122,7 +124,7 @@ def test_brain_emits_tool_call_then_done():
     assert protocol.EV_TOOL_CALL in types
     assert types[-1] == protocol.EV_DONE
     done = transport.sent[-1]
-    assert done["ok"] is True and done["result"] == "all set"
+    assert done["ok"] is True  # ok derived from the green verify, not self-report
     tc = next(m for m in transport.sent if m["type"] == protocol.EV_TOOL_CALL)
     assert tc["name"] == "write_file" and tc["args"]["path"] == "x.py"
 
@@ -135,7 +137,10 @@ def test_brain_loads_skill_for_test_task():
         assert any("PROCEDURE (skill: fix-failing-tests)" in m.get("content", "") for m in messages)
         return next(turns)
 
-    transport = FakeTransport([{"type": protocol.CMD_TASK, "text": "fix the failing pytest tests", "pool_gb": 5}])
+    transport = FakeTransport([
+        {"type": protocol.CMD_TASK, "text": "fix the failing pytest tests", "pool_gb": 5},
+        {"type": protocol.CMD_TOOL_RESULT, "id": None, "output": "[exit 0]\nall passed", "exit_code": 0},
+    ])
     assert run_brain(transport, chat_fn=fake_chat) == 0
     skill_evs = [m for m in transport.sent if m["type"] == protocol.EV_SKILL]
     assert any(m["name"] == "fix-failing-tests" for m in skill_evs)
@@ -155,6 +160,8 @@ def test_brain_checkpoints_on_green_tests():
         {"type": protocol.CMD_TOOL_RESULT, "id": "call-1", "output": "[exit 0]\nall passed", "exit_code": 0},
         # reply to the brain's checkpoint git_commit (id auto-stamped):
         {"type": protocol.CMD_TOOL_RESULT, "id": None, "output": "[exit 0]\n a1b2c3d4e5 committed", "exit_code": 0},
+        # reply to the FINAL VERIFY run_tests on the no-call turn (id auto-stamped):
+        {"type": protocol.CMD_TOOL_RESULT, "id": None, "output": "[exit 0]\nall passed", "exit_code": 0},
     ])
 
     assert run_brain(transport, chat_fn=fake_chat) == 0
@@ -186,10 +193,12 @@ def test_two_sequential_tool_calls_stay_correlated():
         {"type": protocol.CMD_TASK, "text": "read a and b", "pool_gb": 5},
         {"type": protocol.CMD_TOOL_RESULT, "id": "A", "output": "contents-of-a", "exit_code": 0},
         {"type": protocol.CMD_TOOL_RESULT, "id": "B", "output": "contents-of-b", "exit_code": 0},
+        {"type": protocol.CMD_TOOL_RESULT, "id": None, "output": "[exit 0]\nall passed", "exit_code": 0},
     ])
     assert run_brain(transport, chat_fn=lambda m, t: next(turns)) == 0
-    calls = [m for m in transport.sent if m["type"] == protocol.EV_TOOL_CALL]
-    assert [c["id"] for c in calls] == ["A", "B"]  # emitted in order, each id distinct
+    # the two model calls A, B emit in order (the final verify run_tests follows):
+    calls = [m["id"] for m in transport.sent if m["type"] == protocol.EV_TOOL_CALL]
+    assert calls[:2] == ["A", "B"]  # emitted in order, each id distinct
 
 
 def test_malformed_tool_args_emit_a_countable_marker():
@@ -204,6 +213,7 @@ def test_malformed_tool_args_emit_a_countable_marker():
     transport = FakeTransport([
         {"type": protocol.CMD_TASK, "text": "x", "pool_gb": 5},
         {"type": protocol.CMD_TOOL_RESULT, "id": "A", "output": "[no such file]", "exit_code": 1},
+        {"type": protocol.CMD_TOOL_RESULT, "id": None, "output": "[exit 0]\nall passed", "exit_code": 0},
     ])
     assert run_brain(transport, chat_fn=lambda m, t: next(turns)) == 0
     markers = [m for m in transport.sent if m["type"] == protocol.EV_MONOLOGUE and "malformed-args" in m["text"]]
@@ -222,6 +232,7 @@ def test_invented_tool_emits_a_countable_marker():
     transport = FakeTransport([
         {"type": protocol.CMD_TASK, "text": "x", "pool_gb": 5},
         {"type": protocol.CMD_TOOL_RESULT, "id": "A", "output": "[unknown tool: make_coffee]", "exit_code": 1},
+        {"type": protocol.CMD_TOOL_RESULT, "id": None, "output": "[exit 0]\nall passed", "exit_code": 0},
     ])
     assert run_brain(transport, chat_fn=lambda m, t: next(turns)) == 0
     markers = [m for m in transport.sent if m["type"] == protocol.EV_MONOLOGUE and "invented-tool" in m["text"]]
@@ -317,6 +328,7 @@ def test_stage_order_and_steer_injection():
         {"type": protocol.CMD_TASK, "text": "read a", "pool_gb": 5},
         {"type": protocol.CMD_CONTROL, "action": "steer", "note": "focus on the auth path"},
         {"type": protocol.CMD_TOOL_RESULT, "id": "call-1", "output": "contents", "exit_code": 0},
+        {"type": protocol.CMD_TOOL_RESULT, "id": None, "output": "[exit 0]\nall passed", "exit_code": 0},
     ])
     assert run_brain(transport, chat_fn=fake_chat) == 0
     assert saw_steer.get("yes") is True  # steer reached the model's messages
@@ -324,3 +336,53 @@ def test_stage_order_and_steer_injection():
     assert stages[0] == "recon"
     assert "execute" in stages
     assert stages[-1] == "reveal"
+
+
+# --- loop fixes: verification gate + no-call != done + no-progress + turn ---
+def test_no_call_never_claims_ok_while_tests_fail():
+    """A no-call turn with RED verify must NOT finish ok; after the no-call limit
+    it terminates 'stalled' — honest, not a false success."""
+    transport = FakeTransport([
+        {"type": protocol.CMD_TASK, "text": "fix the failing tests", "pool_gb": 5},
+        {"type": protocol.CMD_TOOL_RESULT, "id": None, "output": "[exit 1]\n24 failed", "exit_code": 1},
+        {"type": protocol.CMD_TOOL_RESULT, "id": None, "output": "[exit 1]\n24 failed", "exit_code": 1},
+        {"type": protocol.CMD_TOOL_RESULT, "id": None, "output": "[exit 1]\n24 failed", "exit_code": 1},
+    ])
+    code = run_brain(transport, chat_fn=lambda m, t: {"role": "assistant", "content": "all done!", "tool_calls": []})
+    assert code == 1  # not ok
+    done = transport.sent[-1]
+    assert done["type"] == protocol.EV_DONE
+    assert done["ok"] is False and done["reason"] == "stalled" and done["remaining"] == 24
+
+
+def test_verify_green_sets_ok_true():
+    """A no-call turn whose verify is GREEN finishes ok — ground-truth, not self-report."""
+    transport = FakeTransport([
+        {"type": protocol.CMD_TASK, "text": "fix it", "pool_gb": 5},
+        {"type": protocol.CMD_TOOL_RESULT, "id": None, "output": "[exit 0]\n42 passed", "exit_code": 0},
+    ])
+    code = run_brain(transport, chat_fn=lambda m, t: {"role": "assistant", "content": "", "tool_calls": []})
+    assert code == 0
+    done = transport.sent[-1]
+    assert done["ok"] is True and done["remaining"] == 0
+
+
+def test_unverified_when_no_test_cmd():
+    """No test gate on the task -> never 'ok'; finishes 'unverified'."""
+    transport = FakeTransport([{"type": protocol.CMD_TASK, "text": "do a thing", "pool_gb": 5, "test_cmd": ""}])
+    code = run_brain(transport, chat_fn=lambda m, t: {"role": "assistant", "content": "done", "tool_calls": []})
+    assert code == 1
+    done = transport.sent[-1]
+    assert done["ok"] is False and done["reason"] == "unverified"
+
+
+def test_turn_instrumentation_emitted():
+    """Each assistant turn appends a `turn` diag event (the §8 emission curve feed)."""
+    transport = FakeTransport([
+        {"type": protocol.CMD_TASK, "text": "x", "pool_gb": 5},
+        {"type": protocol.CMD_TOOL_RESULT, "id": None, "output": "[exit 0]\nok", "exit_code": 0},
+    ])
+    run_brain(transport, chat_fn=lambda m, t: {"role": "assistant", "content": "", "tool_calls": []})
+    turns = [m for m in transport.sent if m["type"] == protocol.EV_TURN]
+    assert len(turns) >= 1
+    assert turns[0]["no_call"] is True and "fail_count" in turns[0]

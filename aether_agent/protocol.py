@@ -27,15 +27,16 @@ PROTOCOL_VERSION = 1
 EV_STAGE = "stage"          # {name, face}  staged lifecycle marker
 EV_MONOLOGUE = "monologue"  # {text, depth} nested reasoning-tree line
 EV_SKILL = "skill"          # {name, reason}  a procedure packet was pinned
+EV_TURN = "turn"            # {n, tool_calls, malformed, invented, no_call, fail_count}  per-turn diag
 EV_TOOL_CALL = "tool_call"  # {id, name, args}  host must execute + reply
 EV_TELEMETRY = "telemetry"  # {tokens, tps, ctx_used, ctx_cap, vram}
 EV_STATUS = "status"        # {phase, pool_used, pool_cap}  drives the pool bar
 EV_CHECKPOINT = "checkpoint"  # {git_sha}  a verified step was committed
-EV_DONE = "done"            # {ok, result}
+EV_DONE = "done"            # {ok, result, remaining, reason}
 EV_ERROR = "error"          # {msg}
 
 BRAIN_EVENTS = frozenset(
-    {EV_STAGE, EV_MONOLOGUE, EV_SKILL, EV_TOOL_CALL, EV_TELEMETRY, EV_STATUS, EV_CHECKPOINT, EV_DONE, EV_ERROR}
+    {EV_STAGE, EV_MONOLOGUE, EV_SKILL, EV_TURN, EV_TOOL_CALL, EV_TELEMETRY, EV_STATUS, EV_CHECKPOINT, EV_DONE, EV_ERROR}
 )
 
 # --- host -> brain commands (the host sends these) ------------------------
@@ -60,6 +61,21 @@ def monologue(text: str, depth: int = 0) -> dict[str, Any]:
 
 def skill(name: str, reason: str = "") -> dict[str, Any]:
     return {"type": EV_SKILL, "name": name, "reason": reason}
+
+
+def turn(
+    n: int, tool_calls: int, malformed: int, invented: int, no_call: bool, fail_count: int | None
+) -> dict[str, Any]:
+    """Per-assistant-turn diagnostics — the §8 emission curve feed."""
+    return {
+        "type": EV_TURN,
+        "n": n,
+        "tool_calls": tool_calls,
+        "malformed": malformed,
+        "invented": invented,
+        "no_call": no_call,
+        "fail_count": fail_count,
+    }
 
 
 def tool_call(call_id: str, name: str, args: dict[str, Any]) -> dict[str, Any]:
@@ -87,8 +103,11 @@ def checkpoint(git_sha: str) -> dict[str, Any]:
     return {"type": EV_CHECKPOINT, "git_sha": git_sha}
 
 
-def done(ok: bool, result: str) -> dict[str, Any]:
-    return {"type": EV_DONE, "ok": ok, "result": result}
+def done(ok: bool, result: str, remaining: int = 0, reason: str = "") -> dict[str, Any]:
+    """Terminal event. `ok` is derived from a real final test run, never from the
+    loop-exit reason. `remaining` = failing tests when not ok; `reason` ∈
+    {"", "stalled", "no-progress", "max-turns", "unverified"}."""
+    return {"type": EV_DONE, "ok": ok, "result": result, "remaining": remaining, "reason": reason}
 
 
 def error(msg: str) -> dict[str, Any]:

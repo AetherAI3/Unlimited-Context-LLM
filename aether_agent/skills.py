@@ -51,10 +51,14 @@ LIBRARY: tuple[Skill, ...] = (
         triggers=("failing test", "fix the test", "tests fail", "pytest", "make tests pass", "failed"),
         procedure=(
             "1. Run the suite first; read the FIRST failure, not the summary.\n"
-            "2. Open the failing test + the code it exercises before editing.\n"
-            "3. Change the smallest thing that could fix THIS failure; re-run.\n"
+            "2. After running tests, READ THE SOURCE FILES the failing tests import — the\n"
+            "   implementation under the package dir, NOT the test files. The fix lives in\n"
+            "   the source, never in the test.\n"
+            "3. Edit the source to make the assertions pass; change the smallest thing that\n"
+            "   could fix THIS failure; re-run to confirm progress.\n"
             "4. Never edit a test to pass unless the test itself is wrong — fix the code.\n"
-            "5. One failure at a time; checkpoint after each green step."
+            "5. Fix one module at a time; re-run after each; checkpoint after each green step.\n"
+            "6. Do not stop until run_tests exits 0."
         ),
         acceptance="the previously-failing tests pass and no previously-passing test regressed",
     ),

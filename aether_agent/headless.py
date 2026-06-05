@@ -40,6 +40,12 @@ _PHASE_BY_TOOL = {
 }
 _TOKENS_PER_GB = 233_000_000  # pool reach; mirrors statusbar / aether_context.config
 
+# Loop-control limits (Fix 2). A no-call turn verifies; if still red after this
+# many consecutive no-call turns -> stalled. Failing-count not improving across
+# this many turns -> no-progress. Both terminate as `incomplete`, never `ok`.
+_NO_CALL_LIMIT = 3
+_STALL_LIMIT = 3
+
 # Sentinel: _await_result hit a protocol violation and already emitted an error.
 _MISMATCH = object()
 
@@ -107,7 +113,7 @@ def run_brain(
     transport: Transport,
     *,
     chat_fn: Optional[ChatFn] = None,
-    max_steps: int = 40,
+    max_steps: int = 80,  # MAX_TURNS — a sane cap for a multi-bug task (Fix 2)
 ) -> int:
     """Drive one task to completion over the transport. Returns a process code.
 
@@ -123,6 +129,12 @@ def run_brain(
     pool_gb = int(first.get("pool_gb", 5) or 5)
     model = str(first.get("model") or DEFAULT_MODEL)
     pool_cap = pool_gb * _TOKENS_PER_GB
+
+    # The ground-truth gate command. "" (explicitly empty) => unverifiable: the
+    # brain may NEVER claim ok without a green check, so it finishes "unverified".
+    raw_tc = first.get("test_cmd", "pytest -q")
+    test_cmd = "" if raw_tc is None else str(raw_tc)
+    verifiable = test_cmd.strip() != ""
 
     chat = chat_fn or OllamaChat(model=model).chat
     schema = _tool_schema()
@@ -150,17 +162,54 @@ def run_brain(
     steers: list[str] = []
     in_execute = False
 
+    no_call_streak = 0
+    prev_fail = float("inf")
+    stalls = 0
+    last_fail: Optional[int] = None  # failing count from the latest run_tests
+    ok = False
+    reason = ""
+    result = ""
+
     try:
-        for step in range(1, max_steps + 1):
+        for turn_n in range(1, max_steps + 1):
             transport.send(protocol.status("reasoning", pool_used, pool_cap))
             msg = chat(messages, schema)
             calls = msg.get("tool_calls") or []
-            if not calls:
-                transport.send(protocol.stage("self-review", "(¬_¬\")→[•‿•]"))
-                transport.send(protocol.stage("reveal", "ᕙ(`▽`)ᕗ"))
-                transport.send(protocol.done(True, (msg.get("content") or "(done)").strip()))
-                return 0
 
+            # --- Fix 2: a no-tool-call turn means VERIFY, never "success" -------
+            if not calls:
+                transport.send(protocol.turn(turn_n, 0, 0, 0, True, last_fail))
+                if not verifiable:
+                    ok, reason = False, "unverified"  # can't claim ok with no gate
+                    result = (msg.get("content") or "(done)").strip()
+                    break
+                v = _run_tests(transport, test_cmd, turn_n, steers)
+                if v is None:
+                    transport.send(protocol.error("host closed during final verify"))
+                    return 1
+                vexit, vfail, vout = v
+                if vfail is not None:
+                    last_fail = vfail
+                if vexit == 0:
+                    ok, reason, result = True, "", "(done)"  # Fix 1: ground-truth ok
+                    break
+                no_call_streak += 1
+                if no_call_streak >= _NO_CALL_LIMIT:
+                    ok, reason = False, "stalled"
+                    result = f"(incomplete — {vfail if vfail is not None else '?'} failing)"
+                    break
+                # nudge with reality (Fix 3 reinforcement: read the SOURCE)
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        f"{vfail if vfail is not None else 'Some'} tests still failing:\n{_tail(vout)}\n"
+                        "Read the SOURCE modules the failing tests import (the implementation, "
+                        "not the test files) and edit them. Do not stop until run_tests exits 0."
+                    ),
+                })
+                continue
+
+            no_call_streak = 0
             if not in_execute:
                 transport.send(protocol.stage("execute", "(ง'̀-'́)ง"))
                 in_execute = True
@@ -168,13 +217,15 @@ def run_brain(
             messages.append(
                 {"role": "assistant", "content": msg.get("content") or "", "tool_calls": calls}
             )
+            malformed_n = 0
+            invented_n = 0
             for call in calls:
                 call_id, name, args, malformed = _call_args(call)
                 if malformed:
-                    # countable signal: the model produced un-parseable tool args
+                    malformed_n += 1
                     transport.send(protocol.monologue(f"malformed-args: {name}", depth=1))
                 elif name and name not in protocol.TOOLS:
-                    # countable signal: the model invented a tool that doesn't exist
+                    invented_n += 1
                     transport.send(protocol.monologue(f"invented-tool: {name}", depth=1))
                 phase = _PHASE_BY_TOOL.get(name, "reasoning")
                 transport.send(protocol.status(phase, pool_used, pool_cap))
@@ -190,24 +241,69 @@ def run_brain(
                 output = str(reply.get("output", ""))
                 exit_code = int(reply.get("exit_code", 0) or 0)
 
-                # Tool output is encoded into the working-memory thread (the
-                # host holds the real pool; the brain tracks the conversation).
                 pool_used += max(1, len(output) // 4)
-                messages.append(
-                    {"role": "tool", "tool_call_id": call_id, "content": output}
-                )
-                # Any /steer notes that arrived while waiting are injected as
-                # high-priority user guidance (never faded — the spec's user slice).
+                messages.append({"role": "tool", "tool_call_id": call_id, "content": output})
                 _drain_steers(steers, messages)
 
                 if name == "run_tests":
-                    _grounding_gate(transport, output, exit_code, step, stuck, messages, loaded_skills)
+                    last_fail = 0 if kernel.tests_pass(output) else kernel.parse_fail_count(output)
+                    _grounding_gate(transport, output, exit_code, turn_n, stuck, messages, loaded_skills)
 
-        transport.send(protocol.done(False, "max steps reached without a clean finish"))
-        return 1
+            # per-turn diagnostics (the §8 emission curve feed)
+            transport.send(protocol.turn(turn_n, len(calls), malformed_n, invented_n, False, last_fail))
+
+            # --- no-progress breaker: failing count not improving -> stall ------
+            if last_fail is not None:
+                if last_fail >= prev_fail:
+                    stalls += 1
+                    if stalls >= _STALL_LIMIT:
+                        ok, reason = False, "no-progress"
+                        result = f"(incomplete — {last_fail} failing)"
+                        break
+                else:
+                    stalls = 0
+                prev_fail = last_fail
+        else:
+            # max turns hit — derive ok from a real final run, never assume.
+            if verifiable:
+                v = _run_tests(transport, test_cmd, max_steps + 1, steers)
+                if v is not None:
+                    vexit, vfail, _ = v
+                    ok = vexit == 0
+                    if vfail is not None:
+                        last_fail = vfail
+            reason = "" if ok else "max-turns"
+            result = "(done)" if ok else f"(incomplete — {last_fail if last_fail is not None else '?'} failing)"
+
+        transport.send(protocol.stage("self-review", "(¬_¬\")→[•‿•]"))
+        transport.send(protocol.stage("reveal", "ᕙ(`▽`)ᕗ"))
+        remaining = 0 if ok else (last_fail if last_fail is not None else 0)
+        transport.send(protocol.done(ok, result or ("(done)" if ok else "(incomplete)"), remaining, reason))
+        return 0 if ok else 1
     except RuntimeError as e:  # adapter raises these with a clear hint
         transport.send(protocol.error(str(e)))
         return 1
+
+
+def _tail(text: str, limit: int = 1500) -> str:
+    """Last `limit` chars of test output — enough signal for the model to act on."""
+    return text[-limit:] if len(text) > limit else text
+
+
+def _run_tests(
+    transport: Transport, test_cmd: str, turn_n: int, steers: list[str]
+) -> Optional[tuple[int, Optional[int], str]]:
+    """Round-trip a run_tests through the host. Returns (exit_code, fail_count, output)
+    or None if the host closed. This is the brain's ground-truth verify."""
+    cid = f"verify-{turn_n}"
+    transport.send(protocol.status("grounding", 0, 0))
+    transport.send(protocol.tool_call(cid, "run_tests", {"command": test_cmd}))
+    reply = _await_result(transport, cid, steers)
+    if not isinstance(reply, dict):
+        return None
+    output = str(reply.get("output", ""))
+    exit_code = int(reply.get("exit_code", 0) or 0)
+    return exit_code, kernel.parse_fail_count(output), output
 
 
 def _drain_steers(steers: list[str], messages: list[dict]) -> None:

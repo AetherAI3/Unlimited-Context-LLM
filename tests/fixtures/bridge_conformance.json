@@ -5,6 +5,7 @@
     { "type": "stage", "name": "execute", "face": "(test)" },
     { "type": "monologue", "text": "reading auth.ts", "depth": 1 },
     { "type": "skill", "name": "fix-failing-tests", "reason": "trigger matched" },
+    { "type": "turn", "n": 3, "tool_calls": 2, "malformed": 0, "invented": 0, "no_call": false, "fail_count": 5 },
     { "type": "tool_call", "id": "c1", "name": "read_file", "args": { "path": "a.py" } },
     { "type": "telemetry", "tokens": 10, "tps": 4.5, "ctx_used": 1, "ctx_cap": 2, "vram": 0.5 },
     { "type": "status", "phase": "grounding", "pool_used": 100, "pool_cap": 1165000000 },
