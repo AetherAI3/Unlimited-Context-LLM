@@ -15,6 +15,7 @@ import urllib.request
 from typing import Any, Optional
 
 from aether_agent.profiles import for_model
+from aether_agent.toolparse import extract_tool_calls
 
 DEFAULT_HOST = "http://localhost:11434"
 DEFAULT_MODEL = "qwen3-coder:30b"  # depth build; 256K ctx, Apache-2.0
@@ -83,4 +84,12 @@ class OllamaChat:
         choices = payload.get("choices") or []
         if not choices:
             raise RuntimeError(f"Empty response from Ollama: {payload}")
-        return choices[0].get("message", {})
+        msg = choices[0].get("message", {})
+        # Tool-call recovery (#1-risk hardening): many local models emit the call
+        # as JSON text in `content` instead of structured `tool_calls` (Ollama's
+        # template doesn't parse it). Recover it so the loop sees a real call.
+        if not msg.get("tool_calls"):
+            recovered = extract_tool_calls(msg.get("content"))
+            if recovered:
+                msg["tool_calls"] = recovered
+        return msg
