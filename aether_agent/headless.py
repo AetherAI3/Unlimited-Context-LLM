@@ -166,6 +166,7 @@ def run_brain(
     prev_fail = float("inf")
     stalls = 0
     last_fail: Optional[int] = None  # failing count from the latest run_tests
+    edited_since_test = False  # did a write_file land since the last run_tests?
     ok = False
     reason = ""
     result = ""
@@ -245,8 +246,25 @@ def run_brain(
                 messages.append({"role": "tool", "tool_call_id": call_id, "content": output})
                 _drain_steers(steers, messages)
 
+                if name == "write_file":
+                    edited_since_test = True
                 if name == "run_tests":
                     last_fail = 0 if kernel.tests_pass(output) else kernel.parse_fail_count(output)
+                    # Loop guard: re-running tests with no edit since the last run
+                    # is wasted — force a read+edit instead of spamming run_tests.
+                    if not edited_since_test:
+                        transport.send(protocol.monologue("redundant run_tests (no edit since last run)", depth=1))
+                        messages.append({
+                            "role": "user",
+                            "content": (
+                                "You ran the tests again without editing any file — that cannot change "
+                                "the result. STOP re-running tests. The failure traceback names the module "
+                                "and function (e.g. aetherbugs/mathops.py). READ that exact source file with "
+                                "read_file, fix the bug in it, then run_tests ONCE. Never write a new file the "
+                                "tests do not import."
+                            ),
+                        })
+                    edited_since_test = False
                     _grounding_gate(transport, output, exit_code, turn_n, stuck, messages, loaded_skills)
 
             # per-turn diagnostics (the §8 emission curve feed)
