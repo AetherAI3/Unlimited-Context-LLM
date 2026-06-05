@@ -72,6 +72,14 @@ class OllamaChat:
                 f"Cannot reach Ollama at {self.host} ({e.reason}). "
                 "Start it with `ollama serve` (the installer does this)."
             ) from e
+        except (TimeoutError, OSError) as e:
+            # socket timeout / connection reset / incomplete read — never crash the
+            # brain process; surface a clean error the host can render + log.
+            raise RuntimeError(
+                f"Ollama call failed ({type(e).__name__}: {e}). The model "
+                f"'{self.model}' may be loading slowly or hung; try a smaller "
+                "model, warm it first (`ollama run <model>`), or check VRAM/RAM."
+            ) from e
         choices = payload.get("choices") or []
         if not choices:
             raise RuntimeError(f"Empty response from Ollama: {payload}")
