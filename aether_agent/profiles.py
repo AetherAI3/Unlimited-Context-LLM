@@ -19,6 +19,16 @@ TIER_LIGHT = "light"
 TIER_STRONG = "strong-local"
 TIER_CLOUD = "cloud"
 
+# Recommended CONCRETE Ollama tags (real pulls, sized for a typical small box —
+# ~8GB VRAM / 16GB RAM). The universal small default is qwen2.5-coder:7b: it fits,
+# it has the best small-model tool-calling (criterion #1), and it's Apache-2.0.
+# GEMMA_LIGHT is the working Gemma option (official tag, fits 8GB). 'gemma4' is
+# NOT a real Ollama model — never pull it.
+LIGHT_DEFAULT = "qwen2.5-coder:7b"   # universal small — runs ~anywhere, strong tools
+GEMMA_LIGHT = "gemma3:4b"            # the Gemma option (fits 8GB; weaker tool-calling)
+GEMMA_E4B = "gemma3n:e4b"            # the efficient 'e4b' (the real one; ~7GB)
+DEPTH_DEFAULT = "qwen3-coder:30b"    # depth build — needs ~24GB RAM/VRAM
+
 
 @dataclass(frozen=True)
 class ModelProfile:
@@ -36,16 +46,18 @@ PROFILES: tuple[ModelProfile, ...] = (
         "gemma",
         TIER_LIGHT,
         {"temperature": 1.0, "top_p": 0.95, "top_k": 64},
-        "Gemma 4 (E4B light / 26B-MoE / 31B dense). Apache-2.0. Tool-calling ~86%; "
-        "Google sampling; plans better with thinking-before-the-call. Do NOT use Gemma 3 "
-        "(custom terms + ~7% tool-calling).",
+        "Gemma family (Google sampling: temp 1.0 / top_k 64 / top_p 0.95). REAL Ollama "
+        "tags: gemma3:4b (~3.3GB, fits 8GB GPU) · gemma3n:e4b (~7GB, the efficient 'e4b') · "
+        "gemma3:12b (stronger). NOTE: 'gemma4' is NOT an Ollama model — do not use it. "
+        "Gemma tool-calling is weaker than Qwen; for a small box prefer qwen2.5-coder.",
     ),
     ModelProfile(
         "qwen",
         TIER_STRONG,
         {"temperature": 0.2, "top_p": 0.9, "top_k": 40},
-        "Qwen3-Coder (30B depth / -next light-MoE). Low-temp deterministic coding; "
-        "most reliable tool-calling. Default strong-local.",
+        "Qwen-Coder (qwen2.5-coder:7b = the universal small default, ~4.7GB, fits 8GB GPU, "
+        "best small-model tool-calling, Apache-2.0; qwen3-coder:30b = depth, needs ~24GB). "
+        "Low-temp deterministic coding; most reliable tool-calling.",
     ),
     ModelProfile(
         "devstral",
