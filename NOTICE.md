@@ -2,6 +2,7 @@
 
 aether-context is licensed under the Apache License, Version 2.0,
 © 2026 Aether AI. See the `LICENSE` file for the full text.
+Created by Brandon Barrante (https://github.com/DBarr3), founder of Aether AI.
 
 ## Third-Party Dependencies
 
