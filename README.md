@@ -59,7 +59,6 @@ Four steps, start to reach:
 
 That's it. A 5 GB pool gives a small model ~1.16B tokens of reach — about **9,000×** a 128K window — on your own machine, offline.
 
-</div>
 
 ---
 
