@@ -243,6 +243,21 @@ That's the whole thing. One small model, one command, a billion tokens of reach 
 
 "Unlimited" means **reach, not attention.** Your model keeps its native window — we make it *reach* a billion-token pool in slices, via fast retrieval. The whole thing rides on retrieval **hit rate**; when it's high (and the loader is built to keep it high), the pool feels like one seamless context.
 
+## Benchmark — measured, on a real model
+
+A live run on **`deepseek/deepseek-v4-pro`** (via OpenRouter), driving an agent through **60 real GitHub issues** over a **40-turn session that overflows the model's window** — engine **on** vs **off** (off = no engine, same model, transcript truncated to the window). Full write-up: [`docs/benchmarks/2026-06-14-deepseek-v4-pro-session-eval.md`](docs/benchmarks/2026-06-14-deepseek-v4-pro-session-eval.md).
+
+| Metric | Off (baseline) | On (engine) | Change |
+|---|:---:|:---:|:---:|
+| **Recall coherence** (early facts still correct) | 0.15 | **1.00** | **6.7×** |
+| **Work outcome** (tasks done right) | 3 / 20 | **20 / 20** | **3 → 20** |
+| **Cost — full session** | $0.0711 | **$0.0542** | **−24%** |
+| **Cost — back half (recall phase)** | $0.00117/turn | **$0.00053/turn** | **−54%** |
+
+What the engine provided, in one session: it **held coherence flat at 1.00 while the baseline drifted to 0.15** (early issues fell out of the window and were lost), turned a **3/20 failing run into 20/20**, and did it for **~25% less money overall — over half off in the back half**, where the baseline drags a bloated transcript into every call and the engine sends a compact recalled window. Total spend for the whole benchmark: **$0.19**. Committed raw artifacts: [`docs/benchmarks/artifacts/2026-06-14-deepseek-v4-pro/`](docs/benchmarks/artifacts/2026-06-14-deepseek-v4-pro/) (`api_eval_results.json`, `api_eval_series.csv`, `api_eval_plot.png`, `RESULTS.md`).
+
+<sub>**Scope, honestly:** this measures the **engine** (retrieve-on-overflow memory), not the MPO chain — on this single-fact recall task the MPO chain **ties** plain recall (both 1.00). The MPO's multi-slice edge is **synthetic-only so far** (`bench/chain_recall.py`: connected-context recall 0.15 → 0.78); the live `thread` run that would confirm it is **pending** — not yet claimed. Magnitude scales with the overflow ratio: the 2000-token window is deliberately tiny to force overflow, so a realistic window shows a smaller (still real) gain. N=20 recall turns, single run. Reproduce: `python -m bench.api_eval --model deepseek/deepseek-v4-pro --repo microsoft/vscode --arms off,on,on_chain --plot`.</sub>
+
 ## Citation
 
 If Unlimited Context helps your work, please cite it. Built and maintained by **Aether AI**.
