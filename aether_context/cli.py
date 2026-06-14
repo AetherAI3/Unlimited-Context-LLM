@@ -177,6 +177,10 @@ def _add_session_flags(sub: argparse.ArgumentParser) -> None:
         metavar="{flat,hnsw,tiered}",
         help="ANN index kind (default: flat). 'tiered' is reserved and runs flat for now.",
     )
+    sub.add_argument(
+        "--no-mpo-chain", dest="mpo_chain", action="store_false", default=True,
+        help="disable the MPO context chain (retrieval falls back to plain cosine). On by default.",
+    )
     sub.add_argument("--dir", type=str, default=None, metavar="D", help="pool directory.")
 
 
@@ -381,6 +385,7 @@ def _build_session(args: argparse.Namespace) -> Session:
         pool_mode=args.pool_mode,
         pool_index=args.index,
         pool_dir=pool_dir,
+        mpo_chain=getattr(args, "mpo_chain", True),
         fallback_to_mock=True,
     )
 

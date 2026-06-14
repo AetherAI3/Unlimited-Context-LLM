@@ -252,3 +252,64 @@ def test_runresult_stages_recorded(tmp_pool_dir):
         assert result.stages
     finally:
         s.close()
+
+
+class TestMpoChain:
+    """MPO context chain: on-by-default, status, and hit-expansion into connected context."""
+
+    def test_on_by_default(self, tmp_pool_dir):
+        s = Session("mock", pool_gb=5, pool_dir=tmp_pool_dir)
+        assert s.chain is not None
+        assert s.status_dict()["mpo_chain"] is True
+        s.close()
+
+    def test_disabled_is_plain_cosine(self, tmp_pool_dir):
+        s = Session("mock", pool_gb=5, pool_dir=tmp_pool_dir, mpo_chain=False)
+        assert s.chain is None
+        assert s.status_dict()["mpo_chain"] is False
+        s.close()
+
+    def test_cold_retrieve_matches_cosine_when_off(self, tmp_pool_dir):
+        s = Session("mock", pool_gb=5, pool_dir=tmp_pool_dir, mpo_chain=False)
+        for i in range(6):
+            s.remember(f"distinct durable fact number {i} about subsystem {i}")
+        q = s.encoder.encode("subsystem 2 fact")
+        direct = [x.id for x in s.pool.search(q, 4, session=s._scope())]
+        via = [x.id for x in s._cold_retrieve(s._key(), q, 4)]
+        assert via == direct
+        s.close()
+
+    def test_on_status_and_returns_k(self, tmp_pool_dir):
+        s = Session("mock", pool_gb=5, pool_dir=tmp_pool_dir, mpo_chain=True)
+        assert s.chain is not None
+        assert s.status_dict()["mpo_chain"] is True
+        for i in range(12):
+            s.remember(f"fact {i} about the auth subsystem and its tokens")
+        q = s.encoder.encode("auth subsystem tokens")
+        out = s._cold_retrieve(s._key(), q, 4)
+        assert len(out) == 4
+        s.close()
+
+    def test_chain_widens_with_connected_thread(self, tmp_pool_dir):
+        # A tight thread (near-identical text -> near-identical vectors, adjacent in time) plus
+        # unrelated distractors. The chain should pull a thread sibling in alongside the hit.
+        s = Session("mock", pool_gb=5, pool_dir=tmp_pool_dir, mpo_chain=True)
+        thread = [s.remember("the deploy pipeline builds signs and ships the installer")
+                  for _ in range(3)]
+        for i in range(8):
+            s.remember(f"unrelated note about topic {i} groceries weather sports")
+        q = s.encoder.encode("deploy pipeline builds signs ships installer")
+        out_ids = {x.id for x in s._cold_retrieve(s._key(), q, 4)}
+        thread_ids = {t.id for t in thread if t is not None}
+        assert len(out_ids & thread_ids) >= 2  # the connected thread is widened in
+        s.close()
+
+    def test_chain_failsoft(self, tmp_pool_dir, monkeypatch):
+        s = Session("mock", pool_gb=5, pool_dir=tmp_pool_dir, mpo_chain=True)
+        for i in range(8):
+            s.remember(f"fact {i} about the cache layer")
+        monkeypatch.setattr(s.chain, "expand", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+        q = s.encoder.encode("cache layer")
+        out = s._cold_retrieve(s._key(), q, 4)
+        assert len(out) == 4  # degrades to cosine, no raise
+        s.close()

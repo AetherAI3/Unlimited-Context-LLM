@@ -7,12 +7,11 @@ gap: a reusable procedure packet pinned into the prompt at the right moment, so
 the local model behaves like it knows the approach.
 
 A skill is a PRIOR, not truth — it guides; execution decides. If a skill's
-approach fails the tests, the ground-truth gate overrides it (same firewall as
-the atlas: opinions in, facts win). See specs/neo_lite_context_lifecycle_logs_killgate.md §6.
+approach fails the tests, the test result overrides it: results win over guidance.
 
 MVP matcher = explicit trigger descriptors (keyword / error-pattern substrings),
-deterministic and offline. The engine's surfacing gate adds semantic recall on
-top later (hybrid match); the packet shape here is what it will surface.
+deterministic and offline. A semantic-recall layer can augment this later
+(hybrid match); the packet shape here is what it will surface.
 """
 
 from __future__ import annotations

@@ -94,7 +94,7 @@ def _call_args(call: dict[str, Any]) -> tuple[str, str, dict[str, Any], bool]:
     `malformed` is True when the model emitted a non-empty arguments string that
     is not valid JSON — the small-model failure signature. We still coerce args
     to {} and proceed (so a single bad call doesn't kill the run), but the marker
-    is surfaced so a long run's emission quality is measurable (the kill-gate /
+    is surfaced so a long run's emission quality is measurable (the benchmark /
     stress test buckets these by session position)."""
     fn = call.get("function", {})
     name = fn.get("name", "")
@@ -156,7 +156,7 @@ def run_brain(
     # SELF-REVIEW + REVEAL bracketing a clean finish. The full per-stage context
     # profiles (parse/brainstorm/write-plans with their own retrieval tiers) are
     # an engine-side pass, deferred. Stage markers give the host its pause/steer
-    # boundaries (specs/neo_lite_context_lifecycle_logs_killgate.md §3-4).
+    # boundaries.
     transport.send(protocol.stage("recon", "( ⚆ _ ⚆ )"))
     pool_used = 0
     steers: list[str] = []

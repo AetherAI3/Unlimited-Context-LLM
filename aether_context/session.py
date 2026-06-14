@@ -56,6 +56,7 @@ from aether_context.errors import (
     OllamaNotRunning,
 )
 from aether_context.local_llm import LocalLLM, load_model
+from aether_context.mpo import ChainItem, MpoChain
 from aether_context.slice_loader import Pager, SliceKey
 from aether_context.tokenizer import from_backend
 from aether_context.witness import Witness, retention_score, uniqueness_from_neighbors
@@ -153,6 +154,10 @@ class Session:
         resident_k: int = DEFAULT_RESIDENT_K,
         pool_ceiling_bytes: int | None = None,
         session_id: str | None = None,
+        mpo_chain: bool = True,
+        chain_width: int = 8,
+        chain_hops: int = 1,
+        chain_fanout: int = 4,
         **cfg: Any,
     ) -> None:
         self.id: str = session_id or f"sess-{uuid.uuid4().hex[:12]}"
@@ -210,6 +215,16 @@ class Session:
             self.encoder,
             default_k=self._resident_k,
             retrieve_fn=self._cold_retrieve,
+        )
+
+        # -- optional MPO context chain (assists retrieval; off by default) ----
+        # Cosine stays the retrieval mechanism; when enabled, the chain widens each cosine
+        # result with the slices most coupled to it on (cost, time) — connected context.
+        self.mpo_chain_enabled: bool = bool(mpo_chain)
+        self._chain_fanout: int = max(1, int(chain_fanout))
+        self.chain: MpoChain | None = (
+            MpoChain(width=max(1, int(chain_width)), hops=max(1, int(chain_hops)))
+            if self.mpo_chain_enabled else None
         )
 
         # -- run state --------------------------------------------------------
@@ -299,8 +314,37 @@ class Session:
         return None if self.pool_mode == "shared" else self.id
 
     def _cold_retrieve(self, key: SliceKey, query_vec: np.ndarray, k: int) -> list[Slice]:
-        """Pager cold path honoring the session's pool mode (shared -> global search)."""
-        return self.pool.search(query_vec, k, session=self._scope())
+        """Pager cold path honoring the session's pool mode (shared -> global search).
+
+        With ``mpo_chain`` enabled, cosine still selects the entry hits; the MPO chain then
+        widens the window with the slices most coupled to them — connected context. Fail-soft:
+        any chain error returns the plain cosine ``slices[:k]``.
+        """
+        scope = self._scope()
+        if self.chain is None:
+            return self.pool.search(query_vec, k, session=scope)
+        candidates = self.pool.search(query_vec, max(k, k * self._chain_fanout), session=scope)
+        if len(candidates) <= k:
+            return candidates[:k]
+        try:
+            warm = {sl.id for sl in self.pager.window()}
+            items = [
+                ChainItem(id=sl.id, vector=sl.vector, c_t=self._c_t(sl, warm))
+                for sl in candidates
+            ]
+            seed = [sl.id for sl in candidates[: min(2, k)]]
+            order = self.chain.expand(seed, items, width=k)
+            by_id = {sl.id: sl for sl in candidates}
+            widened = [by_id[i] for i in order if i in by_id]
+            return (widened or candidates)[:k]
+        except Exception as exc:  # noqa: BLE001 - fail-soft: chain only ever augments
+            logger.warning("MPO chain expand failed (%s); serving cosine order", exc)
+            return candidates[:k]
+
+    @staticmethod
+    def _c_t(sl: Slice, warm: set[str]) -> tuple[float, float]:
+        """The chain coordinate for a slice."""
+        return (float(sl.meta.get("_ct", 0.0)), float(sl.tokens) / (2.0 if sl.id in warm else 1.0))
 
     # -- plant / recover a fact -----------------------------------------------
     def remember(self, text: str, *, tags: dict[str, Any] | None = None) -> Slice | None:
@@ -362,7 +406,9 @@ class Session:
         sid = f"{self.id}:slice:{self._spill_seq}"
         tokens = self._count_tokens(text)
         score = self._salience(text, salience)
+        # Chain coordinate component for this slice (monotonic per encode).
         meta = dict(tags)
+        meta.setdefault("_ct", float(self._spill_seq))
         sl = Slice(
             id=sid, session=self.id, vector=np.asarray(vec, dtype=np.float32),
             text=text, tokens=int(tokens), meta=meta, score=score,
@@ -672,6 +718,7 @@ class Session:
             "index": stats["index"],
             "model": getattr(self.local_llm, "name", str(self.config.model)),
             "extended": self.extended,
+            "mpo_chain": self.mpo_chain_enabled,
         }
 
     # -- close + context manager ----------------------------------------------

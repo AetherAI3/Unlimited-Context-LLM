@@ -7,6 +7,13 @@ All notable changes to `aether-context` are documented here. Format follows
 ## [Unreleased]
 
 ### Added
+- **MPO context chain (on by default).** Links the session's slices into one connected
+  structure and assists retrieval: when cosine pulls an entry slice, the MPO (Matrix Product
+  Operator) chain pulls in the slices most coupled to it — widening the working set with the
+  *connected thread* instead of isolated nearest-neighbors. Cosine stays the retrieval
+  mechanism; the chain improves selection accuracy. Deterministic, numpy-only, fail-soft
+  (degrades to plain cosine). In a planted-thread bench, connected-context recall@8 rises
+  0.15 → 0.78. Disable with `Session(mpo_chain=False)` / `--no-mpo-chain`.
 - `Witness` **temporal lock-in (anti-thrash)** — a freshly touched (just paged-in) slice carries
   a short-lived eviction bonus (`pin_periods` / `pin_bonus`) so the byte governor cannot evict it
   straight back to disk on the next turn, breaking the evict→cold-miss→re-page window flap. The

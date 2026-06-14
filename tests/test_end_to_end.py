@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """End-to-end: the whole engine on a MockLLM, proving the pitch.
 
-This is the kill-gate property in miniature, hermetic (no GPU, no network): a planted
+This is the core property in miniature, hermetic (no GPU, no network): a planted
 **load-bearing fact** is established early in a long run, then the model produces enough
 output to blow past a deliberately small ``context_window``. WITH the engine the fact is
 **encoded into the pool and paged back**, so it stays reachable; WITHOUT the engine (a raw
