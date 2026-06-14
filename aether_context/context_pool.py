@@ -377,14 +377,21 @@ class ContextPool:
 
     # -- read ------------------------------------------------------------------
     def search(
-        self, query_vec: np.ndarray, k: int, session: str | None = None
+        self, query_vec: np.ndarray, k: int, session: str | None = None,
+        *, sources: set[str] | None = None,
     ) -> list[Slice]:
         """Top-``k`` slices by cosine similarity to ``query_vec``, highest first.
 
         If ``session`` is given the search is **scoped to that namespace** — slices from
         other sessions are invisible, so far-apart sessions never cross-contaminate (even
-        when another session has a closer vector). Returns ``[]`` for an empty pool, an
-        unknown session, or ``k <= 0``.
+        when another session has a closer vector).
+
+        If ``sources`` is given (a set like ``{"user", "tool"}``) the search is restricted to
+        slices whose ``meta["source"]`` is in the set — a **provenance filter** so a caller can
+        retrieve only trusted memory (e.g. exclude model-authored notes; see SAFETY.md). A slice
+        with no ``source`` tag is treated as source ``"user"`` (the conservative default).
+
+        Returns ``[]`` for an empty pool, an unknown session/source, or ``k <= 0``.
         """
         if k <= 0 or not self._order:
             return []
@@ -394,9 +401,9 @@ class ContextPool:
                 f"query vector has shape {query.shape}, expected {(self._dim,)}",
                 hint=f"Search with a {self._dim}-dim vector (the encoder's output dim).",
             )
-        if session is None:
+        if session is None and sources is None:
             return self._search_global(query, k)
-        return self._search_session(query, k, session)
+        return self._search_filtered(query, k, session, sources)
 
     def _search_global(self, query: np.ndarray, k: int) -> list[Slice]:
         """Unfiltered top-``k`` over every live slice (uses the resolved ANN index)."""
@@ -405,14 +412,24 @@ class ContextPool:
         pairs = self._index.search(matrix, query, k)
         return [self._slices[self._order[row]] for row, _ in pairs]
 
-    def _search_session(self, query: np.ndarray, k: int, session: str) -> list[Slice]:
-        """Top-``k`` restricted to one session via a brute-force masked dot product.
+    def _search_filtered(
+        self, query: np.ndarray, k: int, session: str | None, sources: set[str] | None,
+    ) -> list[Slice]:
+        """Top-``k`` restricted by session and/or source via a brute-force masked dot product.
 
-        The session filter is exact (a numpy mask over the live matrix), so isolation holds
-        regardless of which index backend is active — correctness never rides on the ANN.
+        Both filters are exact (a numpy mask over the live matrix), so isolation/provenance hold
+        regardless of which index backend is active — correctness never rides on the ANN. An
+        untagged slice counts as source ``"user"``.
         """
-        rows = [i for i, sid in enumerate(self._order)
-                if self._slices[sid].session == session]
+        def _ok(sid: str) -> bool:
+            sl = self._slices[sid]
+            if session is not None and sl.session != session:
+                return False
+            if sources is not None and sl.meta.get("source", "user") not in sources:
+                return False
+            return True
+
+        rows = [i for i, sid in enumerate(self._order) if _ok(sid)]
         if not rows:
             return []
         matrix = self._live_matrix()

@@ -69,6 +69,12 @@ DEFAULT_RESIDENT_K: int = 8
 _SPILL_SALIENCE_FLOOR: float = 0.30
 #: Salience for an explicitly remembered fact — high, so the witness hardens it strongly.
 _REMEMBER_SALIENCE: float = 0.95
+#: Provenance tags written to a slice's ``meta["source"]`` (see SAFETY.md). They let a caller
+#: tell user-planted memory from the model's own spilled notes and retrieve only trusted
+#: sources — the primary guard against an agent's self-authored text becoming standing policy.
+MEMORY_SOURCE_USER: str = "user"     # planted by a human / the host (high authority)
+MEMORY_SOURCE_MODEL: str = "model"   # the model's own generated spill (NOT authoritative)
+MEMORY_SOURCE_TOOL: str = "tool"     # a tool/observation result (grounding, not policy)
 #: Topic label assigned to the running reasoning region (the pager's working-set key).
 _REASONING_TOPIC: str = "reasoning"
 #: Resident in-RAM index estimate, MB per GB of reach (mirrors the README table / CLI's
@@ -347,39 +353,46 @@ class Session:
         return (float(sl.meta.get("_ct", 0.0)), float(sl.tokens) / (2.0 if sl.id in warm else 1.0))
 
     # -- plant / recover a fact -----------------------------------------------
-    def remember(self, text: str, *, tags: dict[str, Any] | None = None) -> Slice | None:
+    def remember(self, text: str, *, tags: dict[str, Any] | None = None,
+                 source: str = MEMORY_SOURCE_USER) -> Slice | None:
         """Encode ``text`` as a high-salience slice into the pool (a load-bearing fact).
 
         This is how a durable constraint is established before a long run so it survives the
-        overflow: it is encoded into the pool immediately and hardened in the witness. Returns
-        the stored :class:`Slice` (or ``None`` if encoding fails — fail-soft).
+        overflow: it is encoded into the pool immediately and hardened in the witness. The slice
+        is tagged ``meta["source"]`` (default :data:`MEMORY_SOURCE_USER` — high authority) so a
+        caller can later recall trusted memory only. Returns the stored :class:`Slice` (or
+        ``None`` if encoding fails — fail-soft).
         """
-        return self._encode_slice(text, salience=_REMEMBER_SALIENCE, tags=tags or {})
+        meta = {"source": source, **(tags or {})}
+        return self._encode_slice(text, salience=_REMEMBER_SALIENCE, tags=meta)
 
-    def recall(self, query: str, k: int = DEFAULT_RESIDENT_K) -> list[Slice]:
+    def recall(self, query: str, k: int = DEFAULT_RESIDENT_K, *,
+               sources: set[str] | None = None) -> list[Slice]:
         """Retrieve the slices nearest to ``query`` from this session's pool region.
 
         The hot path of recovery: embed ``query``, search the pool scoped to this session, and
-        return the nearest slices. Fail-soft — an encoder/search error yields ``[]`` (the run
-        continues on the model's native window).
+        return the nearest slices. Pass ``sources`` (e.g. ``{"user", "tool"}``) to retrieve only
+        trusted provenance and exclude the model's own spilled notes (see SAFETY.md). Fail-soft —
+        an encoder/search error yields ``[]`` (the run continues on the model's native window).
         """
-        return self._recall_local(query, k)
+        return self._recall_local(query, k, sources)
 
-    def _recall_local(self, query: str, k: int) -> list[Slice]:
+    def _recall_local(self, query: str, k: int,
+                      sources: set[str] | None = None) -> list[Slice]:
         try:
             qvec = self.encoder.encode(query)
         except AetherContextError as exc:
             logger.warning("recall encode failed (%s); returning no local hits", exc)
             return []
         try:
-            scoped = self.pool.search(qvec, k, session=self._scope())
+            scoped = self.pool.search(qvec, k, session=self._scope(), sources=sources)
             if scoped:
                 return scoped
             # Reopen case: a fresh Session over an existing pool dir has a new session id, so
             # the prior run's slices live under a different namespace. Fall back to a global
             # search so a disk-resident fact is still recoverable after a close + reopen.
             # (In shared mode the scoped search is already global, so this is a harmless re-run.)
-            return self.pool.search(qvec, k, session=None)
+            return self.pool.search(qvec, k, session=None, sources=sources)
         except AetherContextError as exc:
             logger.warning("recall pool search failed (%s); returning no local hits", exc)
             return []
@@ -523,7 +536,7 @@ class Session:
             if trigger_chars > 0 and len(pending) >= trigger_chars:
                 overflowed = True
                 if self._encode_slice(
-                    pending, salience=_SPILL_SALIENCE_FLOOR, tags={"kind": "spill"}
+                    pending, salience=_SPILL_SALIENCE_FLOOR, tags={"kind": "spill", "source": MEMORY_SOURCE_MODEL}
                 ):
                     spilled += 1
                 prefetch_thread = self._launch_prefetch(pending, prefetch_thread)
@@ -534,7 +547,7 @@ class Session:
         # encode the final remainder as a slice too (so the tail is recoverable).
         if pending.strip():
             if self._encode_slice(
-                pending, salience=_SPILL_SALIENCE_FLOOR, tags={"kind": "spill"}
+                pending, salience=_SPILL_SALIENCE_FLOOR, tags={"kind": "spill", "source": MEMORY_SOURCE_MODEL}
             ):
                 spilled += 1
 
@@ -624,7 +637,7 @@ class Session:
             pending += chunk
             if trigger_chars > 0 and len(pending) >= trigger_chars:
                 self._encode_slice(
-                    pending, salience=_SPILL_SALIENCE_FLOOR, tags={"kind": "spill"}
+                    pending, salience=_SPILL_SALIENCE_FLOOR, tags={"kind": "spill", "source": MEMORY_SOURCE_MODEL}
                 )
                 prefetch_thread = self._launch_prefetch(pending, prefetch_thread)
                 pending = ""
@@ -632,7 +645,7 @@ class Session:
         self._join(prefetch_thread)
         if pending.strip():
             self._encode_slice(
-                pending, salience=_SPILL_SALIENCE_FLOOR, tags={"kind": "spill"}
+                pending, salience=_SPILL_SALIENCE_FLOOR, tags={"kind": "spill", "source": MEMORY_SOURCE_MODEL}
             )
         self._fade()
 

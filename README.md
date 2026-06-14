@@ -19,8 +19,13 @@ Give your Ai superpowers with **Unlimited context for [Ollama](https://ollama.co
 > **Your context window didn't get bigger. Its *reach* did.**
 > Unlimited Context is virtual memory for an LLM. The model keeps its small window; the engine keeps a vast store on your disk and pulls the *right slice* back in while the model reasons. A small local model stays coherent across runs that would blow past any context window.
 
+> ⚠️ **Giving a model durable memory is powerful — read the safety measures first.** Real
+> concerns (runaway agents, grounding drift, an agent's own notes becoming its rules) and what
+> we do about them: **[Aether AI — Ethical & Safety Measures](SAFETY.md)**.
+
 <p align="center">
   <a href="#the-shape-of-it">The shape of it</a> ·
+  <a href="SAFETY.md">Safety</a> ·
   <a href="#the-problem">Problem</a> ·
   <a href="#how-it-works">How it works</a> ·
   <a href="#mpo-the-context-chain">MPO chain</a> ·
