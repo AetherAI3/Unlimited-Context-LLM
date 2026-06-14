@@ -33,3 +33,13 @@ ENV/
 .idea/
 .DS_Store
 Thumbs.db
+
+# API eval artifacts
+bench/.cache/
+api_eval_results.json
+api_eval_series.csv
+api_eval_plot.png
+pool_off/
+pool_on/
+pool_on_chain/
+.tmp_eval/

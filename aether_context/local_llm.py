@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
@@ -46,7 +47,7 @@ DEFAULT_CONTEXT_WINDOW = 8192
 #: Default Ollama daemon host.
 DEFAULT_OLLAMA_HOST = "http://localhost:11434"
 #: Recognised backends in a spec string.
-_BACKENDS = ("ollama", "llamacpp", "hf", "mock")
+_BACKENDS = ("ollama", "llamacpp", "hf", "mock", "openai")
 #: HTTP timeout (seconds) for Ollama requests. Generation can be slow → generous.
 _OLLAMA_TIMEOUT = 600
 #: Best-effort metadata probe timeout (seconds) — short; failure is non-fatal.
@@ -153,6 +154,8 @@ def parse_spec(spec: str) -> ModelSpec:
             return ModelSpec(backend="ollama", ref=ref)
         if head == "hf":
             return ModelSpec(backend="hf", ref=ref)
+        if head == "openai":
+            return ModelSpec(backend="openai", ref=ref)
         if head in _BACKENDS:
             return ModelSpec(backend=head, ref=ref)
         raise BackendUnavailable(
@@ -199,6 +202,8 @@ def load_model(spec: "str | LocalLLM", **kw: object) -> LocalLLM:
         return LlamaCppLLM(parsed.ref, **kw)  # type: ignore[arg-type]
     if backend == "hf":
         return HFLLM(parsed.ref, **kw)  # type: ignore[arg-type]
+    if backend == "openai":
+        return OpenAICompatLLM(parsed.ref, **kw)  # type: ignore[arg-type]
     raise BackendUnavailable(
         f"Unknown backend '{backend}'.", hint=_SPEC_HINT
     )
@@ -467,6 +472,160 @@ class OllamaLLM:
 
 
 # ---------------------------------------------------------------------------
+# OpenAICompatLLM — vendor-neutral OpenAI-compatible API (OpenRouter / OpenAI / vLLM).
+# ---------------------------------------------------------------------------
+#: OpenRouter default base URL when only OPENROUTER_API_KEY is set.
+_OPENROUTER_BASE = "https://openrouter.ai/api/v1"
+#: HTTP timeout (s) for the OpenAI-compatible adapter.
+_OPENAI_TIMEOUT = 600
+
+
+class OpenAICompatLLM:
+    """Vendor-neutral OpenAI-compatible adapter (OpenRouter / OpenAI / vLLM / …).
+
+    Implements the :class:`LocalLLM` protocol (streaming ``generate``) and adds
+    ``chat(messages, tools)`` (non-streaming, function-calling) for the eval harness's agent
+    loop. stdlib ``urllib`` only — no extra dependency. ``context_window`` is caller-provided
+    (these APIs do not report it); ``count_tokens`` is the chars/4 estimate.
+
+    Config resolution: explicit ``base_url``/``api_key`` win; else ``OPENROUTER_API_KEY``
+    (with the OpenRouter base URL); else ``OPENAI_BASE_URL``/``OPENAI_API_KEY``. The key is
+    never logged or placed in an error message.
+    """
+
+    def __init__(
+        self,
+        ref: str,
+        *,
+        base_url: Optional[str] = None,
+        api_key: Optional[str] = None,
+        context_window: Optional[int] = None,
+        model_options: Optional[dict] = None,
+    ) -> None:
+        self.name: str = ref
+        key = api_key or os.environ.get("OPENROUTER_API_KEY") or os.environ.get("OPENAI_API_KEY")
+        if base_url is None:
+            if os.environ.get("OPENROUTER_API_KEY") and not api_key:
+                base_url = _OPENROUTER_BASE
+            else:
+                base_url = os.environ.get("OPENAI_BASE_URL")
+        if not key:
+            raise BackendUnavailable(
+                "No API key for the OpenAI-compatible backend.",
+                hint="Set OPENROUTER_API_KEY (or OPENAI_API_KEY), or pass api_key=...",
+            )
+        if not base_url:
+            raise BackendUnavailable(
+                "No base_url for the OpenAI-compatible backend.",
+                hint="Set OPENROUTER_API_KEY (uses openrouter.ai), OPENAI_BASE_URL, or pass base_url=...",
+            )
+        self.base_url: str = base_url.rstrip("/")
+        self.api_key: str = key
+        self._context_window: int = context_window or DEFAULT_CONTEXT_WINDOW
+        self._model_options: dict = dict(model_options or {})
+
+    @property
+    def context_window(self) -> int:
+        return self._context_window
+
+    # -- low-level HTTP (one place; mockable) --------------------------------
+    def _open(self, req: "urllib.request.Request"):
+        return urllib.request.urlopen(req, timeout=_OPENAI_TIMEOUT)
+
+    def _request(self, payload: dict, *, stream: bool):
+        body = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            f"{self.base_url}/chat/completions",
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.api_key}",
+                "Accept": "text/event-stream" if stream else "application/json",
+            },
+            method="POST",
+        )
+        try:
+            return self._open(req)
+        except urllib.error.HTTPError as exc:
+            detail = ""
+            try:
+                detail = exc.read().decode("utf-8", errors="replace")[:300]
+            except OSError:
+                detail = ""
+            raise BackendUnavailable(
+                f"OpenAI-compatible API HTTP {exc.code} from {self.base_url}.",
+                hint=f"Check model/key/credits. Detail: {detail}",
+            ) from exc
+        except (urllib.error.URLError, OSError) as exc:
+            raise BackendUnavailable(
+                f"Could not reach the API at {self.base_url}: {exc}",
+                hint="Check the base_url and your network.",
+            ) from exc
+
+    # -- streaming generate (LocalLLM protocol) ------------------------------
+    def generate(
+        self,
+        prompt: str,
+        *,
+        system: Optional[str] = None,
+        stop: Optional[list[str]] = None,
+        max_tokens: Optional[int] = None,
+    ) -> Iterator[str]:
+        """Stream content chunks from ``/chat/completions``; reasoning deltas are ignored."""
+        messages: list[dict] = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+        payload: dict = {"model": self.name, "messages": messages, "stream": True,
+                         **self._model_options}
+        if stop:
+            payload["stop"] = list(stop)
+        if max_tokens is not None:
+            payload["max_tokens"] = int(max_tokens)
+        resp = self._request(payload, stream=True)
+        with resp:
+            for raw in resp:
+                line = raw.decode("utf-8").strip()
+                if not line or not line.startswith("data:"):
+                    continue
+                data = line[len("data:"):].strip()
+                if data == "[DONE]":
+                    break
+                try:
+                    obj = json.loads(data)
+                except json.JSONDecodeError:
+                    continue
+                delta = (obj.get("choices") or [{}])[0].get("delta") or {}
+                chunk = delta.get("content")  # delta.reasoning intentionally ignored
+                if chunk:
+                    yield chunk
+
+    # -- non-streaming tool-calling chat (eval harness) ----------------------
+    def chat(self, messages: list[dict], tools: Optional[list[dict]] = None,
+             *, max_tokens: Optional[int] = None) -> dict:
+        """Return ``{content, tool_calls, usage}`` for an OpenAI-style chat call."""
+        payload: dict = {"model": self.name, "messages": messages, "stream": False,
+                         **self._model_options}
+        if tools:
+            payload["tools"] = tools
+        if max_tokens is not None:
+            payload["max_tokens"] = int(max_tokens)
+        resp = self._request(payload, stream=False)
+        with resp:
+            obj = json.loads(resp.read().decode("utf-8"))
+        msg = (obj.get("choices") or [{}])[0].get("message") or {}
+        return {
+            "content": msg.get("content"),
+            "tool_calls": msg.get("tool_calls") or [],
+            "usage": obj.get("usage") or {},
+        }
+
+    def count_tokens(self, text: str) -> int:
+        """Estimate token count (chars/4) — these APIs expose no count endpoint."""
+        return estimate(text)
+
+
+# ---------------------------------------------------------------------------
 # LlamaCppLLM — guarded import of llama_cpp.
 # ---------------------------------------------------------------------------
 class LlamaCppLLM:
@@ -674,6 +833,7 @@ __all__ = [
     "load_model",
     "MockLLM",
     "OllamaLLM",
+    "OpenAICompatLLM",
     "LlamaCppLLM",
     "HFLLM",
     "DEFAULT_CONTEXT_WINDOW",
