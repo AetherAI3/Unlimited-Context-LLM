@@ -5,7 +5,7 @@ when a version tag is pushed. The release is built and uploaded by
 [`.github/workflows/publish.yml`](.github/workflows/publish.yml) using **PyPI OIDC Trusted
 Publishing** — there is **no API token** stored in the repo or in GitHub secrets.
 
-Source of truth for the repo: <https://github.com/DBarr3/Unlimited-Context>
+Source of truth for the repo: <https://github.com/DBarr3/Unlimited-Context-LLM>
 
 ---
 
@@ -23,7 +23,8 @@ pushing the very first tag, or the publish job fails.
 3. Enter exactly:
    - **PyPI project name:** `aether-context`
    - **Owner:** the GitHub org/user that owns the repo **at publish time** (currently `DBarr3`)
-   - **Repository name:** `Unlimited-Context`
+   - **Repository name:** `Unlimited-Context-LLM` (the repo's exact current name — OIDC matches
+     this literally and does **not** follow GitHub's rename redirect, so it must be exact)
    - **Workflow name:** `publish.yml`
    - **Environment name:** `pypi`
 

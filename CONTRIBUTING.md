@@ -15,8 +15,8 @@
 You need **Python 3.10–3.13** and `git`. That's it. No GPU, no API key, no model download.
 
 ```bash
-git clone https://github.com/DBarr3/Unlimited-Context.git
-cd Unlimited-Context
+git clone https://github.com/DBarr3/Unlimited-Context-LLM.git
+cd Unlimited-Context-LLM
 python -m venv .venv
 
 # activate the venv

@@ -14,7 +14,7 @@ issue for a suspected vulnerability. aetherai@aethersystems.net
 Use GitHub's private vulnerability reporting via the repository's **Security**
 tab ("Report a vulnerability"):
 
-https://github.com/DBarr3/Unlimited-Context/security/advisories/new
+https://github.com/DBarr3/Unlimited-Context-LLM/security/advisories/new
 
 We aim to acknowledge new reports within a few days (best effort). We will work
 with you to validate the issue, and fixes are coordinated and prepared before

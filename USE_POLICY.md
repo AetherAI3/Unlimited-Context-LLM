@@ -10,6 +10,11 @@ and [`SAFETY.md`](SAFETY.md) and [`SECURITY.md`](SECURITY.md), which cover the p
 posture and vulnerability reporting. Where this policy speaks to *how you may use and represent the
 project*, the `LICENSE` speaks to *your copyright rights in the code*; both apply.
 
+> **Acceptance.** By using, running, modifying, or redistributing the project — including any use
+> under the Apache-2.0 license — you acknowledge and agree to this Acceptable Use Policy. Everyone
+> who uses the project or operates under the Apache-2.0 license is bound by these terms. If you do
+> not agree, do not use the project.
+
 ---
 
 ## Our commitment
@@ -94,6 +99,29 @@ where they are reviewed and maintained as part of the project rather than forked
 
 ---
 
+## Redistribution
+
+If you redistribute the project — in original or modified form — the following are **required**, not
+optional:
+
+- **No redistribution under our name.** You may not redistribute the project, or any modified
+  version, under the name "Aether AI", "Aether", or "Unlimited Context", or in any way that presents
+  it as an official Aether AI distribution. We actively monitor for, and will pursue and sue over,
+  anything redistributed directly under the Aether AI name.
+- **Every redistributed instance must be legally attributable.** Any redistribution must be tagged
+  to an identifiable legal entity — a registered business, LLC, or named individual responsible for
+  that distribution — so that every distributed instance traces to an accountable party. Anonymous
+  or untraceable redistribution is not permitted.
+- **Every redistributed instance must credit and cite the source.** You must retain the
+  [`LICENSE`](LICENSE) and [`NOTICE.md`](NOTICE.md), credit Aether AI as the origin, and cite the
+  project per [`CITATION.cff`](CITATION.cff). Credit and citation are mandatory in every redistributed
+  copy.
+- **Undisclosed redistribution is unauthorized.** Direct redistribution, or modified redistribution,
+  carried out without Aether AI's knowledge and without meeting the conditions above is unauthorized
+  and unwarranted, and will be treated as a violation of this policy.
+
+---
+
 ## Trademarks
 
 The Apache-2.0 license grants rights in the **code**, not in our **name**. "Aether", "Aether AI",
@@ -112,6 +140,21 @@ use complies with this policy and with all applicable laws. **Aether AI accepts 
 accountability for any use of the project, or for any consequences, loss, or harm arising from it**,
 including any use that violates this policy. Responsibility for a prohibited or unlawful use rests
 entirely with the person or entity carrying it out.
+
+---
+
+## Relationship to the license
+
+This policy does not purport to revoke or narrow the copyright permissions that the
+[Apache-2.0 license](LICENSE) grants you in the **code**. It sets the terms on which Aether AI makes
+the project, its name, its trademarks, and its community available, and the uses Aether AI considers
+acceptable. Some conditions stated here — for example, citation, attribution of a redistribution to
+an identifiable legal entity, and prior disclosure of redistribution — are conditions of acceptable
+use and of any use of the Aether AI name and marks; they operate alongside the license, not as a
+restriction on your underlying copyright rights in the code. The mandatory copyright conditions are,
+and remain, those in the Apache-2.0 license (notice and attribution retention, marking changed
+files). If any provision of this policy is held unenforceable, the remaining provisions continue in
+full effect.
 
 ---
 

@@ -21,9 +21,10 @@ Give your Ai superpowers with **Unlimited context for [Ollama](https://ollama.co
 
 > ⚠️ **Giving a model durable memory is powerful — read the safety measures first.** Real
 > concerns (runaway agents, grounding drift, an agent's own notes becoming its rules) and what
-> we do about them: **[Aether AI — Ethical & Safety Measures](SAFETY.md)**. The terms the project
-> is released under — open under Apache-2.0, with a short acceptable-use policy:
-> **[Acceptable Use Policy](USE_POLICY.md)**.
+> we do about them: **[Aether AI — Ethical & Safety Measures](SAFETY.md)**. The project is open
+> under Apache-2.0 and governed by the **[Acceptable Use Policy](USE_POLICY.md)** — these are not
+> recommendations. Anyone using the project must comply with its terms, and by using the project you
+> already agree to and are bound by them.
 
 <p align="center">
   <a href="#the-shape-of-it">The shape of it</a> ·
@@ -78,7 +79,7 @@ It's **virtual memory, for attention.** Map it to an OS and it clicks:
 | RAM | the **resident window** the model sees now (small, fast) |
 | Disk | the **context pool** — your encoded memory (~5 GB ≈ ~1B tokens) |
 | Pager | the **slice loader** — prefetches the next slice from what the model is reasoning about *right now* |
-| Page-replacement | the **witnesses (+/−)** — useful slices *stay*, stale ones *fade*, anything relevant again comes back |
+| Page-replacement | the **retention policy** — useful slices *stay*, stale ones *fade*, anything relevant again comes back |
 
 All of it runs while the model generates, so reaching the pool adds no wall-clock. → full explainer in [`docs/how-it-works.md`](docs/how-it-works.md).
 
@@ -86,9 +87,9 @@ All of it runs while the model generates, so reaching the pool adds no wall-cloc
 
 Plain semantic search returns isolated nearest-neighbors — the single closest slices, ripped out of the thread they belonged to. Recall a fact and you often miss the three slices around it that made it make sense.
 
-The **MPO (Matrix Product Operator) context chain** fixes that. It links the session's slices into one connected structure, so when cosine pulls an entry slice, the chain **pulls in the slices most coupled to it** — widening the working set with the *connected thread*, not stray hits. Cosine is still the retrieval mechanism; the MPO **assists** it.
+The **MPO context chain** fixes that. It links the session's slices into one connected structure, so when cosine pulls an entry slice, the chain **pulls in the slices most coupled to it** — widening the working set with the *connected thread*, not stray hits. Cosine is still the retrieval mechanism; the chain **assists** it.
 
-A compact operator (`c_t`) scores which candidates belong to the same thread as the hit, so the slices pulled in are genuinely connected — not just lexically nearest. It's deterministic, numpy-only linear algebra — no training, fully local, and purely additive (it only ever *adds* connected context; on any hiccup it falls back to plain cosine).
+The chain is **Aether-tuned, deterministic, and fully local** — no training, no network. It's purely **additive**: it only ever *adds* connected context, never blocks or replaces a hit, and on any hiccup it falls back cleanly to plain cosine.
 
 In a planted-thread benchmark, this lifts connected-context recall from **0.15 (cosine alone) to 0.78** — over 5× more of the right thread in the window. On by default:
 
@@ -146,7 +147,7 @@ Rough ballpark — assuming a busy coding agent encodes ~300K–1M keep-worthy t
 
 For color: 5 GB of reach ≈ ~100M lines of code, or a shelf of ~8,000 books — you won't fill it in one sitting.
 
-<sub>\* Rough order of magnitude. Because the witnesses fade stale slices, the pool never hard-stops anyway — it just keeps what's relevant. Run a build as long as you want; it won't lose the plot. The per-session RAM math is in [RAM footprint](#ram-footprint) below.</sub>
+<sub>\* Rough order of magnitude. Because the retention policy fades stale slices, the pool never hard-stops anyway — it just keeps what's relevant. Run a build as long as you want; it won't lose the plot. The per-session RAM math is in [RAM footprint](#ram-footprint) below.</sub>
 
 ## Running many sessions
 
@@ -252,7 +253,7 @@ If Unlimited Context helps your work, please cite it. Built and maintained by **
   author       = {Barrante, Brandon},
   organization = {Aether AI},
   year         = {2026},
-  url          = {https://github.com/DBarr3/Unlimited-Context},
+  url          = {https://github.com/DBarr3/Unlimited-Context-LLM},
   license      = {Apache-2.0}
 }
 ```
