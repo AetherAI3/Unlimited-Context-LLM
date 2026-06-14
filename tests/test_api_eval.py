@@ -53,3 +53,17 @@ def test_dry_run_produces_results(tmp_path):
         assert len(arm["series"]) > 0  # per-turn series for the graph
     assert (tmp_path / "api_eval_results.json").exists()
     assert (tmp_path / "api_eval_series.csv").exists()
+
+
+def test_dry_run_thread_task(tmp_path):
+    res = api_eval.run_eval(api_eval.Config(
+        dry_run=True, issues_n=16, turns=8, arms=("off", "on_chain"),
+        task="thread", out_dir=tmp_path,
+    ), corpus=_issues(16))
+    for arm in res["arms"].values():
+        assert "coherence" in arm and "series" in arm and len(arm["series"]) > 0
+
+
+def test_thread_score():
+    assert api_eval._thread_score("issues 1, 2, 3", {1, 2, 3, 4}) == 0.75
+    assert api_eval._thread_score("none", set()) == 0.0

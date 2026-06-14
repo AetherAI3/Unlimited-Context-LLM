@@ -43,3 +43,7 @@ pool_off/
 pool_on/
 pool_on_chain/
 .tmp_eval/
+
+# throwaway live-run wrapper (handles local TLS proxy; reads key from env)
+_run_eval_live.py
+runs/

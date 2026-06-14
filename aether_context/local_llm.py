@@ -605,6 +605,9 @@ class OpenAICompatLLM:
              *, max_tokens: Optional[int] = None) -> dict:
         """Return ``{content, tool_calls, usage}`` for an OpenAI-style chat call."""
         payload: dict = {"model": self.name, "messages": messages, "stream": False,
+                         # Ask OpenRouter to report the real charged cost + cached-token detail
+                         # in ``usage`` (ignored by APIs that don't support the field).
+                         "usage": {"include": True},
                          **self._model_options}
         if tools:
             payload["tools"] = tools

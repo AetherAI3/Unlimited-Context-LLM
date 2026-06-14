@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import time
 import urllib.request
 from dataclasses import dataclass, field
@@ -122,10 +123,19 @@ class IssueTools:
 # Cost
 # ---------------------------------------------------------------------------
 def cost_usd(usage: dict, *, price_in: float, price_out: float) -> float:
-    """USD for one call: (prompt_tokens*price_in + completion_tokens*price_out) per 1M."""
+    """USD for one call. Prefers OpenRouter's real charged ``usage.cost`` (cache-accurate);
+    falls back to (prompt_tokens*price_in + completion_tokens*price_out) per 1M."""
+    if usage.get("cost") is not None:
+        return float(usage["cost"])
     pin = float(usage.get("prompt_tokens", 0)) / 1e6 * price_in
     pout = float(usage.get("completion_tokens", 0)) / 1e6 * price_out
     return pin + pout
+
+
+def cached_tokens(usage: dict) -> int:
+    """Cached prompt tokens reported by the API (0 if not reported)."""
+    det = usage.get("prompt_tokens_details") or {}
+    return int(det.get("cached_tokens", 0) or 0)
 
 
 # ---------------------------------------------------------------------------
@@ -142,7 +152,18 @@ class Config:
     price_in: float = 0.3
     price_out: float = 1.2
     max_calls: int = 400
+    #: Hard global spend cap (USD) across ALL arms — the run halts the instant it is reached.
+    max_usd: float = 25.0
+    #: A single call costing more than this aborts the run (cost-anomaly kill switch).
+    cost_spike_usd: float = 0.50
+    #: After warmup, an arm's coherence below this is flagged (observer signal; does not stop).
+    coherence_floor: float = 0.0
+    #: Answered turns before the coherence flag is allowed to fire.
+    coherence_warmup: int = 5
     judge: bool = False
+    #: "recall" = single-fact label recall (isolates memory). "thread" = list ALL issues with a
+    #: given label (isolates the MPO chain's connected-context pull).
+    task: str = "recall"
     dry_run: bool = False
     out_dir: Path = field(default_factory=lambda: Path("."))
     cache_dir: Path = field(default_factory=lambda: Path("bench/.cache"))
@@ -189,6 +210,18 @@ def _coherent(answer: str, issue: dict) -> bool:
     return _label_of(issue).lower() in answer.lower()
 
 
+def _nums(text: str) -> set:
+    """Issue numbers mentioned in ``text`` (for thread set-recall scoring)."""
+    return {int(x) for x in re.findall(r"\d+", text or "")}
+
+
+def _thread_score(answer: str, truth_nums: set) -> float:
+    """Set-recall: fraction of the true thread members the answer lists (0..1)."""
+    if not truth_nums:
+        return 0.0
+    return len(_nums(answer) & truth_nums) / len(truth_nums)
+
+
 def _truncate(messages: list[dict], window_tokens: int) -> list[dict]:
     """Keep system + a tail of messages whose total est. tokens fit ~window (chars/4)."""
     budget = window_tokens
@@ -203,11 +236,25 @@ def _truncate(messages: list[dict], window_tokens: int) -> list[dict]:
     return head + tail
 
 
-def _run_arm(arm: str, cfg: Config, corpus: list[dict], chat_obj) -> dict:
-    tools = IssueTools(corpus)
+def _run_arm(arm: str, cfg: Config, corpus: list[dict], chat_obj, budget: dict) -> dict:
+    # Only labeled issues are usable ground truth; build a read schedule + recall schedule.
+    labeled = [i for i in corpus if i.get("labels")]
+    work = labeled or corpus
+    read_n = max(1, min(len(work), cfg.turns // 2))   # first half: read; second half: recall
+    read_set = work[:read_n]
+    # Thread task: labels of the read set with >=2 members (a connected "thread" to recall).
+    label_members: dict[str, list[int]] = {}
+    for it in read_set:
+        label_members.setdefault(_label_of(it), []).append(int(it["number"]))
+    thread_labels = [lab for lab, mem in label_members.items()
+                     if len(mem) >= 2 and lab != "none"] or list(label_members)
+    tools = IssueTools(read_set)
     chat = chat_obj(tools) if cfg.dry_run else chat_obj
-    sys_prompt = ("You triage GitHub issues. Use lookup_issue to read an issue, then state its "
-                  "primary label as 'issue <n> label: <label>'. Be terse.")
+    sys_prompt = (
+        "You are triaging GitHub issues over a long session. On a READ turn, call lookup_issue "
+        "to read the issue and note its labels. On a RECALL turn, answer from memory — state the "
+        "primary label of the named earlier issue WITHOUT calling any tool. Be terse: reply "
+        "'issue <n> label: <label>'.")
     session: Optional[Session] = None
     encoder = StaticEncoder(dim=256)
     if arm in ("on", "on_chain"):
@@ -215,71 +262,143 @@ def _run_arm(arm: str, cfg: Config, corpus: list[dict], chat_obj) -> dict:
                           context_window=cfg.window, mpo_chain=(arm == "on_chain"))
     transcript: list[dict] = [{"role": "system", "content": sys_prompt}]
     series: list[dict] = []
+    flags: list[str] = []
+    halted: Optional[str] = None
     calls = 0
     total_cost = 0.0
-    correct = 0
+    total_cached = 0
+    correct = 0.0   # float: 1.0/0.0 per recall, or set-recall fraction for the thread task
     asked = 0
 
+    max_steps = 4  # tool-resolution steps allowed per turn
     for turn in range(1, cfg.turns + 1):
         if calls >= cfg.max_calls:
+            halted = "max_calls"
             break
-        focus_issue = corpus[(turn - 1) % len(corpus)]
-        user = f"Issue {focus_issue['number']}: state its primary label."
+        if budget["spent"] >= cfg.max_usd:
+            halted = "budget_cap"
+            break
+
+        # Phase: read the first read_n issues, then recall early ones (out of the window by now).
+        is_recall = turn > read_n
+        focus_issue = read_set[turn - 1] if not is_recall else \
+            read_set[(turn - read_n - 1) % read_n]
+        thread_label = thread_labels[(turn - read_n - 1) % len(thread_labels)] \
+            if is_recall and cfg.task == "thread" else None
+
+        if not is_recall:
+            user = (f"READ turn. Look up issue #{focus_issue['number']} and note its primary "
+                    f"label for later.")
+            qkey = f"issue {focus_issue['number']} label"
+        elif cfg.task == "thread":
+            user = (f"RECALL turn. From memory, list ALL issue numbers you read that had the "
+                    f"label '{thread_label}'. Reply with comma-separated numbers only. Do NOT "
+                    f"look anything up.")
+            qkey = f"label {thread_label} issues"
+        else:  # recall (single fact)
+            user = (f"RECALL turn. Earlier you read issue #{focus_issue['number']}. From memory, "
+                    f"state its primary label. Do NOT look it up again.")
+            qkey = f"issue {focus_issue['number']} label"
+
+        # Base context for this turn, per arm.
         if session is not None:
-            qvec = encoder.encode(user)
+            qvec = encoder.encode(qkey)
             recalled = session._cold_retrieve(session._key(), qvec, 6)
-            ctx = "\n".join(f"[mem] {s.text}" for s in recalled)
-            messages = [transcript[0], {"role": "system", "content": f"Working memory:\n{ctx}"},
-                        {"role": "user", "content": user}]
+            ctx = "\n".join(f"[mem] {s.text}" for s in recalled) or "(empty)"
+            convo = [transcript[0], {"role": "system", "content": f"Working memory:\n{ctx}"},
+                     {"role": "user", "content": user}]
         else:  # OFF: full transcript truncated to the window
-            messages = _truncate(transcript + [{"role": "user", "content": user}], cfg.window)
+            convo = _truncate(transcript + [{"role": "user", "content": user}], cfg.window)
 
-        t0 = time.monotonic()
-        out = chat.chat(messages, tools=IssueTools.TOOLS_SCHEMA)
-        latency = time.monotonic() - t0
-        calls += 1
-        total_cost += cost_usd(out.get("usage", {}), price_in=cfg.price_in, price_out=cfg.price_out)
+        answer: Optional[str] = None
+        turn_latency = 0.0
+        # Inner agentic loop: let the model call tools and then answer (OpenAI tool format).
+        for _step in range(max_steps):
+            if calls >= cfg.max_calls or budget["spent"] >= cfg.max_usd:
+                halted = halted or ("max_calls" if calls >= cfg.max_calls else "budget_cap")
+                break
+            t0 = time.monotonic()
+            out = chat.chat(convo, tools=IssueTools.TOOLS_SCHEMA)
+            turn_latency += time.monotonic() - t0
+            calls += 1
+            usage = out.get("usage", {}) or {}
+            call_cost = cost_usd(usage, price_in=cfg.price_in, price_out=cfg.price_out)
+            total_cost += call_cost
+            budget["spent"] += call_cost
+            total_cached += cached_tokens(usage)
+            if call_cost > cfg.cost_spike_usd:  # cost-anomaly kill switch
+                flags.append(f"cost_spike turn={turn} ${call_cost:.4f}")
+                halted = "cost_spike"
+                break
 
-        tcs = out.get("tool_calls") or []
-        for tc in tcs:
-            fn = tc.get("function", {})
-            try:
-                args = json.loads(fn.get("arguments") or "{}")
-            except json.JSONDecodeError:
-                args = {}
-            result = tools.dispatch(fn.get("name", ""), args)
-            rtext = f"tool {fn.get('name')} -> {json.dumps(result)[:400]}"
+            tcs = out.get("tool_calls") or []
+            if tcs:
+                # Append the assistant tool-call turn, then each tool result (OpenAI format).
+                convo.append({"role": "assistant", "content": out.get("content"),
+                              "tool_calls": tcs})
+                for tc in tcs:
+                    fn = tc.get("function", {})
+                    try:
+                        args = json.loads(fn.get("arguments") or "{}")
+                    except json.JSONDecodeError:
+                        args = {}
+                    result = tools.dispatch(fn.get("name", ""), args)
+                    rjson = json.dumps(result)[:600]
+                    convo.append({"role": "tool", "tool_call_id": tc.get("id", ""),
+                                  "content": rjson})
+                    if session is not None:
+                        session.remember(
+                            f"issue #{focus_issue['number']} {fn.get('name')}: {rjson}")
+                continue
+            answer = out.get("content")
+            break
+
+        if halted == "cost_spike":
+            break
+
+        # On a READ turn, record what was read (engine remembers it for later recall). On a
+        # RECALL turn, score the answer against the issue's real primary label (ground truth).
+        if not is_recall:
+            note = f"issue #{focus_issue['number']} primary label: {_label_of(focus_issue)}"
             transcript.append({"role": "user", "content": user})
-            transcript.append({"role": "assistant", "content": rtext})
+            transcript.append({"role": "assistant", "content": answer or note})
             if session is not None:
-                session.remember(rtext)
-
-        answer = out.get("content")
-        if answer and not tcs:
+                session.remember(note)  # the durable fact the recall turn must retrieve
+        else:
             asked += 1
-            correct += int(_coherent(answer, focus_issue))
+            if cfg.task == "thread":
+                turn_score = _thread_score(answer or "", set(label_members.get(thread_label, [])))
+            else:
+                turn_score = float(_coherent(answer or "", focus_issue))
+            correct += turn_score
             transcript.append({"role": "user", "content": user})
-            transcript.append({"role": "assistant", "content": answer})
-            if session is not None:
-                session.remember(answer)
+            transcript.append({"role": "assistant", "content": answer or "(no answer)"})
 
+        coher = round(correct / asked, 3) if asked else 0.0
         series.append({
-            "turn": turn, "cum_cost": round(total_cost, 6), "latency": round(latency, 3),
+            "turn": turn, "cum_cost": round(total_cost, 6), "latency": round(turn_latency, 3),
             "tool_calls": tools.calls, "redundant": tools.redundant,
-            "answered": asked, "correct": correct,
-            "coherence": round(correct / asked, 3) if asked else 0.0,
-            "prompt_tokens": int(out.get("usage", {}).get("prompt_tokens", 0)),
+            "answered": asked, "correct": correct, "coherence": coher,
+            "cached_tokens_cum": total_cached,
         })
+        if asked >= cfg.coherence_warmup and coher < cfg.coherence_floor:
+            flags.append(f"low_coherence turn={turn} {coher}")
+        if halted:
+            break
 
     if session is not None:
         session.close()
     return {
         "cost_usd": round(total_cost, 6),
+        "cached_tokens": total_cached,
+        "calls": calls,
         "tool_calls": tools.calls,
         "redundant_tool_calls": tools.redundant,
         "answered": asked,
-        "correct": correct,
+        "correct": round(correct, 2),
         "coherence": round(correct / asked, 3) if asked else 0.0,
+        "halted": halted,
+        "flags": flags,
         "series": series,
     }
 
@@ -300,10 +419,21 @@ def run_eval(cfg: Config, corpus: Optional[list[dict]] = None) -> dict:
         corpus = (_synthetic_corpus(cfg.issues_n) if cfg.dry_run
                   else fetch_issues(cfg.repo, cfg.issues_n, cfg.cache_dir))
     chat_obj = _MockChat if cfg.dry_run else _make_live_chat(cfg)
+    budget = {"spent": 0.0}  # shared global spend across all arms (hard $ cap)
     results: dict[str, Any] = {"model": cfg.model, "repo": cfg.repo,
-                               "issues": len(corpus), "arms": {}}
+                               "issues": len(corpus), "max_usd": cfg.max_usd, "arms": {}}
     for arm in cfg.arms:
-        results["arms"][arm] = _run_arm(arm, cfg, corpus, chat_obj)
+        if budget["spent"] >= cfg.max_usd:
+            results["arms"][arm] = {"halted": "budget_cap", "skipped": True,
+                                    "cost_usd": 0.0, "coherence": 0.0, "tool_calls": 0,
+                                    "flags": ["skipped: global budget reached"], "series": []}
+            continue
+        arm_res = _run_arm(arm, cfg, corpus, chat_obj, budget)
+        results["arms"][arm] = arm_res
+        if arm_res.get("halted") == "cost_spike":
+            results["aborted"] = "cost_spike"
+            break
+    results["total_cost_usd"] = round(budget["spent"], 6)
     cfg.out_dir.mkdir(parents=True, exist_ok=True)
     (cfg.out_dir / "api_eval_results.json").write_text(json.dumps(results, indent=2),
                                                        encoding="utf-8")
@@ -317,11 +447,12 @@ def _make_live_chat(cfg: Config):
 
 
 def _write_csv(path: Path, results: dict) -> None:
-    rows = ["arm,turn,cum_cost,coherence,tool_calls,redundant,prompt_tokens,latency"]
+    rows = ["arm,turn,cum_cost,coherence,tool_calls,redundant,cached_tokens_cum,latency"]
     for arm, data in results["arms"].items():
-        for s in data["series"]:
+        for s in data.get("series", []):
             rows.append(f"{arm},{s['turn']},{s['cum_cost']},{s['coherence']},"
-                        f"{s['tool_calls']},{s['redundant']},{s['prompt_tokens']},{s['latency']}")
+                        f"{s['tool_calls']},{s['redundant']},"
+                        f"{s.get('cached_tokens_cum', 0)},{s['latency']}")
     path.write_text("\n".join(rows) + "\n", encoding="utf-8")
 
 
@@ -355,11 +486,17 @@ def _plot(results: dict, out_dir: Path) -> Optional[Path]:
 
 def _print_table(results: dict) -> None:
     print(f"\nmodel={results['model']} repo={results['repo']} issues={results['issues']}")
-    print(f"{'arm':<10}{'cost$':>10}{'tools':>8}{'redund':>8}{'coher':>8}{'correct':>9}")
+    print(f"total spend ${results.get('total_cost_usd', 0):.4f} / cap ${results.get('max_usd', 0):.2f}"
+          + (f"   ABORTED: {results['aborted']}" if results.get("aborted") else ""))
+    print(f"{'arm':<10}{'cost$':>10}{'tools':>8}{'redund':>8}{'coher':>8}"
+          f"{'correct':>9}{'halted':>12}")
     for arm, d in results["arms"].items():
-        print(f"{arm:<10}{d['cost_usd']:>10.4f}{d['tool_calls']:>8}"
-              f"{d['redundant_tool_calls']:>8}{d['coherence']:>8.3f}"
-              f"{str(d['correct']) + '/' + str(d['answered']):>9}")
+        outcome = f"{d.get('correct', 0)}/{d.get('answered', 0)}"
+        print(f"{arm:<10}{d.get('cost_usd', 0):>10.4f}{d.get('tool_calls', 0):>8}"
+              f"{d.get('redundant_tool_calls', 0):>8}{d.get('coherence', 0):>8.3f}"
+              f"{outcome:>9}{str(d.get('halted') or '-'):>12}")
+        for fl in d.get("flags", []):
+            print(f"           ⚠ {fl}")
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -371,9 +508,17 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--turns", type=int, default=40)
     p.add_argument("--window", type=int, default=2048)
     p.add_argument("--arms", default="off,on_chain", help="comma list: off,on,on_chain")
+    p.add_argument("--task", default="recall", choices=("recall", "thread"),
+                   help="recall = single-fact memory; thread = list all issues with a label "
+                        "(isolates the MPO chain's connected-context pull).")
     p.add_argument("--price-in", type=float, default=0.3, help="$/1M prompt tokens")
     p.add_argument("--price-out", type=float, default=1.2, help="$/1M completion tokens")
     p.add_argument("--max-calls", type=int, default=400)
+    p.add_argument("--max-usd", type=float, default=25.0, help="hard global spend cap (USD)")
+    p.add_argument("--cost-spike-usd", type=float, default=0.50,
+                   help="a single call above this aborts the run")
+    p.add_argument("--coherence-floor", type=float, default=0.0,
+                   help="flag (don't stop) when an arm's coherence drops below this after warmup")
     p.add_argument("--out", default=".")
     p.add_argument("--plot", action="store_true")
     p.add_argument("--dry-run", action="store_true")
@@ -387,6 +532,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     cfg = Config(model=a.model, repo=a.repo, issues_n=a.issues, turns=a.turns, window=a.window,
                  arms=tuple(x.strip() for x in a.arms.split(",") if x.strip()),
                  price_in=a.price_in, price_out=a.price_out, max_calls=a.max_calls,
+                 max_usd=a.max_usd, cost_spike_usd=a.cost_spike_usd,
+                 coherence_floor=a.coherence_floor, task=a.task,
                  dry_run=a.dry_run, out_dir=Path(a.out))
     results = run_eval(cfg)
     _print_table(results)
