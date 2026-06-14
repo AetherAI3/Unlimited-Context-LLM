@@ -21,11 +21,14 @@ Give your Ai superpowers with **Unlimited context for [Ollama](https://ollama.co
 
 > ⚠️ **Giving a model durable memory is powerful — read the safety measures first.** Real
 > concerns (runaway agents, grounding drift, an agent's own notes becoming its rules) and what
-> we do about them: **[Aether AI — Ethical & Safety Measures](SAFETY.md)**.
+> we do about them: **[Aether AI — Ethical & Safety Measures](SAFETY.md)**. The terms the project
+> is released under — open under Apache-2.0, with a short acceptable-use policy:
+> **[Acceptable Use Policy](USE_POLICY.md)**.
 
 <p align="center">
   <a href="#the-shape-of-it">The shape of it</a> ·
   <a href="SAFETY.md">Safety</a> ·
+  <a href="USE_POLICY.md">Use policy</a> ·
   <a href="#the-problem">Problem</a> ·
   <a href="#how-it-works">How it works</a> ·
   <a href="#mpo-the-context-chain">MPO chain</a> ·
