@@ -63,46 +63,6 @@ That's it. A 5 GB pool gives a small model ~1.16B tokens of reach — about **9,
 
 ---
 
-## The proof
-
-Not a synthetic micro-benchmark — a **real, paid, end-to-end run.** A reasoning model
-(`deepseek-v4-pro`, via OpenRouter) driven through a **40-turn agent session that overflows its
-window** (2,000-token window, 60 real `microsoft/vscode` issues), measured **engine off vs on** —
-one live run, **$0.19**, 2026-06-14.
-
-- **The model stops forgetting.** Recall of early facts after they fall out of the window:
-  **0.15 → 1.00.** The baseline drifts and forgets; the engine holds every early fact — zero drift.
-- **Failure turns into success on the real work.** Tasks completed correctly: **3 / 20 → 20 / 20.**
-  The job is only done right *with* the engine.
-- **Cheaper, not just better.** **−24%** total cost, **−54%** in the back half — the engine sends a
-  compact recalled slice instead of dragging the whole transcript into every call.
-
-<p align="center">
-  <img alt="Cumulative cost and recall coherence vs turn — engine off vs on" width="780"
-       src="docs/benchmarks/artifacts/2026-06-14-deepseek-v4-pro/api_eval_plot.png">
-</p>
-
-| Metric | Off (baseline) | On (engine) | Change |
-|---|:---:|:---:|:---:|
-| **Recall coherence** (early facts still correct) | 0.15 | **1.00** | **6.7×** |
-| **Work outcome** (tasks done right) | 3 / 20 | **20 / 20** | **3 → 20** |
-| **Cost — full session** | $0.0711 | **$0.0542** | **−24%** |
-| **Cost — back half (recall phase)** | $0.00117/turn | **$0.00053/turn** | **−54%** |
-
-**Committed data:** [full write-up](docs/benchmarks/2026-06-14-deepseek-v4-pro-session-eval.md) ·
-[raw artifacts](docs/benchmarks/artifacts/2026-06-14-deepseek-v4-pro/) (`api_eval_results.json`,
-`api_eval_series.csv`, `api_eval_plot.png`, `RESULTS.md`) · reproduce with
-`python -m bench.api_eval --model deepseek/deepseek-v4-pro --repo microsoft/vscode --arms off,on,on_chain --plot`
-
-<sub>**Scope, honestly:** this measures the **engine** (retrieve-on-overflow memory), not the MPO
-chain — on this single-fact recall task the chain **ties** plain recall (both 1.00); its multi-slice
-edge is **synthetic-only so far** (`bench/chain_recall.py`: connected-context recall 0.15 → 0.78),
-with the live `thread` run **pending**, not yet claimed. The 2,000-token window is deliberately tiny
-to force overflow, so a realistic window shows a smaller (still real) gain. N = 20 recall turns,
-single run.</sub>
-
----
-
 <div align="center">
 
 ## The problem
@@ -228,6 +188,49 @@ Derived, not vibes:
 How those numbers come out: ~2.2 KB per slice (a 256-dim vector + compressed text + metadata) ÷ 512 tokens per slice → **~455K slices/GB → ~233M tokens of reach per GB**. So `reach ≈ pool_GB × 233M`. 5 GB is the floor; bump anytime with `aether-context --pool 20`.
 
 > **Honest:** that's encoded **reach**, retrieved in slices — not a bigger attention window, and it rides on retrieval hit rate. A bigger pool buys more reachable codebase/corpus *per session* — not more concurrent sessions (those are RAM-bound, ~30 on 8 GB either way).
+
+---
+
+
+## The proof
+
+Not a synthetic micro-benchmark — a **real, paid, end-to-end run.** A reasoning model
+(`deepseek-v4-pro`, via OpenRouter) driven through a **40-turn agent session that overflows its
+window** (2,000-token window, 60 real `microsoft/vscode` issues), measured **engine off vs on** —
+one live run, **$0.19**, 2026-06-14.
+
+- **The model stops forgetting.** Recall of early facts after they fall out of the window:
+  **0.15 → 1.00.** The baseline drifts and forgets; the engine holds every early fact — zero drift.
+- **Failure turns into success on the real work.** Tasks completed correctly: **3 / 20 → 20 / 20.**
+  The job is only done right *with* the engine.
+- **Cheaper, not just better.** **−24%** total cost, **−54%** in the back half — the engine sends a
+  compact recalled slice instead of dragging the whole transcript into every call.
+
+<p align="center">
+  <img alt="Cumulative cost and recall coherence vs turn — engine off vs on" width="780"
+       src="docs/benchmarks/artifacts/2026-06-14-deepseek-v4-pro/api_eval_plot.png">
+</p>
+
+| Metric | Off (baseline) | On (engine) | Change |
+|---|:---:|:---:|:---:|
+| **Recall coherence** (early facts still correct) | 0.15 | **1.00** | **6.7×** |
+| **Work outcome** (tasks done right) | 3 / 20 | **20 / 20** | **3 → 20** |
+| **Cost — full session** | $0.0711 | **$0.0542** | **−24%** |
+| **Cost — back half (recall phase)** | $0.00117/turn | **$0.00053/turn** | **−54%** |
+
+**Committed data:** [full write-up](docs/benchmarks/2026-06-14-deepseek-v4-pro-session-eval.md) ·
+[raw artifacts](docs/benchmarks/artifacts/2026-06-14-deepseek-v4-pro/) (`api_eval_results.json`,
+`api_eval_series.csv`, `api_eval_plot.png`, `RESULTS.md`) · reproduce with
+`python -m bench.api_eval --model deepseek/deepseek-v4-pro --repo microsoft/vscode --arms off,on,on_chain --plot`
+
+<sub>**Scope, honestly:** this measures the **engine** (retrieve-on-overflow memory), not the MPO
+chain — on this single-fact recall task the chain **ties** plain recall (both 1.00); its multi-slice
+edge is **synthetic-only so far** (`bench/chain_recall.py`: connected-context recall 0.15 → 0.78),
+with the live `thread` run **pending**, not yet claimed. The 2,000-token window is deliberately tiny
+to force overflow, so a realistic window shows a smaller (still real) gain. N = 20 recall turns,
+single run.</sub>
+
+---
 
 ## RAM footprint
 
