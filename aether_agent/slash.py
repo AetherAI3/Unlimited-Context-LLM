@@ -55,6 +55,7 @@ class SlashContext:
     model: str = ""
     agent: str = ""
     web: Any = None
+    ollama: Any = None  # an ollama_ctl.OllamaCtl (local lifecycle); None when cloud-only
 
 
 # --- help text -------------------------------------------------------------
@@ -66,6 +67,10 @@ _HELP_LINES = (
     "/tier              plan tier + default",
     "/audit [n]         recent Aether audit trail",
     "/web <query>       search the web inline",
+    "/pull <tag>        download/update a local model",
+    "/doctor            check the local Ollama setup",
+    "/serve             show the Ollama daemon state",
+    "/setup             re-run first-run setup",
     "/clear             clear screen",
     "/exit              leave (also /quit)",
 )
@@ -96,6 +101,8 @@ def _exit(ctx: SlashContext, arg: str) -> SlashResult:
 
 
 def _models(ctx: SlashContext, arg: str) -> SlashResult:
+    if not ctx.authed and ctx.ollama is not None:
+        return _ollama_models(ctx)
     if not ctx.authed:
         return _text("(local Ollama — set a model with /model <tag>)")
     payload = ctx.api.get_json(MODELS_PATH)
@@ -201,6 +208,57 @@ def _web(ctx: SlashContext, arg: str) -> SlashResult:
     return _text(out)
 
 
+def _ollama_models(ctx: SlashContext) -> SlashResult:
+    from aether_agent.hardware import CATALOG, best_fit, detect_resources
+
+    ctl = ctx.ollama
+    installed = {m["tag"] for m in ctl.list_models()} if ctl else set()
+    rec, _ = best_fit(detect_resources())
+    lines = ["local models (* installed, › current, ! recommended):"]
+    for m in CATALOG:
+        dot = "*" if m.tag in installed else " "
+        cur = "›" if m.tag == ctx.model else " "
+        star = "!" if m.tag == rec else " "
+        note = f"  [{m.license_note}]" if m.license_note else ""
+        lines.append(f"{dot}{cur}{star} {m.tag}\t{m.size_gb:g}GB\t{m.blurb}{note}")
+    for tag in sorted(installed):
+        if all(tag != m.tag for m in CATALOG):
+            cur = "›" if tag == ctx.model else " "
+            lines.append(f"*{cur}  {tag}\t(installed)")
+    lines.append("switch: /model <tag>   ·   pull: /pull <tag>")
+    return _text("\n".join(lines))
+
+
+def _pull(ctx: SlashContext, arg: str) -> SlashResult:
+    tag = arg.strip()
+    if not tag:
+        return _text("usage: /pull <tag>")
+    if ctx.ollama is None:
+        return _text("(pull is a local-Ollama command)")
+    ok, detail = ctx.ollama.pull(tag)
+    return _text(f"pull {tag}: {'ok' if ok else 'failed'} ({detail})")
+
+
+def _doctor(ctx: SlashContext, arg: str) -> SlashResult:
+    if ctx.ollama is None:
+        return _text("(doctor checks the local Ollama; not available in cloud-only mode)")
+    from aether_agent import onboarding
+    return _text(onboarding.doctor(ctx.ollama))
+
+
+def _serve(ctx: SlashContext, arg: str) -> SlashResult:
+    if ctx.ollama is None:
+        return _text("(serve status is a local-Ollama command)")
+    det = ctx.ollama.detect()
+    owned = bool(getattr(ctx.ollama, "_owned", False))
+    state = "up" if det.get("daemon_up") else "down"
+    return _text(f"ollama daemon: {state}{' (owned by this session)' if owned else ''}")
+
+
+def _setup(ctx: SlashContext, arg: str) -> SlashResult:
+    return {"setup": True, "text": "re-running setup…"}
+
+
 def _to_int(s: str, *, default: int) -> int:
     try:
         v = int(s)
@@ -221,6 +279,10 @@ REGISTRY: dict[str, Handler] = {
     "audit": _audit,
     "clear": _clear,
     "web": _web,
+    "pull": _pull,
+    "doctor": _doctor,
+    "serve": _serve,
+    "setup": _setup,
     "exit": _exit,
     "quit": _exit,
 }
