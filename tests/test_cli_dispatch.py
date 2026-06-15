@@ -222,6 +222,8 @@ def test_repl_main_non_tty_runs_help_then_exit(monkeypatch: pytest.MonkeyPatch, 
 
     monkeypatch.setenv("AETHER_CONFIG_DIR", str(tmp_path))
     monkeypatch.delenv("AETHER_TOKEN", raising=False)
+    # Stay hermetic: never build/preflight a real local Ollama daemon.
+    monkeypatch.setattr(repl_mod, "_build_ollama", lambda backend, authed: None)
     # Force the non-TTY plain-line path with a scripted stdin.
     monkeypatch.setattr(repl_mod.sys, "stdin", io.StringIO("/help\n/exit\n"))
     code = repl_mod.main()
