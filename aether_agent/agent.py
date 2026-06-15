@@ -77,6 +77,7 @@ def run_agent_events(
     git_checkpoint: bool = True,
     verify_finish: bool = True,
     on_status: Optional[Callable[[str], None]] = None,
+    system: Optional[str] = None,
 ) -> Iterator[dict[str, Any]]:
     """Drive the chat+tool loop, yielding render-ready event dicts.
 
@@ -99,8 +100,9 @@ def run_agent_events(
     schema = schema if schema is not None else tool_schema()
     emit = on_status or (lambda s: None)
 
+    sys_prompt = system if system is not None else SYSTEM_PROMPT
     messages: list[dict] = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": sys_prompt},
         {"role": "user", "content": task},
     ]
     phase = "reasoning"
