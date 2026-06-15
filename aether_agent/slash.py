@@ -319,9 +319,30 @@ def dispatch(ctx: SlashContext, line: str) -> SlashResult:
     cmd = parts[0].lower() if parts else ""
     arg = " ".join(parts[1:])
     handler = REGISTRY.get(cmd)
-    if handler is None:
-        return _text(f"(unknown command: /{cmd}) — try /help")
-    return handler(ctx, arg)
+    if handler is not None:
+        return handler(ctx, arg)
+    custom = _resolve_custom_command(ctx, cmd, arg)
+    if custom is not None:
+        return custom
+    return _text(f"(unknown command: /{cmd}) — try /help")
+
+
+def _resolve_custom_command(ctx: SlashContext, cmd: str, arg: str) -> SlashResult | None:
+    """If an agent is active and has a command named ``cmd``, expand it into a
+    run_agent action. Returns None when there is no match (caller -> unknown)."""
+    if not getattr(ctx, "active_agent", ""):
+        return None
+    from aether_agent import agent_commands, agent_store
+
+    try:
+        agent = agent_store.load(ctx.active_agent)
+    except (ValueError, OSError):
+        return None
+    cmds = agent_commands.list_commands(agent)
+    if cmd not in cmds:
+        return None
+    task = agent_commands.expand(cmds[cmd], arg.split())
+    return {"run_agent": {"name": ctx.active_agent, "task": task}}
 
 
 __all__ = ["SlashContext", "SlashResult", "REGISTRY", "dispatch"]
