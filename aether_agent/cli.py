@@ -282,7 +282,7 @@ def _cmd_setup(rest: list[str]) -> int:
     if not pf.ok:
         print(f"\n{pf.message}", file=sys.stderr)
         return 1
-    print(f"\nready — model: {pf.chosen_model}")
+    print(f"\nready - model: {pf.chosen_model}")
     return 0
 
 
