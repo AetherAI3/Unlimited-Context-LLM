@@ -26,7 +26,7 @@ from aether_agent import agent_store
 from aether_agent.agent_profile import Agent
 
 SlashResult = dict[str, Any]
-_VERBS = {"set", "show", "edit", "delete"}
+_VERBS = {"set", "show", "edit", "delete", "cmd", "run"}
 _SET_ALIASES = {"memory": "pool_gb"}
 
 
@@ -99,6 +99,10 @@ def _agent(args: list, active: str) -> SlashResult:
         return _edit(name)
     if verb == "delete":
         return _delete(name, rest[1:])
+    if verb == "cmd":
+        return _cmd(name, rest[1:])
+    if verb == "run":
+        return _run_cmd(name, rest[1:])
     return {"run_agent": {"name": name, "task": " ".join(rest)}, "text": ""}
 
 
@@ -149,6 +153,50 @@ def _delete(name: str, flags: list) -> SlashResult:
     purge = "--purge" in flags
     agent_store.delete(name, purge=purge)
     return _text(f"deleted {name}{' (+pool)' if purge else ''}")
+
+
+def _cmd(name: str, args: list) -> SlashResult:
+    from aether_agent import agent_commands
+    if not args:
+        return _text("usage: /agent <name> cmd add <cmd> = <template> | list | remove <cmd>")
+    sub = args[0].lower()
+    if sub == "list":
+        cmds = agent_commands.list_commands(agent_store.load(name))
+        if not cmds:
+            return _text("(no commands)")
+        return _text("\n".join(f"/{k}\t{v}" for k, v in sorted(cmds.items())))
+    if sub == "remove":
+        if len(args) < 2:
+            return _text("usage: /agent <name> cmd remove <cmd>")
+        updated = agent_commands.remove(agent_store.load(name), args[1])
+        agent_store.save(updated)
+        return _text(f"removed /{args[1]}")
+    if sub == "add":
+        rest = args[1:]
+        if "=" not in rest:
+            return _text("usage: /agent <name> cmd add <cmd> = <template>")
+        eq = rest.index("=")
+        cmd_name = " ".join(rest[:eq]).strip()
+        template = " ".join(rest[eq + 1:]).strip()
+        try:
+            updated = agent_commands.add(agent_store.load(name), cmd_name, template)
+        except (ValueError, TypeError) as e:
+            return _text(f"could not add command: {e}")
+        agent_store.save(updated)
+        return _text(f"added /{cmd_name} = {template}")
+    return _text("usage: /agent <name> cmd add <cmd> = <template> | list | remove <cmd>")
+
+
+def _run_cmd(name: str, args: list) -> SlashResult:
+    from aether_agent import agent_commands
+    if not args:
+        return _text("usage: /agent <name> run <cmd> [args]")
+    cmd_name = args[0]
+    cmds = agent_commands.list_commands(agent_store.load(name))
+    if cmd_name not in cmds:
+        return _text(f"no such command: /{cmd_name} (see /agent {name} cmd list)")
+    task = agent_commands.expand(cmds[cmd_name], args[1:])
+    return {"run_agent": {"name": name, "task": task}, "text": ""}
 
 
 __all__ = ["dispatch_agent", "SlashResult"]
