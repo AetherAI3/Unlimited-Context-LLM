@@ -26,6 +26,8 @@ from typing import Any, Optional
 from aether_agent.auth import FileTokenStore, auth_status
 from aether_agent.brains import select_brain
 from aether_agent.config import load_config
+from aether_agent.ollama_ctl import OllamaCtl
+from aether_agent.onboarding import preflight as _preflight_impl
 from aether_agent.slash import SlashContext, dispatch
 from aether_agent.splash import render_splash
 from aether_agent.transport import ApiClient
@@ -93,8 +95,20 @@ def _run_turn(brain: Any, line: str, out: Any) -> None:
         _safe_write(out, "\n(interrupted)\n")
 
 
-def _make_ctx(authed: bool, api: Any, model: str) -> SlashContext:
-    return SlashContext(api=api, authed=authed, model=model)
+def _build_ollama(backend: str, authed: bool) -> Any:
+    """The local Ollama controller, only when this session will serve locally."""
+    b = (backend or "auto").strip().lower()
+    if b == "cloud" or (b == "auto" and authed):
+        return None  # cloud session — no local daemon to manage
+    return OllamaCtl()
+
+
+def _preflight(ctl: Any, **kw: Any) -> Any:
+    return _preflight_impl(ctl, **kw)
+
+
+def _make_ctx(authed: bool, api: Any, model: str, ollama: Any = None) -> SlashContext:
+    return SlashContext(api=api, authed=authed, model=model, ollama=ollama)
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -111,50 +125,66 @@ def main(argv: Optional[list[str]] = None) -> int:
     authed = store.get() is not None
     api = ApiClient(base_url, store)
 
+    ollama = _build_ollama(backend, authed)
+    chosen_model = model
+    if ollama is not None:
+        pf = _preflight(ollama, emit=lambda s: _safe_write(out, s))
+        if not pf.ok:
+            _safe_write(out, f"\n{pf.message}\n")
+            ollama.stop_owned()
+            return 1
+        chosen_model = pf.chosen_model or model
+
     label = _backend_label(backend, authed)
     short_backend = "cloud" if "cloud" in label else "local"
-    _safe_write(out, render_splash(VERSION, model or "auto", short_backend) + "\n\n")
+    _safe_write(out, render_splash(VERSION, chosen_model or "auto", short_backend) + "\n\n")
     _safe_write(out, "Type a prompt, or /help for commands. /exit to quit.\n\n")
 
-    ctx = _make_ctx(authed, api, model)
+    ctx = _make_ctx(authed, api, chosen_model, ollama)
     is_tty = bool(getattr(sys.stdin, "isatty", lambda: False)())
     if is_tty:
         _enable_readline_history()
 
-    while True:
-        try:
-            line = input(_PROMPT) if is_tty else _read_line()
-        except KeyboardInterrupt:
-            out.write("\n")  # Ctrl-C at the prompt exits cleanly
-            return 0
-        except EOFError:
-            out.write("\n")
-            return 0
-        if line is None:
-            return 0  # non-tty EOF
-        line = line.strip()
-        if not line:
-            continue
-        if line.startswith("/"):
-            res = dispatch(ctx, line)
-            if res.get("exit"):
+    try:
+        while True:
+            try:
+                line = input(_PROMPT) if is_tty else _read_line()
+            except KeyboardInterrupt:
+                out.write("\n")
                 return 0
-            text = res.get("text")
-            if text:
-                _safe_write(out, text + "\n")
-            if res.get("restart"):
-                ctx.authed = store.get() is not None
-                _safe_write(out, "(session restarted — context cleared)\n")
-            continue
-        # A chat turn. Rebuild the brain per turn so a /model switch takes effect.
-        brain = select_brain(
-            authed=store.get() is not None,
-            backend=backend,
-            api=api,
-            model=ctx.model or model or "",
-        )
-        _run_turn(brain, line, out)
-        out.write("\n")
+            except EOFError:
+                out.write("\n")
+                return 0
+            if line is None:
+                return 0
+            line = line.strip()
+            if not line:
+                continue
+            if line.startswith("/"):
+                res = dispatch(ctx, line)
+                if res.get("exit"):
+                    return 0
+                text = res.get("text")
+                if text:
+                    _safe_write(out, text + "\n")
+                if res.get("setup") and ollama is not None:
+                    pf = _preflight(ollama, emit=lambda s: _safe_write(out, s))
+                    ctx.model = pf.chosen_model or ctx.model
+                if res.get("restart"):
+                    ctx.authed = store.get() is not None
+                    _safe_write(out, "(session restarted — context cleared)\n")
+                continue
+            brain = select_brain(
+                authed=store.get() is not None,
+                backend=backend,
+                api=api,
+                model=ctx.model or chosen_model or "",
+            )
+            _run_turn(brain, line, out)
+            out.write("\n")
+    finally:
+        if ollama is not None:
+            ollama.stop_owned()
 
 
 def _safe_write(out: Any, text: str) -> None:
