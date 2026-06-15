@@ -33,6 +33,21 @@ _PERMISSION = ("ask", "auto", "skip")
 _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 _MAX_STEPS_RANGE = (1, 500)
 
+#: command names a custom command may NOT take (would shadow a built-in slash).
+RESERVED_COMMANDS = frozenset({
+    "help", "models", "model", "agents", "agent", "new-agent", "orchestrator",
+    "orchestrators", "tier", "audit", "web", "clear", "exit", "quit",
+    "pull", "doctor", "serve", "setup", "config",
+})
+_CMD_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+
+#: tools an AGENT may list (the 8 bridge tools + the local-only authoring tool).
+ALLOWED_AGENT_TOOLS = tuple(TOOLS) + ("define_command",)
+
+
+def is_valid_command_name(name: str) -> bool:
+    return bool(_CMD_NAME_RE.match(name or "")) and name not in RESERVED_COMMANDS
+
 
 @dataclass(frozen=True)
 class Agent:
@@ -145,14 +160,17 @@ def validate(agent: "Agent") -> list[str]:
         p.append(f"permission must be one of {_PERMISSION} (got {agent.permission!r})")
     if agent.accent not in ACCENTS:
         p.append(f"accent must be one of {sorted(ACCENTS)} (got {agent.accent!r})")
-    unknown = [t for t in agent.tools if t not in TOOLS]
+    unknown = [t for t in agent.tools if t not in ALLOWED_AGENT_TOOLS]
     if unknown:
-        p.append(f"tools must be a subset of the 8 canonical tools (unknown: {unknown})")
+        p.append(f"tools must be a subset of {sorted(ALLOWED_AGENT_TOOLS)} (unknown: {unknown})")
     lo, hi = _MAX_STEPS_RANGE
     if not isinstance(agent.max_steps, int) or not (lo <= agent.max_steps <= hi):
         p.append(f"max_steps must be an int in [{lo}, {hi}] (got {agent.max_steps!r})")
-    if agent.commands:
-        p.append("commands is reserved for a future release and must be empty")
+    for cname, ctmpl in (agent.commands or {}).items():
+        if not is_valid_command_name(cname):
+            p.append(f"command name {cname!r} must be a slug and not a reserved built-in")
+        if not isinstance(ctmpl, str) or not ctmpl.strip():
+            p.append(f"command {cname!r} template must be a non-empty string")
     return p
 
 
@@ -163,4 +181,7 @@ def _as_int(v: Any, default: int) -> int:
         return default
 
 
-__all__ = ["Agent", "validate", "ACCENTS"]
+__all__ = [
+    "Agent", "validate", "ACCENTS",
+    "RESERVED_COMMANDS", "ALLOWED_AGENT_TOOLS", "is_valid_command_name",
+]
