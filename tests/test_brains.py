@@ -12,7 +12,6 @@ from typing import Any, Iterator
 
 import pytest
 
-from aether_agent import brains
 from aether_agent.brains import CloudBrain, LocalBrain, select_brain
 
 

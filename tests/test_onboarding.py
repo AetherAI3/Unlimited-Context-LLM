@@ -1,6 +1,5 @@
 # tests/test_onboarding.py
 from aether_agent import onboarding
-from aether_agent.onboarding import Preflight
 
 
 class _Ctl:
