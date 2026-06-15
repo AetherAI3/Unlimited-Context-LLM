@@ -139,6 +139,63 @@ def _handle_agent_action(res: dict[str, Any], out: Any) -> None:
         _render_event(ev, out)
 
 
+def _parse_multi(line: str):
+    """Parse a ` \\ `-joined multi-agent run line into [(Agent, task), ...].
+    Returns None when it is not a 2+ agent-run line."""
+    if " \\ " not in line:
+        return None
+    from aether_agent import agent_store
+
+    jobs = []
+    for seg in line.split(" \\ "):
+        s = seg.strip()
+        if s.startswith("/"):
+            s = s[1:]
+        parts = s.split()
+        if len(parts) < 3 or parts[0].lower() != "agent":
+            return None  # not all segments are agent runs -> not a multi-run
+        if parts[2].lower() in {"set", "show", "edit", "delete", "cmd", "run"}:
+            return None  # a verb, not a task
+        name = parts[1]
+        task = " ".join(parts[2:])
+        try:
+            jobs.append((agent_store.load(name), task))
+        except (ValueError, OSError):
+            return None
+    return jobs if len(jobs) >= 2 else None
+
+
+def _handle_multi(jobs: Any, out: Any) -> None:
+    """Run jobs concurrently, rendering labeled interleaved output + a summary."""
+    from aether_agent import multi_runner
+
+    accents = {a.name: f"\x1b[{ACCENTS.get(a.accent, '36')}m" for a, _ in jobs}
+
+    def emit(label: str, ev: dict) -> None:
+        _render_labeled(label, ev, accents.get(label, ""), out)
+
+    summaries = multi_runner.run_many(jobs, emit=emit, confirm=lambda n, a: False)
+    _safe_write(out, "\n--- done ---\n")
+    for s in summaries:
+        _safe_write(out, f"{s['name']}: {s['summary'] or ('ok' if s['ok'] else 'stopped')}\n")
+
+
+def _render_labeled(label: str, ev: dict, accent_ansi: str, out: Any) -> None:
+    """Render one event prefixed by [label] (accent-colored), cp1252-safe."""
+    tag = f"{accent_ansi}[{label}]\x1b[0m " if accent_ansi else f"[{label}] "
+    etype = ev.get("type")
+    if etype in ("monologue", "done"):
+        text = str(ev.get("text", ""))
+        if text:
+            _safe_write(out, tag + _first_line(text, 120) + "\n")
+    elif etype == "tool_call":
+        _safe_write(out, tag + f"- {ev.get('name', '')}({_fmt_args(ev.get('args', {}))})\n")
+    elif etype == "tool_result":
+        _safe_write(out, tag + f"- {ev.get('name', '')} -> {_first_line(str(ev.get('output', '')))}\n")
+    elif etype == "error":
+        _safe_write(out, tag + f"[x] {ev.get('msg', 'error')}\n")
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     """Run the interactive REPL. Returns a process exit code (0 on clean exit).
     ``argv`` is accepted for signature parity with other entry points but the
@@ -189,6 +246,11 @@ def main(argv: Optional[list[str]] = None) -> int:
                 return 0
             line = line.strip()
             if not line:
+                continue
+            jobs = _parse_multi(line)
+            if jobs is not None:
+                _handle_multi(jobs, out)
+                out.write("\n")
                 continue
             if line.startswith("/"):
                 res = dispatch(ctx, line)
