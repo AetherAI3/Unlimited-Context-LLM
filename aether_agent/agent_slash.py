@@ -66,19 +66,19 @@ def _new_agent(args: list) -> SlashResult:
 
 
 def _agents(active: str) -> SlashResult:
+    from aether_agent import agents_view
     names = agent_store.list_agents()
     if not names:
-        return _text("(no agents yet — create one with /new-agent <name>)")
-    lines = ["agents (* active):"]
+        return _text("(no agents yet - create one with /new-agent <name>)")
+    rows = []
     for n in names:
         try:
             a = agent_store.load(n)
-            mark = "*" if n == active else " "
-            lines.append(f"{mark} {n}\t{a.model}\t{a.pool_gb}GB")
+            rows.append({"name": n, "model": a.model, "pool_gb": a.pool_gb,
+                         "n_commands": len(a.commands)})
         except (ValueError, OSError):
-            lines.append(f"  {n}\t(corrupt file)")
-    lines.append("switch: /agent <name>   run: /agent <name> <task>")
-    return _text("\n".join(lines))
+            rows.append({"name": n, "model": "(corrupt)", "pool_gb": 0, "n_commands": 0})
+    return _text(agents_view.render_agents_columns(rows, active=active))
 
 
 def _agent(args: list, active: str) -> SlashResult:
