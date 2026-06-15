@@ -43,12 +43,14 @@ class _PolicyTools:
     ``execute(name, args) -> str`` contract; refusals are returned as strings
     (never raised) so the agent loop reads them like any tool output."""
 
-    def __init__(self, inner: Tools, allowed: set, permission: str, confirm: ConfirmFn, agent_name: str = "") -> None:
+    def __init__(self, inner: Tools, allowed: set, permission: str, confirm: ConfirmFn,
+                 agent_name: str = "", write_lock: Any = None) -> None:
         self._inner = inner
         self._allowed = set(allowed)
         self._permission = permission
         self._confirm = confirm
         self._agent_name = agent_name
+        self._write_lock = write_lock  # shared one-writer lock across concurrent agents (D)
         self.test_cmd = getattr(inner, "test_cmd", "")  # the verify gate reads this attr
 
     def execute(self, name: str, args: dict) -> str:
@@ -59,6 +61,9 @@ class _PolicyTools:
         if name in DESTRUCTIVE and self._permission != "skip":
             if not self._confirm(name, args):
                 return f"[denied: {name} (permission={self._permission})]"
+        if name in DESTRUCTIVE and self._write_lock is not None:
+            with self._write_lock:
+                return self._inner.execute(name, args)
         return self._inner.execute(name, args)
 
     def _define_command(self, args: dict) -> str:
@@ -102,6 +107,7 @@ def run(
     llm: Any = None,
     session_factory: Optional[Callable[[Agent], Any]] = None,
     on_status: Optional[Callable[[str], None]] = None,
+    write_lock: Any = None,
 ) -> Iterator[dict[str, Any]]:
     """Drive one task as ``agent``; yield render-ready events. ``llm`` and
     ``session_factory`` are injectable for tests (no real Ollama / Session)."""
@@ -124,7 +130,7 @@ def run(
             },
         })
     tools = _PolicyTools(Tools(cwd), allowed=set(agent.tools), permission=agent.permission,
-                         confirm=confirm or _deny, agent_name=agent.name)
+                         confirm=confirm or _deny, agent_name=agent.name, write_lock=write_lock)
     try:
         yield from run_agent_events(
             task,
