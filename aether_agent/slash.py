@@ -56,14 +56,16 @@ class SlashContext:
     agent: str = ""
     web: Any = None
     ollama: Any = None  # an ollama_ctl.OllamaCtl (local lifecycle); None when cloud-only
+    active_agent: str = ""  # name of the active custom agent (B); "" = none
 
 
 # --- help text -------------------------------------------------------------
 _HELP_LINES = (
     "/models            list chat models",
     "/model <tag>       switch model (clears context)",
-    "/agents            list orchestrators (Neo/Kronus)",
-    "/agent <id>        switch orchestrator",
+    "/agents            list your custom agents",
+    "/agent <name>      switch agent (or: /agent <name> <task>)",
+    "/new-agent <name>  create a custom agent",
     "/tier              plan tier + default",
     "/audit [n]         recent Aether audit trail",
     "/web <query>       search the web inline",
@@ -128,7 +130,7 @@ def _model(ctx: SlashContext, arg: str) -> SlashResult:
     return {"restart": {"model": tag}, "text": f"model -> {tag} (context cleared)"}
 
 
-def _agents(ctx: SlashContext, arg: str) -> SlashResult:
+def _agents_orch(ctx: SlashContext, arg: str) -> SlashResult:
     if not ctx.authed:
         return _text("(orchestrators are a cloud feature — log in with: aether auth login)")
     payload = ctx.api.get_json(AGENTS_PATH)
@@ -145,7 +147,7 @@ def _agents(ctx: SlashContext, arg: str) -> SlashResult:
     return _text("\n".join(lines))
 
 
-def _agent(ctx: SlashContext, arg: str) -> SlashResult:
+def _agent_orch(ctx: SlashContext, arg: str) -> SlashResult:
     aid = arg.strip()
     if not aid:
         return _text("usage: /agent <id>")
@@ -206,6 +208,21 @@ def _web(ctx: SlashContext, arg: str) -> SlashResult:
     except Exception as e:  # noqa: BLE001 — a tool error must not crash the REPL
         out = f"[web_search error: {e}]"
     return _text(out)
+
+
+def _new_agent(ctx: SlashContext, arg: str) -> SlashResult:
+    from aether_agent.agent_slash import dispatch_agent
+    return dispatch_agent(f"/new-agent {arg}".strip(), active=ctx.active_agent)
+
+
+def _agents(ctx: SlashContext, arg: str) -> SlashResult:
+    from aether_agent.agent_slash import dispatch_agent
+    return dispatch_agent("/agents", active=ctx.active_agent)
+
+
+def _agent_cmd(ctx: SlashContext, arg: str) -> SlashResult:
+    from aether_agent.agent_slash import dispatch_agent
+    return dispatch_agent(f"/agent {arg}".strip(), active=ctx.active_agent)
 
 
 def _ollama_models(ctx: SlashContext) -> SlashResult:
@@ -273,8 +290,11 @@ REGISTRY: dict[str, Handler] = {
     "": _help,        # bare "/" -> help
     "models": _models,
     "model": _model,
-    "agents": _agents,
-    "agent": _agent,
+    "agents": _agents,             # B: list custom local agents
+    "agent": _agent_cmd,           # B: /agent <name> <verb>
+    "new-agent": _new_agent,       # B: create
+    "orchestrators": _agents_orch, # cloud orchestrators (was /agents)
+    "orchestrator": _agent_orch,   # cloud orchestrator switch (was /agent)
     "tier": _tier,
     "audit": _audit,
     "clear": _clear,

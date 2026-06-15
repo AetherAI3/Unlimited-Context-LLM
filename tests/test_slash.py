@@ -109,20 +109,20 @@ def test_models_when_local_shows_ollama_hint_and_does_not_call_api() -> None:
     assert "/model" in res["text"]
 
 
-# --- /agents, /agent -------------------------------------------------------
+# --- /orchestrators, /orchestrator -----------------------------------------
 def test_agents_when_authed_lists_orchestrators() -> None:
     api = FakeApiClient(
         {"/agents": {"agents": [{"id": "neo", "label": "Neo"}, {"id": "kronus", "label": "Kronus"}]}}
     )
     ctx = _ctx(authed=True, api=api)
-    res = slash.dispatch(ctx, "/agents")
+    res = slash.dispatch(ctx, "/orchestrators")
     assert any(p.startswith("/agents") for p in api.get_paths)
     assert "neo" in res["text"] and "kronus" in res["text"]
 
 
 def test_agent_sets_id_and_returns_restart() -> None:
     ctx = _ctx(authed=True, model="m")
-    res = slash.dispatch(ctx, "/agent kronus")
+    res = slash.dispatch(ctx, "/orchestrator kronus")
     assert res.get("restart") == {"agent": "kronus"}
 
 
