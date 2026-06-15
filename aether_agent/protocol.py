@@ -21,7 +21,7 @@ from typing import Any, Iterable
 # (src/core/brain_protocol.ts) MUST carry the same number; the conformance
 # fixture (tests/fixtures/bridge_conformance.json) pins both. Canonical:
 # aether-code/docs/CONTRACTS.md.
-PROTOCOL_VERSION = 2
+PROTOCOL_VERSION = 3
 
 # --- brain -> host events (the brain emits these) -------------------------
 EV_STAGE = "stage"          # {name, face}  staged lifecycle marker
@@ -46,8 +46,22 @@ CMD_CONTROL = "control"     # {action: pause|resume|steer, note}
 
 HOST_COMMANDS = frozenset({CMD_TASK, CMD_TOOL_RESULT, CMD_CONTROL})
 
-# Canonical tool names — the ONE implementation lives in the host.
-TOOLS = frozenset({"read_file", "write_file", "run_shell", "run_tests", "repo_search", "git_commit"})
+# Canonical tool names — the ONE implementation lives in the host. ORDERED tuple
+# (not a set): the TS mirror (src/core/brain_protocol.ts) pins this exact order,
+# and the lockstep test asserts position. read/write/shell/tests/search/commit are
+# the path-jailed coding tools; web_search/web_fetch are the network tools (SSRF
+# -guarded, NOT path-jailed). Membership checks (e.g. headless invented-tool guard)
+# work identically on a tuple.
+TOOLS = (
+    "read_file",
+    "write_file",
+    "run_shell",
+    "run_tests",
+    "repo_search",
+    "git_commit",
+    "web_search",
+    "web_fetch",
+)
 
 
 # --- event constructors (brain side) --------------------------------------

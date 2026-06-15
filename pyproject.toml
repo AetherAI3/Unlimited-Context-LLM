@@ -44,6 +44,7 @@ dev      = ["pytest>=8", "pytest-cov", "ruff>=0.5", "mypy>=1.10"]
 [project.scripts]
 aether-context = "aether_context.cli:main"
 aether = "aether_agent.cli:main"
+aether-smoke = "aether_agent.smoke:main"
 
 [tool.setuptools]
 packages = ["aether_context", "aether_agent"]
