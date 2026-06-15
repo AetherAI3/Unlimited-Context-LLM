@@ -169,7 +169,10 @@ def main(argv: Optional[list[str]] = None) -> int:
                     _safe_write(out, text + "\n")
                 if res.get("setup") and ollama is not None:
                     pf = _preflight(ollama, emit=lambda s: _safe_write(out, s))
-                    ctx.model = pf.chosen_model or ctx.model
+                    if pf.ok:
+                        ctx.model = pf.chosen_model or ctx.model
+                    else:
+                        _safe_write(out, f"\n{pf.message}\n")
                 if res.get("restart"):
                     ctx.authed = store.get() is not None
                     _safe_write(out, "(session restarted — context cleared)\n")
