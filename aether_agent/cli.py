@@ -30,7 +30,7 @@ from aether_agent.transport import ApiClient
 
 #: The recognized subcommands. A first positional matching one of these is routed
 #: to its handler; anything else (not starting with ``-``) is a one-shot prompt.
-_SUBCOMMANDS = frozenset({"code", "brain", "auth", "models", "config"})
+_SUBCOMMANDS = frozenset({"code", "brain", "auth", "models", "config", "doctor", "setup"})
 
 
 # --- top-level dispatch ----------------------------------------------------
@@ -56,6 +56,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         return _cmd_models(args[1:])
     if head == "config":
         return _cmd_config(args[1:])
+    if head == "doctor":
+        return _cmd_doctor(args[1:])
+    if head == "setup":
+        return _cmd_setup(args[1:])
 
     # An explicit flag with no subcommand (e.g. ``aether --help``) -> show help.
     if head.startswith("-"):
@@ -255,6 +259,33 @@ def _coerce(value: str) -> Any:
     return value
 
 
+# --- doctor / setup --------------------------------------------------------
+def _ollama_ctl():
+    from aether_agent.ollama_ctl import OllamaCtl
+    return OllamaCtl()
+
+
+def _preflight(ctl, **kw):
+    from aether_agent.onboarding import preflight
+    return preflight(ctl, **kw)
+
+
+def _cmd_doctor(rest: list[str]) -> int:
+    from aether_agent.onboarding import doctor
+    print(doctor(_ollama_ctl()))
+    return 0
+
+
+def _cmd_setup(rest: list[str]) -> int:
+    ctl = _ollama_ctl()
+    pf = _preflight(ctl, emit=lambda s: sys.stdout.write(s))
+    if not pf.ok:
+        print(f"\n{pf.message}", file=sys.stderr)
+        return 1
+    print(f"\nready — model: {pf.chosen_model}")
+    return 0
+
+
 # --- help ------------------------------------------------------------------
 def _print_help() -> None:
     print(
@@ -269,6 +300,8 @@ def _print_help() -> None:
                 "  aether auth login|status|logout|token",
                 "  aether models                list models",
                 "  aether config [show|get k|set k v]",
+                "  aether doctor                check the local Ollama setup",
+                "  aether setup                 run first-run setup (install/serve/pull)",
             ]
         )
     )
