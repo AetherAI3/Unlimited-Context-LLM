@@ -23,6 +23,7 @@ from __future__ import annotations
 import sys
 from typing import Any, Optional
 
+from aether_agent.agent_profile import ACCENTS, Agent
 from aether_agent.auth import FileTokenStore, auth_status
 from aether_agent.brains import select_brain
 from aether_agent.config import load_config
@@ -111,6 +112,33 @@ def _make_ctx(authed: bool, api: Any, model: str, ollama: Any = None) -> SlashCo
     return SlashContext(api=api, authed=authed, model=model, ollama=ollama)
 
 
+def _apply_agent(agent: Agent) -> dict[str, Any]:
+    """Compute the REPL UX state for an active agent (pure; cp1252-safe ANSI)."""
+    return {
+        "name": agent.name,
+        "prompt": agent.prompt or f"{agent.name} > ",
+        "accent_ansi": f"\x1b[{ACCENTS.get(agent.accent, '36')}m",
+        "banner": agent.banner,
+        "persona": agent.persona,
+    }
+
+
+def _handle_agent_action(res: dict[str, Any], out: Any) -> None:
+    """Execute a /agent run action: stream the agent's turn via the runner."""
+    from aether_agent import agent_runner, agent_store
+
+    run = res.get("run_agent")
+    if not run:
+        return
+    try:
+        agent = agent_store.load(run["name"])
+    except (ValueError, OSError) as e:
+        _safe_write(out, f"\n[x] {e}\n")
+        return
+    for ev in agent_runner.run(agent, run["task"], confirm=lambda n, a: False):
+        _render_event(ev, out)
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     """Run the interactive REPL. Returns a process exit code (0 on clean exit).
     ``argv`` is accepted for signature parity with other entry points but the
@@ -141,6 +169,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     _safe_write(out, "Type a prompt, or /help for commands. /exit to quit.\n\n")
 
     ctx = _make_ctx(authed, api, chosen_model, ollama)
+    active_agent: Optional[Agent] = None
+    prompt_str = _PROMPT
     is_tty = bool(getattr(sys.stdin, "isatty", lambda: False)())
     if is_tty:
         _enable_readline_history()
@@ -148,7 +178,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     try:
         while True:
             try:
-                line = input(_PROMPT) if is_tty else _read_line()
+                line = input(prompt_str) if is_tty else _read_line()
             except KeyboardInterrupt:
                 out.write("\n")
                 return 0
@@ -167,6 +197,18 @@ def main(argv: Optional[list[str]] = None) -> int:
                 text = res.get("text")
                 if text:
                     _safe_write(out, text + "\n")
+                if res.get("switch_agent"):
+                    try:
+                        active_agent = Agent.load(res["switch_agent"])
+                        ctx.active_agent = active_agent.name
+                        st = _apply_agent(active_agent)
+                        prompt_str = st["prompt"]
+                        if st["banner"]:
+                            _safe_write(out, st["accent_ansi"] + st["banner"] + "\x1b[0m\n")
+                    except (ValueError, OSError) as e:
+                        _safe_write(out, f"\n[x] {e}\n")
+                if res.get("run_agent"):
+                    _handle_agent_action(res, out)
                 if res.get("setup") and ollama is not None:
                     pf = _preflight(ollama, emit=lambda s: _safe_write(out, s))
                     if pf.ok:
@@ -176,6 +218,12 @@ def main(argv: Optional[list[str]] = None) -> int:
                 if res.get("restart"):
                     ctx.authed = store.get() is not None
                     _safe_write(out, "(session restarted — context cleared)\n")
+                continue
+            if active_agent is not None:
+                from aether_agent import agent_runner
+                for ev in agent_runner.run(active_agent, line, confirm=lambda n, a: False):
+                    _render_event(ev, out)
+                out.write("\n")
                 continue
             brain = select_brain(
                 authed=store.get() is not None,
