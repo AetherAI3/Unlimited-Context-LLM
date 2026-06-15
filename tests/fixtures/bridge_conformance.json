@@ -1,6 +1,6 @@
 {
   "_note": "Canonical bridge wire fixture. IDENTICAL copy lives in Unlimited-Context/tests/fixtures/bridge_conformance.json. Both test suites load their copy and assert their codec round-trips every message here. If you change a message shape, change docs/CONTRACTS.md, bump protocol_version in BOTH protocol files, and update BOTH fixture copies. A failing conformance test = drift.",
-  "protocol_version": 2,
+  "protocol_version": 3,
   "events": [
     { "type": "stage", "name": "execute", "face": "(test)" },
     { "type": "monologue", "text": "reading auth.ts", "depth": 1 },

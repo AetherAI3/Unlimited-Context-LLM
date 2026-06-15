@@ -37,6 +37,11 @@ _PHASE_BY_TOOL = {
     "run_tests": "grounding",
     "run_shell": "grounding",
     "git_commit": "paging",
+    # Network tools (added in PROTOCOL_VERSION 3). The full 8-tool schema is
+    # advertised via _tool_schema() -> tools.tool_schema(); these phase labels
+    # just drive the status bar while the host runs them.
+    "web_search": "scanning",
+    "web_fetch": "scanning",
 }
 _TOKENS_PER_GB = 233_000_000  # pool reach; mirrors statusbar / aether_context.config
 

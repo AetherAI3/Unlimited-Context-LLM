@@ -26,6 +26,7 @@ def tool_schema() -> list[dict]:
         }
 
     s = {"type": "string"}
+    i = {"type": "integer"}
     return [
         fn("read_file", "Read a file's contents (relative to the workspace).", {"path": s}, ["path"]),
         fn("write_file", "Create or overwrite a file with the given content.", {"path": s, "content": s}, ["path", "content"]),
@@ -33,6 +34,19 @@ def tool_schema() -> list[dict]:
         fn("run_tests", "Run the test suite (default: pytest -q).", {"command": s}, []),
         fn("repo_search", "Search the repository for a string.", {"query": s}, ["query"]),
         fn("git_commit", "Stage all changes and commit with a message.", {"message": s}, ["message"]),
+        fn(
+            "web_search",
+            "Search the public web (DuckDuckGo) and return the top results as titles, urls, and snippets.",
+            {"query": s, "limit": i},
+            ["query"],
+        ),
+        fn(
+            "web_fetch",
+            "Fetch a public web page over http(s) and return its readable text (tags/scripts stripped). "
+            "Refuses non-public/internal hosts.",
+            {"url": s},
+            ["url"],
+        ),
     ]
 
 
@@ -103,6 +117,17 @@ class Tools:
                 return self.repo_search(args["query"])
             if name == "git_commit":
                 return self.git_commit(args["message"])
+            # Network tools — NOT path-jailed (no workspace to confine to); the
+            # SSRF guard lives in web.py. Lazy import keeps the file/shell tools
+            # free of urllib for the pure-codec test paths.
+            if name == "web_search":
+                from aether_agent import web
+
+                return web.web_search(args["query"], int(args.get("limit", 5) or 5))
+            if name == "web_fetch":
+                from aether_agent import web
+
+                return web.web_fetch(args["url"])
             return f"[unknown tool: {name}]"
         except KeyError as e:
             return f"[tool {name}: missing argument {e}]"

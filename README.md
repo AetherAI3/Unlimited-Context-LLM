@@ -8,7 +8,7 @@ Give your Ai superpowers with **Unlimited context for [Ollama](https://ollama.co
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-06b6d4)](LICENSE) [![Python](https://img.shields.io/badge/python-3.10%2B-14b8a6)](https://www.python.org) [![Built by Aether](https://img.shields.io/badge/built%20by-Aether-7c3aed)](https://aethersystems.net)
 
-**An open project from [Aether](https://aethersystems.net)** · Apache-2.0 · `pip install aether-context`
+**An open project from [Aether](https://aethersystems.net)** · Apache-2.0 · [Install](#quickstart)
 
 </div>
 
@@ -38,6 +38,7 @@ Give your Ai superpowers with **Unlimited context for [Ollama](https://ollama.co
   <a href="#the-math-per-tier">The math</a> ·
   <a href="#ram-footprint">RAM</a> ·
   <a href="#common-commands">Commands</a> ·
+  <a href="#the-aether-coding-terminal">Terminal</a> ·
   <a href="#quickstart">Install</a> ·
   <a href="#citation">Cite</a>
 </p>
@@ -272,9 +273,40 @@ RAM  ≈  ~180 MB   base (engine + shared static encoder)
 
 > **Tip:** run `aether-context doctor` first — it catches the three things that ever go wrong (Ollama down, model not pulled, not enough disk) and prints the exact fix.
 
+## The `aether` coding terminal
+
+The same install ships a second command — **`aether`** — an open-source agentic **coding terminal**
+running on the Unlimited Context engine. It's **local-first**: turns run on your local **[Ollama](https://ollama.com)**
+by default (no account, no network); sign in and they switch to the **Aether cloud API**. It's the
+Python-native twin of [`aether-code`](https://github.com/DBarr3/aether-agent) (the TypeScript terminal)
+— same commands, same backend, same tools.
+
+| Command | What it does |
+|---|---|
+| `aether` | Open the interactive REPL (local Ollama by default). |
+| `aether "<prompt>"` | One-shot turn, streamed. |
+| `aether code "<task>"` | Autonomous coding run on the Unlimited Context brain (test-gated, git-checkpointed). |
+| `aether auth login` | Sign in (`--token <t>` or `--username/--password`) → turns switch to the Aether cloud API. |
+| `aether auth status \| logout \| token` | Show / clear / print the stored credential. |
+| `aether models` | List models available to your tier. |
+| `aether config [show\|get <k>\|set <k> <v>]` | Local settings, incl. `backend = auto\|local\|cloud`. |
+
+**Slash commands** (inside the REPL): `/help` · `/models` · `/model <tag>` · `/agents` · `/agent <id>` · `/tier` · `/audit [n]` · `/web <query>` · `/clear` · `/exit`.
+
+**Web tools** — the agent can reach the web on any backend: `web_search` (DuckDuckGo, no key) and `web_fetch` (URL → readable text, SSRF-guarded).
+
+**Backend** — `auto` (the default) uses your local Ollama until you `aether auth login`, then the Aether cloud API. Force it with `aether config set backend local|cloud` or `AETHER_BACKEND=local`.
+
+**Smoke test** — with Ollama up, `python -m aether_agent.smoke` (or `aether-smoke`) runs the SSRF guard, a real local turn, a web search + fetch, and the cloud path (when signed in), printing `PASS`/`SKIP`/`FAIL` (exit non-zero only on a real failure — missing Ollama/network/sign-in are skips).
+
 ## Quickstart
 
 ```bash
+# Install straight from GitHub — works today, always the latest:
+pip install git+https://github.com/DBarr3/Unlimited-Context-LLM.git
+
+# From PyPI, once published — the package name is "aether-context"
+# (note: `pip install unlimited-context` is NOT the package name):
 pip install aether-context
 ```
 
@@ -291,6 +323,21 @@ That's the whole thing. One small model, one command, a billion tokens of reach 
 ## Honest about the word "unlimited"
 
 "Unlimited" means **reach, not attention.** Your model keeps its native window — we make it *reach* a billion-token pool in slices, via fast retrieval. The whole thing rides on retrieval **hit rate**; when it's high (and the loader is built to keep it high), the pool feels like one seamless context. The measured proof of all this is up top — see [The proof](#the-proof).
+
+## Benchmark — measured, on a real model
+
+A live run on **`deepseek/deepseek-v4-pro`** (via OpenRouter), driving an agent through **60 real GitHub issues** over a **40-turn session that overflows the model's window** — engine **on** vs **off** (off = no engine, same model, transcript truncated to the window). Full write-up: [`docs/benchmarks/2026-06-14-deepseek-v4-pro-session-eval.md`](docs/benchmarks/2026-06-14-deepseek-v4-pro-session-eval.md).
+
+| Metric | Off (baseline) | On (engine) | Change |
+|---|:---:|:---:|:---:|
+| **Recall coherence** (early facts still correct) | 0.15 | **1.00** | **6.7×** |
+| **Work outcome** (tasks done right) | 3 / 20 | **20 / 20** | **3 → 20** |
+| **Cost — full session** | $0.0711 | **$0.0542** | **−24%** |
+| **Cost — back half (recall phase)** | $0.00117/turn | **$0.00053/turn** | **−54%** |
+
+What the engine provided, in one session: it **held coherence flat at 1.00 while the baseline drifted to 0.15** (early issues fell out of the window and were lost), turned a **3/20 failing run into 20/20**, and did it for **~25% less money overall — over half off in the back half**, where the baseline drags a bloated transcript into every call and the engine sends a compact recalled window. Total spend for the whole benchmark: **$0.19**. Committed raw artifacts: [`docs/benchmarks/artifacts/2026-06-14-deepseek-v4-pro/`](docs/benchmarks/artifacts/2026-06-14-deepseek-v4-pro/) (`api_eval_results.json`, `api_eval_series.csv`, `api_eval_plot.png`, `RESULTS.md`).
+
+<sub>**Scope, honestly:** this measures the **engine** (retrieve-on-overflow memory), not the MPO chain — on this single-fact recall task the MPO chain **ties** plain recall (both 1.00). The MPO's multi-slice edge is **synthetic-only so far** (`bench/chain_recall.py`: connected-context recall 0.15 → 0.78); the live `thread` run that would confirm it is **pending** — not yet claimed. Magnitude scales with the overflow ratio: the 2000-token window is deliberately tiny to force overflow, so a realistic window shows a smaller (still real) gain. N=20 recall turns, single run. Reproduce: `python -m bench.api_eval --model deepseek/deepseek-v4-pro --repo microsoft/vscode --arms off,on,on_chain --plot`.</sub>
 
 ## Citation
 
