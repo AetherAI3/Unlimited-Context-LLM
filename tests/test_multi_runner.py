@@ -46,3 +46,19 @@ def test_shared_write_lock_passed_to_each_runner(monkeypatch):
     jobs = [(Agent.from_dict({"name": "a"}), "t"), (Agent.from_dict({"name": "b"}), "t")]
     multi_runner.run_many(jobs, emit=lambda label, ev: None)
     assert locks_seen[0] is locks_seen[1] is not None  # same shared lock for all jobs
+
+
+def test_duplicate_agent_runs_once(monkeypatch):
+    # The same agent twice in one batch must run ONCE (no concurrent Sessions on
+    # its shared pool dir, no summary collision).
+    runs = []
+
+    def fake_run(agent, task, **kw):
+        runs.append((agent.name, task))
+        yield {"type": "done", "text": "x", "ok": True}
+
+    monkeypatch.setattr("aether_agent.agent_runner.run", fake_run)
+    jobs = [(Agent.from_dict({"name": "jane"}), "a"), (Agent.from_dict({"name": "jane"}), "b")]
+    summaries = multi_runner.run_many(jobs, emit=lambda label, ev: None)
+    assert len(runs) == 1 and runs[0] == ("jane", "a")   # first kept, dup dropped
+    assert len(summaries) == 1 and summaries[0]["name"] == "jane"

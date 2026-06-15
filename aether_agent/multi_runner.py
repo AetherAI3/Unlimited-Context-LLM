@@ -31,7 +31,17 @@ def _deny(_name: str, _args: dict) -> bool:
 def run_many(jobs, *, emit: Emit, confirm: "ConfirmFn | None" = None, cwd: str = ".") -> list[dict]:
     """Run ``jobs`` (list of ``(Agent, task)``) concurrently; ``emit(label, ev)``
     is called on the main thread per event. Returns a summary dict per agent."""
-    jobs = list(jobs)[:MAX_CONCURRENT]
+    # One run per agent per batch: running the SAME agent twice at once would open
+    # two Sessions on its single (shared) pool dir concurrently -> a memory-pool
+    # write race the tool write_lock does not cover. Dedupe by name (keep first).
+    seen: set[str] = set()
+    deduped = []
+    for agent, task in list(jobs):
+        if agent.name in seen:
+            continue
+        seen.add(agent.name)
+        deduped.append((agent, task))
+    jobs = deduped[:MAX_CONCURRENT]
     write_lock = threading.Lock()
     q: "queue.Queue[tuple[str, dict]]" = queue.Queue()
     summaries: dict[str, dict] = {
