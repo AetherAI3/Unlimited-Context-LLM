@@ -8,7 +8,7 @@ autonomy/checkpoint kernel + escalation hatch. Default model: Qwen3-Coder 30B
 (Apache-2.0), pulled via Ollama — never bundled.
 """
 
-__all__ = ["run_agent", "AgentResult"]
+__all__ = ["run_agent", "AgentResult", "Agent"]
 
 
 def __getattr__(name: str):
@@ -19,4 +19,10 @@ def __getattr__(name: str):
         from aether_agent.agent import run_agent, AgentResult
 
         return {"run_agent": run_agent, "AgentResult": AgentResult}[name]
+    if name == "Agent":
+        # Public library API: `from aether_agent import Agent`. agent_profile is
+        # dependency-light (does not pull the numpy-backed engine at import).
+        from aether_agent.agent_profile import Agent
+
+        return Agent
     raise AttributeError(f"module 'aether_agent' has no attribute {name!r}")
