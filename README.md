@@ -280,16 +280,16 @@ Python-native twin of [`aether-code`](https://github.com/DBarr3/aether-agent) (t
 | `aether` | Open the interactive REPL (local Ollama by default). |
 | `aether "<prompt>"` | One-shot turn, streamed. |
 | `aether code "<task>"` | Autonomous coding run on the Unlimited Context brain (test-gated, git-checkpointed). |
-| `aether auth login` | Sign in (`--token <t>` or `--username/--password`) → turns switch to the Aether cloud API. |
+| `aether auth login` | Sign in (`--token <t>` or `--username/--password`) for the hosted API (then set `backend auto\|cloud`). |
 | `aether auth status \| logout \| token` | Show / clear / print the stored credential. |
 | `aether models` | List models available to your tier. |
-| `aether config [show\|get <k>\|set <k> <v>]` | Local settings, incl. `backend = auto\|local\|cloud`. |
+| `aether config [show\|get <k>\|set <k> <v>]` | Local settings, incl. `backend = local (default)\|auto\|cloud`. |
 
 **Slash commands** (inside the REPL): `/help` · `/models` · `/model <tag>` · `/agents` · `/agent <id>` · `/tier` · `/audit [n]` · `/web <query>` · `/clear` · `/exit`.
 
 **Web tools** — the agent can reach the web on any backend: `web_search` (DuckDuckGo, no key) and `web_fetch` (URL → readable text, SSRF-guarded).
 
-**Backend** — `auto` (the default) uses your local Ollama until you `aether auth login`, then the Aether cloud API. Force it with `aether config set backend local|cloud` or `AETHER_BACKEND=local`.
+**Backend** — `local` (the default) runs every turn on your own Ollama; nothing leaves your machine and no account is needed. Opt into the hosted Aether API with `aether config set backend auto|cloud` (or `AETHER_BACKEND=auto`) plus `aether auth login` — `auto` uses the cloud only when you're signed in and falls back to local otherwise. The hosted API is the maintainer's own instance, so a fresh clone never calls it.
 
 **Smoke test** — with Ollama up, `python -m aether_agent.smoke` (or `aether-smoke`) runs the SSRF guard, a real local turn, a web search + fetch, and the cloud path (when signed in), printing `PASS`/`SKIP`/`FAIL` (exit non-zero only on a real failure — missing Ollama/network/sign-in are skips).
 

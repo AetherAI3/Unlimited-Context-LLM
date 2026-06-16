@@ -111,7 +111,7 @@ def _one_shot(prompt: str) -> int:
     api = ApiClient(cfg.get("baseUrl", ""), store)
     brain = select_brain(
         authed=store.get() is not None,
-        backend=str(cfg.get("backend", "auto")),
+        backend=str(cfg.get("backend", "local")),
         api=api,
         model=str(cfg.get("defaultModel", "") or ""),
     )

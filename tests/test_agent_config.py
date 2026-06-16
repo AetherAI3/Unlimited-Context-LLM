@@ -21,10 +21,11 @@ from aether_agent import config as agent_config
 def test_defaults_when_no_file(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("AETHER_CONFIG_DIR", str(tmp_path))
     monkeypatch.delenv("AETHER_BASE_URL", raising=False)
+    monkeypatch.delenv("AETHER_BACKEND", raising=False)
     cfg = agent_config.load_config()
     assert cfg["baseUrl"] == "https://api.aethersystems.net/cloud"
     assert cfg["defaultModel"] == ""
-    assert cfg["backend"] == "auto"
+    assert cfg["backend"] == "local"  # local-first: a fresh clone never phones home
     assert cfg["permissionMode"] == "ask"
     assert cfg["autoApply"] is False
     assert cfg["telemetry"] is True
@@ -59,6 +60,15 @@ def test_base_url_env_overrides_saved_file(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("AETHER_BASE_URL", "https://env.example.net/cloud")
     cfg = agent_config.load_config()
     assert cfg["baseUrl"] == "https://env.example.net/cloud"
+
+
+def test_backend_env_overrides_default(tmp_path: Path, monkeypatch):
+    # AETHER_BACKEND opts a clone into the hosted API without editing config.json.
+    monkeypatch.setenv("AETHER_CONFIG_DIR", str(tmp_path))
+    monkeypatch.delenv("AETHER_BASE_URL", raising=False)
+    monkeypatch.setenv("AETHER_BACKEND", "cloud")
+    cfg = agent_config.load_config()
+    assert cfg["backend"] == "cloud"
 
 
 # --- corrupt json fallback ------------------------------------------------
