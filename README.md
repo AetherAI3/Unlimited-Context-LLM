@@ -4,6 +4,8 @@
 
 **Give your AI superpowers with unlimited context for [Ollama](https://ollama.com)** — a **billion+ token memory** for any LLM. Local-first, on your own machine, free.
 
+<img width="537" height="405" alt="Unlimited Context" src="https://github.com/user-attachments/assets/79758729-ead7-42ca-9784-831cae68ef06" />
+
 [![License](https://img.shields.io/badge/License-Apache_2.0-06b6d4?style=flat-square)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-14b8a6?style=flat-square&logo=python&logoColor=white)](https://www.python.org)
 [![Built by Aether](https://img.shields.io/badge/Built_by-Aether-7c3aed?style=flat-square)](https://aethersystems.net)
@@ -66,10 +68,6 @@ Long agentic runs all die the same way. The model fills its window, starts **com
 The fix isn't a bigger window — it's to stop throwing the overflow away. Instead of summarizing what spills over, Unlimited Context **encodes** it to a local pool on your disk and **recovers** the right slice exactly when it's needed. Nothing load-bearing is silently lost.
 
 <p align="center"><strong>Compress &amp; forget ✗ &nbsp;→&nbsp; Encode &amp; recover ✓</strong></p>
-
-<div align="center">
-  <img width="880" alt="Compress and forget vs encode and recover" src="https://github.com/user-attachments/assets/dadae038-5e1a-45c6-b16c-4763da4238a8" />
-</div>
 
 ## How it works
 
