@@ -156,7 +156,7 @@ def _cmd_auth(rest: list[str]) -> int:
     action = ns.action or "status"
 
     if action == "login":
-        return _auth_login(ns, base_url, store)
+        return _auth_login(ns, cfg, store)
     if action == "logout":
         store.clear()
         print("logged out.")
@@ -174,13 +174,15 @@ def _cmd_auth(rest: list[str]) -> int:
     return 0
 
 
-def _auth_login(ns: argparse.Namespace, base_url: str, store: FileTokenStore) -> int:
+def _auth_login(ns: argparse.Namespace, cfg: dict[str, Any], store: FileTokenStore) -> int:
+    base_url = cfg.get("baseUrl", "")
     token = ns.token
     if ns.with_token and not token:
         token = sys.stdin.readline().strip()
     if token:
         store.set(token)
         print("token saved.")
+        _enable_cloud_after_login(cfg)
         return 0
     if ns.username and ns.password:
         try:
@@ -190,9 +192,26 @@ def _auth_login(ns: argparse.Namespace, base_url: str, store: FileTokenStore) ->
             return 1
         plan = res.get("plan")
         print(f"logged in{f' (plan {plan})' if plan else ''}.")
+        _enable_cloud_after_login(cfg)
         return 0
     print("usage: aether auth login [--token T | --username U --password P | --with-token]", file=sys.stderr)
     return 1
+
+
+def _enable_cloud_after_login(cfg: dict[str, Any]) -> None:
+    """Signing in is an explicit "use the hosted API" signal, so move a
+    local-default install onto ``auto`` (cloud while signed in, local otherwise)
+    — turns then reach the Aether API without a second command. An explicit
+    ``cloud`` / ``auto`` choice is left untouched, and we never silently
+    downgrade: local-first is only the *unconfigured* default, not a lock, and
+    sign-in is fully reversible with ``aether config set backend local``.
+    """
+    if str(cfg.get("backend", "local")).strip().lower() != "local":
+        return
+    cfg["backend"] = "auto"
+    save_config(cfg)
+    print("cloud enabled (backend=auto); turns use the Aether API while you're signed in.")
+    print("  stay local instead with: aether config set backend local")
 
 
 # --- models ----------------------------------------------------------------
