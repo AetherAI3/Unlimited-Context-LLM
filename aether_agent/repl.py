@@ -9,9 +9,11 @@ then loops on ``input()``: a line starting with ``/`` goes to
 whose events are rendered with the shared vocabulary (monologue / tool_call /
 tool_result / done / error).
 
-Policy: ``FileTokenStore`` has a token -> cloud brain; else local Ollama. The
-``backend`` config knob (``auto`` / ``local`` / ``cloud``) is honored by
-``select_brain``. Ctrl-C aborts the current turn (prints ``(interrupted)``);
+Policy: the ``backend`` config knob is honored by ``select_brain`` and defaults
+to ``local`` — this is a local-first project, so turns run on the user's own
+Ollama and nothing leaves the machine. Opt into the hosted API with ``auto``
+(cloud when a token is present, else local) or ``cloud``. Ctrl-C aborts the
+current turn (prints ``(interrupted)``);
 Ctrl-C at an empty prompt (or EOF) exits. A non-TTY stdin uses the same plain
 ``input()`` loop (no raw-mode key handling — that lives in the TS host).
 
@@ -46,7 +48,7 @@ _PROMPT = "aether › "
 
 def _backend_label(backend: str, authed: bool) -> str:
     """Human label for the brain that will serve turns this session."""
-    b = (backend or "auto").strip().lower()
+    b = (backend or "local").strip().lower()
     if b == "cloud" or (b == "auto" and authed):
         return "cloud (Aether API)"
     return "local Ollama (offline)"
@@ -98,7 +100,7 @@ def _run_turn(brain: Any, line: str, out: Any) -> None:
 
 def _build_ollama(backend: str, authed: bool) -> Any:
     """The local Ollama controller, only when this session will serve locally."""
-    b = (backend or "auto").strip().lower()
+    b = (backend or "local").strip().lower()
     if b == "cloud" or (b == "auto" and authed):
         return None  # cloud session — no local daemon to manage
     return OllamaCtl()
@@ -203,7 +205,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     out = sys.stdout
     cfg = load_config()
     base_url = cfg.get("baseUrl", "")
-    backend = str(cfg.get("backend", "auto"))
+    backend = str(cfg.get("backend", "local"))
     model = str(cfg.get("defaultModel", "") or "")
 
     store = FileTokenStore()
