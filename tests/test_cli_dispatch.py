@@ -150,6 +150,35 @@ def test_auth_login_with_token_stores_it(monkeypatch: pytest.MonkeyPatch, tmp_pa
     assert FileTokenStore().get() == "aek_testtoken123"
 
 
+def test_auth_login_enables_cloud_backend(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # Local is the default, but signing in opts you into the hosted API (auto)
+    # in one step — the cloud is never disabled, only off by default.
+    monkeypatch.setenv("AETHER_CONFIG_DIR", str(tmp_path))
+    monkeypatch.delenv("AETHER_TOKEN", raising=False)
+    monkeypatch.delenv("AETHER_BACKEND", raising=False)
+    from aether_agent.config import load_config
+
+    assert load_config()["backend"] == "local"  # fresh install: local-first
+    code = cli.main(["auth", "login", "--token", "aek_testtoken123"])
+    assert code == 0
+    assert load_config()["backend"] == "auto"  # sign-in moved it onto the cloud
+
+
+def test_auth_login_keeps_explicit_backend_choice(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # A deliberate backend choice is never overwritten by login.
+    monkeypatch.setenv("AETHER_CONFIG_DIR", str(tmp_path))
+    monkeypatch.delenv("AETHER_TOKEN", raising=False)
+    monkeypatch.delenv("AETHER_BACKEND", raising=False)
+    from aether_agent.config import load_config, save_config
+
+    cfg = load_config()
+    cfg["backend"] = "cloud"
+    save_config(cfg)
+    code = cli.main(["auth", "login", "--token", "tok"])
+    assert code == 0
+    assert load_config()["backend"] == "cloud"  # unchanged
+
+
 def test_auth_logout_clears_token(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("AETHER_CONFIG_DIR", str(tmp_path))
     monkeypatch.delenv("AETHER_TOKEN", raising=False)
