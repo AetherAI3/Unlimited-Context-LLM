@@ -4,8 +4,6 @@
 
 **Give your AI superpowers with unlimited context for [Ollama](https://ollama.com)** — a **billion+ token memory** for any LLM. Local-first, on your own machine, free.
 
-<img width="537" height="405" alt="Unlimited Context" src="https://github.com/user-attachments/assets/79758729-ead7-42ca-9784-831cae68ef06" />
-
 [![License](https://img.shields.io/badge/License-Apache_2.0-06b6d4?style=flat-square)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-14b8a6?style=flat-square&logo=python&logoColor=white)](https://www.python.org)
 [![Built by Aether](https://img.shields.io/badge/Built_by-Aether-7c3aed?style=flat-square)](https://aethersystems.net)
