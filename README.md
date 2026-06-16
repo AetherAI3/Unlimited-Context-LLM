@@ -90,24 +90,6 @@ It's **virtual memory, for attention.** Map it to an OS and it clicks:
 
 All of it runs while the model generates, so reaching the pool adds no wall-clock. → full explainer in [`docs/how-it-works.md`](docs/how-it-works.md).
 
-## MPO: the context chain
-
-Plain semantic search returns isolated nearest-neighbors — the single closest slices, ripped out of the thread they belonged to. Recall a fact and you often miss the three slices around it that made it make sense.
-
-The **MPO context chain** fixes that. It links the session's slices into one connected structure, so when cosine pulls an entry slice, the chain **pulls in the slices most coupled to it** — widening the working set with the *connected thread*, not stray hits. Cosine is still the retrieval mechanism; the chain **assists** it.
-
-The chain is **Aether-tuned, deterministic, and fully local** — no training, no network. It's purely **additive**: it only ever *adds* connected context, never blocks or replaces a hit, and on any hiccup it falls back cleanly to plain cosine.
-
-In a planted-thread benchmark, this lifts connected-context recall from **0.15 (cosine alone) to 0.78** — over 5× more of the right thread in the window. On by default:
-
-```python
-Session(model="ollama/qwen2.5", pool_gb=10)                 # chain on by default
-Session(model="ollama/qwen2.5", pool_gb=10, mpo_chain=False) # plain cosine
-```
-```bash
-aether-context run "..." --no-mpo-chain                      # disable for one run
-```
-
 ## What you get
 
 - 🧠 **Unbounded reach** — ~1B tokens of encoded context in ~5 GB on disk; the model reaches it in slices.
@@ -240,6 +222,23 @@ The engine stays light: **vectors live on disk (mmap'd)** — only the small HNS
 RAM  ≈  ~180 MB   base (engine + shared static encoder)
       +  ~29 MB   per GB of pool   (resident index)
       +  ~30 MB   per active session
+```
+## MPO: the context chain
+
+Plain semantic search returns isolated nearest-neighbors — the single closest slices, ripped out of the thread they belonged to. Recall a fact and you often miss the three slices around it that made it make sense.
+
+The **MPO context chain** fixes that. It links the session's slices into one connected structure, so when cosine pulls an entry slice, the chain **pulls in the slices most coupled to it** — widening the working set with the *connected thread*, not stray hits. Cosine is still the retrieval mechanism; the chain **assists** it.
+
+The chain is **Aether-tuned, deterministic, and fully local** — no training, no network. It's purely **additive**: it only ever *adds* connected context, never blocks or replaces a hit, and on any hiccup it falls back cleanly to plain cosine.
+
+In a planted-thread benchmark, this lifts connected-context recall from **0.15 (cosine alone) to 0.78** — over 5× more of the right thread in the window. On by default:
+
+```python
+Session(model="ollama/qwen2.5", pool_gb=10)                 # chain on by default
+Session(model="ollama/qwen2.5", pool_gb=10, mpo_chain=False) # plain cosine
+```
+```bash
+aether-context run "..." --no-mpo-chain                      # disable for one run
 ```
 
 **Resident index cost by pool size:**
