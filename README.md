@@ -2,29 +2,18 @@
 
 # ⚡ Unlimited Context LLM
 
-Give your Ai superpowers with **Unlimited context for [Ollama](https://ollama.com)** — give any LLM a **billion+ token memory**. Local-first, on your own machine, free.
+**Give your AI superpowers with unlimited context for [Ollama](https://ollama.com)** — a **billion+ token memory** for any LLM. Local-first, on your own machine, free.
 
 <img width="537" height="405" alt="Unlimited Context" src="https://github.com/user-attachments/assets/79758729-ead7-42ca-9784-831cae68ef06" />
 
-[![License](https://img.shields.io/badge/license-Apache--2.0-06b6d4)](LICENSE) [![Python](https://img.shields.io/badge/python-3.10%2B-14b8a6)](https://www.python.org) [![Built by Aether](https://img.shields.io/badge/built%20by-Aether-7c3aed)](https://aethersystems.net)
+[![License](https://img.shields.io/badge/License-Apache_2.0-06b6d4?style=flat-square)](LICENSE)
+[![Python](https://img.shields.io/badge/Python-3.10%2B-14b8a6?style=flat-square&logo=python&logoColor=white)](https://www.python.org)
+[![Built by Aether](https://img.shields.io/badge/Built_by-Aether-7c3aed?style=flat-square)](https://aethersystems.net)
+[![Local-first](https://img.shields.io/badge/Local--first-100%25_offline-0ea5e9?style=flat-square)](#what-you-get)
+[![PRs welcome](https://img.shields.io/badge/PRs-welcome-22c55e?style=flat-square)](CONTRIBUTING.md)
+[![Stars](https://img.shields.io/github/stars/DBarr3/Unlimited-Context-LLM?style=flat-square&logo=github&color=eab308)](https://github.com/DBarr3/Unlimited-Context-LLM/stargazers)
 
 **An open project from [Aether](https://aethersystems.net)** · Apache-2.0 · [Install](#quickstart)
-
-</div>
-
----
-
-<div align="center">
-
-> **Your context window didn't get bigger. Its *reach* did.**
-> Unlimited Context is virtual memory for an LLM. The model keeps its small window; the engine keeps a vast store on your disk and pulls the *right slice* back in while the model reasons. A small local model stays coherent across runs that would blow past any context window.
-
-> ⚠️ **Giving a model durable memory is powerful — read the safety measures first.** Real
-> concerns (runaway agents, grounding drift, an agent's own notes becoming its rules) and what
-> we do about them: **[Aether AI — Ethical & Safety Measures](SAFETY.md)**. The project is open
-> under Apache-2.0 and governed by the **[Acceptable Use Policy](USE_POLICY.md)** — these are not
-> recommendations. Anyone using the project must comply with its terms, and by using the project you
-> already agree to and are bound by them.
 
 <p align="center">
   <a href="#the-shape-of-it">The shape of it</a> ·
@@ -47,7 +36,17 @@ Give your Ai superpowers with **Unlimited context for [Ollama](https://ollama.co
 
 ---
 
-<div align="center">
+> **Your context window didn't get bigger. Its *reach* did.**
+> Unlimited Context is virtual memory for an LLM. The model keeps its small window; the engine keeps a vast store on your disk and pulls the *right slice* back in while the model reasons. A small local model stays coherent across runs that would blow past any context window.
+
+> ⚠️ **Giving a model durable memory is powerful — read the safety measures first.** Real
+> concerns (runaway agents, grounding drift, an agent's own notes becoming its rules) and what
+> we do about them: **[Aether AI — Ethical & Safety Measures](SAFETY.md)**. The project is open
+> under Apache-2.0 and governed by the **[Acceptable Use Policy](USE_POLICY.md)** — these are not
+> recommendations. Anyone using the project must comply with its terms, and by using the project you
+> already agree to and are bound by them.
+
+---
 
 ## The shape of it
 
@@ -60,10 +59,7 @@ Four steps, start to reach:
 
 That's it. A 5 GB pool gives a small model ~1.16B tokens of reach — about **9,000×** a 128K window — on your own machine, offline.
 
-
 ---
-
-<div align="center">
 
 ## The problem
 
@@ -172,7 +168,6 @@ How those numbers come out: ~2.2 KB per slice (a 256-dim vector + compressed tex
 > **Honest:** that's encoded **reach**, retrieved in slices — not a bigger attention window, and it rides on retrieval hit rate. A bigger pool buys more reachable codebase/corpus *per session* — not more concurrent sessions (those are RAM-bound, ~30 on 8 GB either way).
 
 ---
-
 
 ## The proof
 
@@ -323,21 +318,6 @@ That's the whole thing. One small model, one command, a billion tokens of reach 
 
 "Unlimited" means **reach, not attention.** Your model keeps its native window — we make it *reach* a billion-token pool in slices, via fast retrieval. The whole thing rides on retrieval **hit rate**; when it's high (and the loader is built to keep it high), the pool feels like one seamless context. The measured proof of all this is up top — see [The proof](#the-proof).
 
-## Benchmark — measured, on a real model
-
-A live run on **`deepseek/deepseek-v4-pro`** (via OpenRouter), driving an agent through **60 real GitHub issues** over a **40-turn session that overflows the model's window** — engine **on** vs **off** (off = no engine, same model, transcript truncated to the window). Full write-up: [`docs/benchmarks/2026-06-14-deepseek-v4-pro-session-eval.md`](docs/benchmarks/2026-06-14-deepseek-v4-pro-session-eval.md).
-
-| Metric | Off (baseline) | On (engine) | Change |
-|---|:---:|:---:|:---:|
-| **Recall coherence** (early facts still correct) | 0.15 | **1.00** | **6.7×** |
-| **Work outcome** (tasks done right) | 3 / 20 | **20 / 20** | **3 → 20** |
-| **Cost — full session** | $0.0711 | **$0.0542** | **−24%** |
-| **Cost — back half (recall phase)** | $0.00117/turn | **$0.00053/turn** | **−54%** |
-
-What the engine provided, in one session: it **held coherence flat at 1.00 while the baseline drifted to 0.15** (early issues fell out of the window and were lost), turned a **3/20 failing run into 20/20**, and did it for **~25% less money overall — over half off in the back half**, where the baseline drags a bloated transcript into every call and the engine sends a compact recalled window. Total spend for the whole benchmark: **$0.19**. Committed raw artifacts: [`docs/benchmarks/artifacts/2026-06-14-deepseek-v4-pro/`](docs/benchmarks/artifacts/2026-06-14-deepseek-v4-pro/) (`api_eval_results.json`, `api_eval_series.csv`, `api_eval_plot.png`, `RESULTS.md`).
-
-<sub>**Scope, honestly:** this measures the **engine** (retrieve-on-overflow memory), not the MPO chain — on this single-fact recall task the MPO chain **ties** plain recall (both 1.00). The MPO's multi-slice edge is **synthetic-only so far** (`bench/chain_recall.py`: connected-context recall 0.15 → 0.78); the live `thread` run that would confirm it is **pending** — not yet claimed. Magnitude scales with the overflow ratio: the 2000-token window is deliberately tiny to force overflow, so a realistic window shows a smaller (still real) gain. N=20 recall turns, single run. Reproduce: `python -m bench.api_eval --model deepseek/deepseek-v4-pro --repo microsoft/vscode --arms off,on,on_chain --plot`.</sub>
-
 ## Citation
 
 If Unlimited Context helps your work, please cite it. Built and maintained by **Aether AI**.
@@ -362,8 +342,6 @@ If this gave your local model superpowers, **drop a star** — it's how other pe
 ## License
 
 **Apache-2.0.** Use it, fork it, ship it in your product.
-
-</div>
 
 ---
 
