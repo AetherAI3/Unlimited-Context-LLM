@@ -5,15 +5,21 @@
 
 This is the AGENT (CLI host) config and is deliberately distinct from
 ``aether_context.config`` (the engine's on-disk *pool* config). Mirror of
-aether-code ``src/core/config.ts``: a single env var (AETHER_BASE_URL) re-points
-every API call at a staging/self-hosted backend, and AETHER_CONFIG_DIR relocates
-the whole config directory (used by tests). A corrupt config.json must NEVER
-crash the CLI — it falls back to the defaults.
+aether-code ``src/core/config.ts``: AETHER_BASE_URL re-points every API call at a
+staging/self-hosted backend, AETHER_BACKEND forces the routing knob
+(``local`` / ``auto`` / ``cloud``), and AETHER_CONFIG_DIR relocates the whole
+config directory (used by tests). A corrupt config.json must NEVER crash the
+CLI — it falls back to the defaults.
+
+This project is local-first: ``backend`` defaults to ``local`` so a fresh clone
+runs every turn on the user's own Ollama and never calls the hosted API. ``auto``
+and ``cloud`` are opt-in — the hosted API is the maintainer's own instance.
 
 On-disk contract (lockstep with the TS mirror):
   - dir:  ~/.config/aether            (env AETHER_CONFIG_DIR override)
   - file: <dir>/config.json
   - default baseUrl: https://api.aethersystems.net/cloud
+  - default backend: local            (env AETHER_BACKEND override)
 """
 from __future__ import annotations
 
@@ -32,7 +38,7 @@ DEFAULT_BASE_URL = "https://api.aethersystems.net/cloud"
 DEFAULT_CONFIG: dict[str, Any] = {
     "baseUrl": DEFAULT_BASE_URL,
     "defaultModel": "",
-    "backend": "auto",
+    "backend": "local",  # local-first default; auto/cloud are opt-in (env AETHER_BACKEND)
     "permissionMode": "ask",
     "autoApply": False,
     "telemetry": True,
@@ -59,7 +65,8 @@ def load_config() -> dict[str, Any]:
 
     Missing file -> a copy of the defaults. Corrupt/partial JSON -> defaults with
     any readable keys merged in (a bad config can't brick the CLI). The
-    AETHER_BASE_URL env var ALWAYS wins for ``baseUrl`` (env > file > default).
+    AETHER_BASE_URL env var ALWAYS wins for ``baseUrl`` and AETHER_BACKEND for
+    ``backend`` (env > file > default).
     """
     cfg = dict(DEFAULT_CONFIG)
     path = config_path()
@@ -74,6 +81,9 @@ def load_config() -> dict[str, Any]:
     env_base = os.environ.get("AETHER_BASE_URL")
     if env_base:
         cfg["baseUrl"] = env_base
+    env_backend = os.environ.get("AETHER_BACKEND")
+    if env_backend and env_backend.strip():
+        cfg["backend"] = env_backend.strip()
     return cfg
 
 
