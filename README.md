@@ -69,10 +69,6 @@ The fix isn't a bigger window — it's to stop throwing the overflow away. Inste
 
 <p align="center"><strong>Compress &amp; forget ✗ &nbsp;→&nbsp; Encode &amp; recover ✓</strong></p>
 
-<div align="center">
-  <img width="880" alt="Compress and forget vs encode and recover" src="https://github.com/user-attachments/assets/dadae038-5e1a-45c6-b16c-4763da4238a8" />
-</div>
-
 ## How it works
 
 It's **virtual memory, for attention.** Map it to an OS and it clicks:
