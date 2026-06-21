@@ -91,11 +91,17 @@ class PoolConfig:
     dim: int = DEFAULT_DIM
     slice_tokens: int = DEFAULT_SLICE_TOKENS
     dir: Path = field(default_factory=default_pool_dir)
+    quantize_bits: int = 0   # TurboVec: 0 = float32 (default); 8 = recall-safe (~4x); 4 = lossy/flagged
 
     def __post_init__(self) -> None:
         # Path coercion (callers may pass a str).
         if not isinstance(self.dir, Path):
             self.dir = Path(self.dir)
+        if self.quantize_bits not in (0, 4, 8):
+            raise PoolBudgetError(
+                f"quantize_bits={self.quantize_bits} is not one of (0, 4, 8)",
+                hint="0=float32, 8=recall-safe TurboVec (~4x), 4=lossy (flag-only).",
+            )
         if self.pool_gb < POOL_GB_FLOOR:
             raise PoolBudgetError(
                 f"pool_gb={self.pool_gb} is below the {POOL_GB_FLOOR} GB pool floor "
