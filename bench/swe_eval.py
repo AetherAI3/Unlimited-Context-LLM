@@ -179,8 +179,11 @@ def run_instance(arm: str, inst: dict, cfg: SweConfig, chat, budget: dict,
 
     user = (f"Repository: {inst['repo']} @ {inst['base_commit'][:10]}\n\n"
             f"Problem:\n{inst['problem_statement']}\n\nInvestigate and fix it.")
-    transcript: list[dict] = [{"role": "system", "content": _SYS},
-                              {"role": "user", "content": user}]
+    # FLAT history: plain {role, content} text only — NO OpenAI tool_call/tool objects. The
+    # context we SEND is therefore safe to truncate anywhere (a raw tool_call message orphaned
+    # from its tool result makes OpenAI 400 'No tool call found for function call output').
+    # Tool calls THIS turn still use the real schema; we fold each result back as text.
+    history: list[dict] = [{"role": "user", "content": user}]
     cost = 0.0
     cached = 0
     halted: Optional[str] = None
@@ -199,22 +202,20 @@ def run_instance(arm: str, inst: dict, cfg: SweConfig, chat, budget: dict,
         return True
 
     # ── Unified agent loop: read tools + submit_patch available throughout ──
-    # dsv4-pro compulsively reads and won't write from plain text, so submit_patch is always
-    # on the table; the engine keeps the FULL reads in reach (codepro) while off only keeps the
-    # window-truncated tail. Near the budget end we drop the read tools to force a submit.
+    # submit_patch is always on the table; the engine keeps the FULL reads in reach (codepro)
+    # while off only keeps the window-truncated tail (= the contrast). Near the budget end we
+    # drop the read tools to force a submit.
     schema_all = _READONLY_SCHEMA + _SUBMIT_SCHEMA
     applied = 0
 
     def _convo(extra: Optional[list] = None) -> list:
+        convo = _truncate([{"role": "system", "content": _SYS}] + history, cfg.window)
         if session is not None:
             qvec = encoder.encode(inst["problem_statement"])
             recalled = session._cold_retrieve(session._key(), qvec, cfg.recall_k)
             mem = "\n".join(f"[mem] {s.text}" for s in recalled) or "(empty)"
-            base = ([transcript[0], {"role": "system", "content": f"Working memory:\n{mem}"}]
-                    + transcript[1:])
-        else:
-            base = transcript
-        return _truncate(base, cfg.window) + (extra or [])
+            convo = [convo[0], {"role": "system", "content": f"Working memory:\n{mem}"}] + convo[1:]
+        return convo + (extra or [])
 
     for _step in range(cfg.max_steps):
         if budget["spent"] >= cfg.max_usd:
@@ -229,12 +230,11 @@ def run_instance(arm: str, inst: dict, cfg: SweConfig, chat, budget: dict,
         if not _account(out):
             break
         tcs = out.get("tool_calls") or []
+        say = out.get("content")
 
         # 1) submit_patch -> apply SEARCH/REPLACE blocks
         edits = _submit_edits(out)
         if edits is not None:
-            transcript.append({"role": "assistant", "content": out.get("content"),
-                               "tool_calls": tcs})
             fails = []
             for path, search, replace in _parse_blocks(edits):
                 res = tools.edit_file(path, search, replace)
@@ -242,21 +242,18 @@ def run_instance(arm: str, inst: dict, cfg: SweConfig, chat, budget: dict,
                     applied += 1
                 else:
                     fails.append(f"{path}: {res.get('error') if isinstance(res, dict) else 'fail'}")
-            sid = next((t.get("id", "") for t in tcs
-                        if t.get("function", {}).get("name") == "submit_patch"), "")
+            history.append({"role": "assistant", "content": (say or "") + "\n(submitted patch)"})
             if applied and not fails:
-                transcript.append({"role": "tool", "tool_call_id": sid,
-                                   "content": f"applied {applied} edit(s)."})
                 break
-            transcript.append({"role": "tool", "tool_call_id": sid, "content": (
+            history.append({"role": "user", "content": (
                 "No edits applied — SEARCH text must match the file EXACTLY. "
-                + ("Failures:\n" + "\n".join(fails) if fails else "No valid blocks found."))})
+                + ("Failures:\n" + "\n".join(fails) if fails else "No valid blocks found.")
+                + "\nResend ALL needed blocks via submit_patch.")})
             continue
 
-        # 2) read/grep/list -> serve; store FULL result in the engine (off keeps only the tail)
+        # 2) read/grep/list -> serve; fold result back as TEXT; store FULL in engine (off keeps tail)
         if tcs:
-            transcript.append({"role": "assistant", "content": out.get("content"),
-                               "tool_calls": tcs})
+            obs = []
             for tc in tcs:
                 fn = tc.get("function", {})
                 try:
@@ -268,17 +265,18 @@ def run_instance(arm: str, inst: dict, cfg: SweConfig, chat, budget: dict,
                 except Exception as e:  # a tool crash must not kill the instance
                     result = {"error": f"{type(e).__name__}: {e}"}
                 full = json.dumps(result)
-                transcript.append({"role": "tool", "tool_call_id": tc.get("id", ""),
-                                   "content": full[:_TOOL_RESULT_CAP]})
+                obs.append(f"[{fn.get('name')} {args}] ->\n{full[:_TOOL_RESULT_CAP]}")
                 if session is not None:
                     session.remember(f"{fn.get('name')}({args}): {full}")
+            history.append({"role": "assistant", "content": say or "(calling tools)"})
+            history.append({"role": "user", "content": "\n\n".join(obs)})
             continue
 
         # 3) no tool call -> nudge toward submitting (the model stalled)
-        transcript.append({"role": "assistant", "content": out.get("content") or "..."})
+        history.append({"role": "assistant", "content": say or "..."})
         if tools.current_patch().strip():
             break
-        transcript.append({"role": "user", "content": _PATCH_INSTRUCTION})
+        history.append({"role": "user", "content": _PATCH_INSTRUCTION})
 
     patch = tools.current_patch()
     if session is not None:
@@ -350,7 +348,10 @@ def run_swe_eval(cfg: SweConfig, instances: Optional[list[dict]] = None,
             if budget["spent"] >= cfg.max_usd:
                 summary["halted"] = "budget_cap"
                 break
-            rec = run_instance(arm, inst, cfg, chat, budget, repo_url=_repo_url(inst))
+            try:
+                rec = run_instance(arm, inst, cfg, chat, budget, repo_url=_repo_url(inst))
+            except Exception as e:  # one instance must never kill the batch
+                rec = _empty_record(arm, inst, f"run_error: {type(e).__name__}")
             with pred_paths[arm].open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(rec) + "\n")
             summary["arms"][arm]["done"] += 1
