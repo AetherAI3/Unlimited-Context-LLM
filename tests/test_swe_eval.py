@@ -57,6 +57,40 @@ def _base(repo):
                           capture_output=True, text=True).stdout.strip()
 
 
+class _LazyChat:
+    """Step 1: 'done' with NO tool call (empty patch). After pushback, step 2 edits."""
+    def __init__(self, *_a, **_k):
+        self._t = 0
+
+    def chat(self, messages, tools=None, *, max_tokens=None):
+        self._t += 1
+        usage = {"prompt_tokens": 50, "completion_tokens": 10}
+        if self._t == 1:
+            return {"content": "I analyzed it, the fix is obvious. Done.",
+                    "usage": usage, "tool_calls": []}
+        if self._t == 2:
+            return {"content": None, "usage": usage, "tool_calls": [
+                {"id": "c1", "type": "function", "function": {
+                    "name": "edit_file",
+                    "arguments": _json.dumps({"path": "a.py",
+                                              "old": "return x - y  # bug",
+                                              "new": "return x + y"})}}]}
+        return {"content": "done", "usage": usage, "tool_calls": []}
+
+
+def test_finish_without_edit_is_rejected_until_patch_exists(tmp_path):
+    repo = _make_repo(tmp_path)
+    cfg = SweConfig(dry_run=True, work_dir=tmp_path / "wd", out_dir=tmp_path / "out",
+                    max_steps=10)
+    inst = {"instance_id": "syn__repo-1", "repo": "syn/repo",
+            "base_commit": _base(repo), "problem_statement": "fix add"}
+    rec = run_instance("off", inst, cfg, _LazyChat(), {"spent": 0.0},
+                       repo_url=f"file://{repo.as_posix()}")
+    # The first 'done' (no edit) was rejected; the model then edited -> patch lands.
+    assert rec["patch_nonempty"] is True
+    assert "+    return x + y" in rec["model_patch"]
+
+
 def test_run_instance_produces_patch_off_arm(tmp_path):
     repo = _make_repo(tmp_path)
     cfg = SweConfig(dry_run=True, work_dir=tmp_path / "wd")
