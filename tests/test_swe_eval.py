@@ -1,7 +1,7 @@
 import subprocess
 from pathlib import Path
 
-from bench.swe_eval import (SweConfig, _build_config, _extract_diff, run_instance,
+from bench.swe_eval import (SweConfig, _build_config, _parse_blocks, run_instance,
                             run_swe_eval, select_instances)
 
 
@@ -22,34 +22,35 @@ def test_select_instances_all_when_n_zero():
     assert len(got) == 3
 
 
-_DIFF = ("diff --git a/a.py b/a.py\n"
-         "--- a/a.py\n+++ b/a.py\n"
-         "@@ -1,2 +1,2 @@\n def add(x, y):\n"
-         "-    return x - y  # bug\n+    return x + y\n")
+# An Aider-style SEARCH/REPLACE block that fixes the seeded bug in a.py.
+_SR = ("a.py\n"
+       "<<<<<<< SEARCH\n"
+       "    return x - y  # bug\n"
+       "=======\n"
+       "    return x + y\n"
+       ">>>>>>> REPLACE\n")
 
 
-class _DiffChat:
-    """Investigation turns (tools set) -> 'ready' no tool call; patch turn (tools=None)
-    -> a fenced unified diff. Mirrors how dsv4-pro is driven in the two-phase loop."""
+class _SRChat:
+    """Investigation turns (tools set) -> 'ready'; patch turn (tools=None) -> SR block."""
     def __init__(self, *_a, **_k):
         pass
 
     def chat(self, messages, tools=None, *, max_tokens=None):
         usage = {"prompt_tokens": 50, "completion_tokens": 10}
         if tools is None:  # forced patch turn
-            return {"content": "```diff\n" + _DIFF + "```", "usage": usage, "tool_calls": []}
-        return {"content": "ready", "usage": usage, "tool_calls": []}  # stop investigating
+            return {"content": "Here is the fix:\n" + _SR, "usage": usage, "tool_calls": []}
+        return {"content": "ready", "usage": usage, "tool_calls": []}
 
 
-class _NoDiffChat:
-    """Never emits a diff (prose only) -> empty patch."""
+class _NoEditChat:
+    """Never emits a usable edit block -> empty patch."""
     def __init__(self, *_a, **_k):
         pass
 
     def chat(self, messages, tools=None, *, max_tokens=None):
-        usage = {"prompt_tokens": 50, "completion_tokens": 10}
-        return {"content": "I think the bug is in a.py somewhere.", "usage": usage,
-                "tool_calls": []}
+        return {"content": "I think the bug is somewhere in a.py.",
+                "usage": {"prompt_tokens": 50, "completion_tokens": 10}, "tool_calls": []}
 
 
 def _make_repo(tmp_path):
@@ -73,20 +74,23 @@ def _inst(repo):
             "base_commit": _base(repo), "problem_statement": "fix add"}
 
 
-def test_extract_diff_from_fenced_block():
-    out = _extract_diff("Here is the fix:\n```diff\n" + _DIFF + "```\nDone.")
-    assert out.startswith("diff --git a/a.py")
-    assert "+    return x + y" in out
+def test_parse_blocks_extracts_path_search_replace():
+    blocks = _parse_blocks("prose\n" + _SR + "\nmore prose")
+    assert len(blocks) == 1
+    path, search, replace = blocks[0]
+    assert path == "a.py"
+    assert "return x - y  # bug" in search
+    assert "return x + y" in replace
 
 
-def test_extract_diff_empty_when_no_diff():
-    assert _extract_diff("I could not find the bug.") == ""
+def test_parse_blocks_empty_when_none():
+    assert _parse_blocks("no edit blocks here") == []
 
 
-def test_run_instance_captures_diff_off_arm(tmp_path):
+def test_run_instance_applies_block_off_arm(tmp_path):
     repo = _make_repo(tmp_path)
     cfg = SweConfig(dry_run=True, work_dir=tmp_path / "wd", out_dir=tmp_path / "out")
-    rec = run_instance("off", _inst(repo), cfg, _DiffChat(), {"spent": 0.0},
+    rec = run_instance("off", _inst(repo), cfg, _SRChat(), {"spent": 0.0},
                        repo_url=f"file://{repo.as_posix()}")
     assert rec["arm"] == "off"
     assert rec["patch_nonempty"] is True
@@ -98,17 +102,17 @@ def test_run_instance_codepro_arm_uses_engine(tmp_path):
     repo = _make_repo(tmp_path)
     cfg = SweConfig(dry_run=True, work_dir=tmp_path / "wd", out_dir=tmp_path / "out",
                     pool_gb=5)  # 5 GB = engine pool floor
-    rec = run_instance("codepro", _inst(repo), cfg, _DiffChat(), {"spent": 0.0},
+    rec = run_instance("codepro", _inst(repo), cfg, _SRChat(), {"spent": 0.0},
                        repo_url=f"file://{repo.as_posix()}")
     assert rec["arm"] == "codepro"
     assert rec["patch_nonempty"] is True
     assert "+    return x + y" in rec["model_patch"]
 
 
-def test_run_instance_no_diff_is_empty_patch(tmp_path):
+def test_run_instance_no_block_is_empty_patch(tmp_path):
     repo = _make_repo(tmp_path)
     cfg = SweConfig(dry_run=True, work_dir=tmp_path / "wd", out_dir=tmp_path / "out")
-    rec = run_instance("off", _inst(repo), cfg, _NoDiffChat(), {"spent": 0.0},
+    rec = run_instance("off", _inst(repo), cfg, _NoEditChat(), {"spent": 0.0},
                        repo_url=f"file://{repo.as_posix()}")
     assert rec["patch_nonempty"] is False
     assert rec["model_patch"] == ""
@@ -121,10 +125,10 @@ def test_resume_skips_done_and_writes_predictions(tmp_path, monkeypatch):
                     work_dir=tmp_path / "wd")
     monkeypatch.setattr("bench.swe_eval._repo_url",
                         lambda inst: f"file://{repo.as_posix()}")
-    run_swe_eval(cfg, instances=insts, chat_factory=lambda cfg: _DiffChat())
+    run_swe_eval(cfg, instances=insts, chat_factory=lambda cfg: _SRChat())
     pred = (tmp_path / "out" / "predictions_off.jsonl").read_text(encoding="utf-8").strip()
     assert "syn__repo-1" in pred
-    r2 = run_swe_eval(cfg, instances=insts, chat_factory=lambda cfg: _DiffChat())
+    r2 = run_swe_eval(cfg, instances=insts, chat_factory=lambda cfg: _SRChat())
     assert r2["skipped"] >= 1
 
 
@@ -136,7 +140,7 @@ def test_global_cap_halts(tmp_path, monkeypatch):
                     work_dir=tmp_path / "wd2", max_usd=0.0)  # cap already reached
     monkeypatch.setattr("bench.swe_eval._repo_url",
                         lambda inst: f"file://{repo.as_posix()}")
-    r = run_swe_eval(cfg, instances=insts, chat_factory=lambda cfg: _DiffChat())
+    r = run_swe_eval(cfg, instances=insts, chat_factory=lambda cfg: _SRChat())
     assert r["halted"] == "budget_cap"
 
 
