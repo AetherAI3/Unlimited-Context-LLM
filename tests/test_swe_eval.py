@@ -1,8 +1,10 @@
 import subprocess
 from pathlib import Path
 
-from bench.swe_eval import (SweConfig, _build_config, _parse_blocks, run_instance,
-                            run_swe_eval, select_instances)
+import json as _json
+
+from bench.swe_eval import (SweConfig, _build_config, _parse_blocks, _submit_edits,
+                            run_instance, run_swe_eval, select_instances)
 
 
 _FAKE = [
@@ -31,15 +33,23 @@ _SR = ("a.py\n"
        ">>>>>>> REPLACE\n")
 
 
+def _is_submit(tools) -> bool:
+    return bool(tools) and any(
+        t.get("function", {}).get("name") == "submit_patch" for t in tools)
+
+
 class _SRChat:
-    """Investigation turns (tools set) -> 'ready'; patch turn (tools=None) -> SR block."""
+    """Investigation turns -> 'ready'; patch turn (submit_patch tool) -> submit_patch call."""
     def __init__(self, *_a, **_k):
         pass
 
     def chat(self, messages, tools=None, *, max_tokens=None):
         usage = {"prompt_tokens": 50, "completion_tokens": 10}
-        if tools is None:  # forced patch turn
-            return {"content": "Here is the fix:\n" + _SR, "usage": usage, "tool_calls": []}
+        if _is_submit(tools):  # forced patch turn
+            return {"content": None, "usage": usage, "tool_calls": [
+                {"id": "s1", "type": "function", "function": {
+                    "name": "submit_patch",
+                    "arguments": _json.dumps({"edits": _SR})}}]}
         return {"content": "ready", "usage": usage, "tool_calls": []}
 
 
@@ -85,6 +95,16 @@ def test_parse_blocks_extracts_path_search_replace():
 
 def test_parse_blocks_empty_when_none():
     assert _parse_blocks("no edit blocks here") == []
+
+
+def test_submit_edits_reads_tool_arg():
+    out = {"tool_calls": [{"function": {"name": "submit_patch",
+                                        "arguments": _json.dumps({"edits": _SR})}}]}
+    assert _submit_edits(out) == _SR
+
+
+def test_submit_edits_none_when_absent():
+    assert _submit_edits({"tool_calls": []}) is None
 
 
 def test_run_instance_applies_block_off_arm(tmp_path):
