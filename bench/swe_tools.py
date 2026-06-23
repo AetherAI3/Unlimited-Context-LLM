@@ -46,7 +46,8 @@ class RepoTools:
         cmd = ["git", "grep", "-n", "-I", "-e", pattern or ""]
         if path_glob:
             cmd += ["--", path_glob]
-        proc = subprocess.run(cmd, cwd=self.root, capture_output=True, text=True)
+        proc = subprocess.run(cmd, cwd=self.root, capture_output=True, text=True,
+                              errors="replace")  # repos contain non-UTF8 bytes
         matches = []
         for ln in proc.stdout.splitlines()[:100]:
             parts = ln.split(":", 2)
@@ -77,7 +78,8 @@ class RepoTools:
 
     def current_patch(self) -> str:
         """Unified diff of the working tree vs HEAD (the base commit) = model_patch."""
-        proc = subprocess.run(["git", "diff"], cwd=self.root, capture_output=True, text=True)
+        proc = subprocess.run(["git", "diff"], cwd=self.root, capture_output=True,
+                              text=True, errors="replace")  # binary diffs -> non-UTF8 bytes
         return proc.stdout
 
     TOOLS_SCHEMA = [
