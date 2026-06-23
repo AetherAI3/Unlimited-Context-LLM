@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -90,26 +91,32 @@ _READONLY_SCHEMA = [t for t in RepoTools.TOOLS_SCHEMA
                     if t["function"]["name"] in ("read_file", "grep", "list_dir")]
 
 _PATCH_INSTRUCTION = (
-    "Now produce the fix. Output the COMPLETE change as a unified diff in `git diff` format "
-    "(lines starting with `diff --git a/<path> b/<path>`, `--- a/<path>`, `+++ b/<path>`, then "
-    "`@@` hunks). Use real file paths relative to the repo root, from the files you read. Output "
-    "ONLY the diff inside a single ```diff code block — no prose, no explanation. Keep it minimal.")
+    "Now produce the fix. Do NOT call any tools. Output one or more edit blocks in EXACTLY this "
+    "format, one per change:\n\n"
+    "<path/relative/to/repo/root>\n"
+    "<<<<<<< SEARCH\n"
+    "<exact lines that currently exist in the file>\n"
+    "=======\n"
+    "<replacement lines>\n"
+    ">>>>>>> REPLACE\n\n"
+    "The SEARCH text must match the current file content EXACTLY (whitespace included) — copy it "
+    "from what you read. Keep edits minimal. Output ONLY the blocks, no prose.")
+
+# Aider-style SEARCH/REPLACE block. dsv4-pro will not write a line-numbered unified diff from
+# memory (it just keeps trying to re-read), but it can reproduce an exact snippet + replacement.
+# Applying via edit_file makes the off-vs-codepro gap a function of whether the model REMEMBERS
+# the exact code: off (truncated transcript) misremembers -> SEARCH miss; codepro recalls it.
+_BLOCK_RE = re.compile(
+    r"(?P<path>[^\n<>=]+?)\n<{5,7} SEARCH\n(?P<search>.*?)\n={5,7}\n(?P<replace>.*?)\n>{5,7} REPLACE",
+    re.S)
 
 
-def _extract_diff(text: str) -> str:
-    """Pull a unified diff out of the model's text (fenced ```diff block or a raw
-    `diff --git`/`--- a/` region to end). Returns '' when no diff is present."""
-    import re
+def _parse_blocks(text: str) -> list[tuple[str, str, str]]:
+    """Extract (path, search, replace) edit blocks from the model's patch-turn text."""
     if not text:
-        return ""
-    m = re.search(r"```(?:diff|patch)?\s*\n(.*?)```", text, re.S)
-    body = m.group(1) if m else text
-    for marker in ("diff --git", "\n--- a/", "--- a/"):
-        i = body.find(marker)
-        if i != -1:
-            out = body[i:].strip()
-            return out + "\n" if out else ""
-    return ""
+        return []
+    return [(m.group("path").strip().strip("`").strip(),
+             m.group("search"), m.group("replace")) for m in _BLOCK_RE.finditer(text)]
 
 
 def _empty_record(arm: str, inst: dict, halted: str) -> dict:
@@ -204,9 +211,14 @@ def run_instance(arm: str, inst: dict, cfg: SweConfig, chat, budget: dict,
             if session is not None:
                 session.remember(f"{fn.get('name')}({args}): {rjson}")
 
-    # ── Phase 2: forced patch turn (no tools) — capture the unified diff ──
-    patch = ""
-    if halted not in ("cost_spike",) and budget["spent"] < cfg.max_usd:
+    # ── Phase 2: forced patch turn(s) — SEARCH/REPLACE blocks, applied to the checkout ──
+    # Up to 2 attempts: the second gets feedback on which SEARCH blocks didn't match (so a
+    # near-miss can self-correct). model_patch = git diff of whatever applied.
+    applied = 0
+    instruction = _PATCH_INSTRUCTION
+    for _attempt in range(2):
+        if halted == "cost_spike" or budget["spent"] >= cfg.max_usd:
+            break
         if session is not None:
             qvec = encoder.encode(inst["problem_statement"])
             recalled = session._cold_retrieve(session._key(), qvec, cfg.recall_k)
@@ -216,11 +228,27 @@ def run_instance(arm: str, inst: dict, cfg: SweConfig, chat, budget: dict,
                               + transcript[1:], cfg.window)
         else:
             convo = _truncate(transcript, cfg.window)
-        convo = convo + [{"role": "user", "content": _PATCH_INSTRUCTION}]
+        convo = convo + [{"role": "user", "content": instruction}]
         out = chat.chat(convo, tools=None)
-        _account(out)
-        patch = _extract_diff(out.get("content") or "")
+        if not _account(out):
+            break
+        blocks = _parse_blocks(out.get("content") or "")
+        if not blocks:
+            break  # nothing usable -> give up (empty patch = unresolved)
+        fails = []
+        for path, search, replace in blocks:
+            res = tools.edit_file(path, search, replace)
+            if isinstance(res, dict) and res.get("ok"):
+                applied += 1
+            else:
+                fails.append(f"{path}: {res.get('error') if isinstance(res, dict) else 'failed'}")
+        if applied and not fails:
+            break
+        instruction = (_PATCH_INSTRUCTION + "\n\nThese blocks did NOT match the file and were "
+                       "skipped — fix the SEARCH text to match EXACTLY and resend ALL needed "
+                       "blocks:\n" + "\n".join(fails))
 
+    patch = tools.current_patch()
     if session is not None:
         session.close()
     return {
