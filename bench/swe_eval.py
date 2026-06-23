@@ -30,7 +30,7 @@ class SweConfig:
     arms: tuple[str, ...] = ("off", "codepro")
     instances: int = 0            # 0 = all of lite (300); N = first N (sorted)
     window: int = 8192            # off-arm truncation window
-    max_steps: int = 30           # tool steps per instance ("max reasoning" budget)
+    max_steps: int = 50           # tool steps per instance ("max reasoning" budget)
     pool_gb: int = 50             # codepro overpool reach
     turbovec_bits: int = 8        # codepro TurboVec quant (0/4/8)
     mpo_chain: bool = True        # codepro MPO chain
@@ -78,10 +78,12 @@ def _truncate(messages: list[dict], window_tokens: int) -> list[dict]:
     return head + tail
 
 
-_SYS = ("You are an expert software engineer fixing a real bug in a repository. Use read_file, "
-        "grep, and list_dir to investigate, then edit_file to apply a minimal fix. When the fix "
-        "is complete, reply with a one-line summary and STOP (no more tool calls). Make the repo's "
-        "own tests pass; change as little as possible.")
+_SYS = ("You are an expert software engineer fixing a real bug in a repository. Investigate with "
+        "read_file, grep, and list_dir — but you have a LIMITED tool budget, so do NOT over-explore. "
+        "Once you have located the cause (usually within ~15 tool calls), you MUST call edit_file to "
+        "apply the fix. An answer with no edit_file call scores ZERO — always make at least one "
+        "edit_file change before you finish. Keep the fix minimal so the repo's own tests pass. "
+        "When done, reply with a one-line summary and STOP.")
 
 
 def _empty_record(arm: str, inst: dict, halted: str) -> dict:
@@ -121,11 +123,19 @@ def run_instance(arm: str, inst: dict, cfg: SweConfig, chat, budget: dict,
     cost = 0.0
     cached = 0
     halted: Optional[str] = None
+    nudged = False
 
     for _step in range(cfg.max_steps):
         if budget["spent"] >= cfg.max_usd:
             halted = "budget_cap"
             break
+        # Near the end of the tool budget, force the edit phase: a turn spent still
+        # investigating with no edit yields an empty patch (auto-unresolved).
+        if not nudged and _step >= cfg.max_steps - 5 and not tools.current_patch().strip():
+            transcript.append({"role": "system", "content": (
+                "TOOL BUDGET ALMOST GONE. Stop investigating. Call edit_file NOW with your best "
+                "fix — an empty patch scores zero.")})
+            nudged = True
         if session is not None:
             qvec = encoder.encode(inst["problem_statement"])
             recalled = session._cold_retrieve(session._key(), qvec, cfg.recall_k)
