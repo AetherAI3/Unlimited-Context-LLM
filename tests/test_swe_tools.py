@@ -69,6 +69,17 @@ def test_edit_missing_oldstring_is_error(repo):
     assert "error" in r
 
 
+def test_grep_survives_non_utf8_bytes(repo):
+    # A real repo contains non-UTF8 bytes; git grep -I skips binary, but text decode of
+    # any stray bytes must not crash the tool (errors="replace").
+    (repo / "weird.txt").write_bytes(b"return value \xc0\xc1 here\n")
+    _git(["add", "-A"], repo)
+    _git(["commit", "-qm", "weird"], repo)
+    t = RepoTools(repo)
+    out = t.grep("return")  # must not raise UnicodeDecodeError
+    assert "matches" in out
+
+
 def test_prepare_checkout_at_base_commit(tmp_path, repo):
     # `repo` is a real git repo; clone it to a base commit via file:// (no network).
     base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo,

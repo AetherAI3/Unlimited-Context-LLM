@@ -156,7 +156,10 @@ def run_instance(arm: str, inst: dict, cfg: SweConfig, chat, budget: dict,
                     args = json.loads(fn.get("arguments") or "{}")
                 except json.JSONDecodeError:
                     args = {}
-                result = tools.dispatch(fn.get("name", ""), args)
+                try:
+                    result = tools.dispatch(fn.get("name", ""), args)
+                except Exception as e:  # a tool crash must not kill the instance
+                    result = {"error": f"{type(e).__name__}: {e}"}
                 rjson = json.dumps(result)[:1500]
                 transcript.append({"role": "tool", "tool_call_id": tc.get("id", ""),
                                    "content": rjson})
