@@ -47,6 +47,7 @@ import numpy as np
 from aether_context._log import get_logger
 from aether_context.config import PoolConfig, TOKENS_PER_GB
 from aether_context.errors import PoolBudgetError, PoolCorrupt
+from aether_context.quantize import dequantize, packed_bytes_per_row, quantize
 from aether_context.witness import Witness
 
 logger = get_logger(__name__)
@@ -249,6 +250,14 @@ class ContextPool:
     def __init__(self, config: PoolConfig, *, ceiling_bytes: int | None = None) -> None:
         self._config = config
         self._dim = config.dim
+        # TurboVec: 0 = float32 (default; this whole class is byte-identical to before). >0 stores
+        # quantized CODES on disk (8-bit recall-safe) while keeping the float32 unit vector in RAM for
+        # exact search — so disk footprint drops ~4x with no recall loss; reload dequantizes.
+        self._qbits = int(getattr(config, "quantize_bits", 0) or 0)
+        self._mdtype = np.uint8 if self._qbits else np.float32
+        self._mcols = packed_bytes_per_row(self._dim, self._qbits) if self._qbits else self._dim
+        self._vname = f"vectors.q{self._qbits}" if self._qbits else VECTORS_FILENAME
+        self._scale_of: dict[str, float] = {}   # per-slice quant scale (qbits>0 only)
         self._dir = Path(config.dir)
         # Resolve the index kind: honor 'hnsw' only when the lib is importable. 'tiered' is
         # accepted by config but not yet built — rather than silently masquerade as a paged
@@ -304,7 +313,17 @@ class ContextPool:
 
     # -- paths -----------------------------------------------------------------
     def _vectors_file(self) -> Path:
-        return self._dir / VECTORS_FILENAME
+        return self._dir / self._vname
+
+    def _write_row(self, row: int, sid: str, unit_vec: np.ndarray) -> None:
+        """Write a unit vector into mmap row ``row`` — quantized to codes when TurboVec is on."""
+        assert self._mmap is not None
+        if self._qbits:
+            codes, scale = quantize(unit_vec[None], self._qbits)
+            self._mmap[row] = codes[0]
+            self._scale_of[sid] = float(scale[0])
+        else:
+            self._mmap[row] = unit_vec
 
     def _metadata_file(self) -> Path:
         return self._dir / METADATA_FILENAME
@@ -358,7 +377,7 @@ class ContextPool:
             self._row_of[sl.id] = row
         stored_vec = self._unit(vec)
         assert self._mmap is not None
-        self._mmap[row] = stored_vec
+        self._write_row(row, sl.id, stored_vec)
         self._slices[sl.id] = Slice(
             id=sl.id,
             session=sl.session,
@@ -507,6 +526,7 @@ class ContextPool:
         """Drop a single slice id from the in-RAM structures (mmap row reclaimed on compact)."""
         self._slices.pop(sid, None)
         self._row_of.pop(sid, None)
+        self._scale_of.pop(sid, None)
         self._witness.forget(sid)
         try:
             self._order.remove(sid)
@@ -526,9 +546,15 @@ class ContextPool:
         if n == 0:
             self._row_of = {}
             return
-        packed = np.empty((n, self._dim), dtype=np.float32)
+        packed = np.empty((n, self._mcols), dtype=self._mdtype)
         for new_row, sid in enumerate(self._order):
-            packed[new_row] = self._slices[sid].vector
+            v = self._slices[sid].vector
+            if self._qbits:
+                codes, scale = quantize(v[None], self._qbits)
+                packed[new_row] = codes[0]
+                self._scale_of[sid] = float(scale[0])
+            else:
+                packed[new_row] = v
             self._row_of[sid] = new_row
         self._mmap[:n] = packed
 
@@ -546,6 +572,8 @@ class ContextPool:
             "dim": self._dim,
             "index": self.index_kind,
             "sessions": sorted({s.session for s in self._slices.values()}),
+            "quantized": self._qbits > 0,
+            "quantize_bits": self._qbits,
         }
 
     # -- persistence -----------------------------------------------------------
@@ -582,12 +610,14 @@ class ContextPool:
                 "tokens": self._slices[sid].tokens,
                 "meta": self._slices[sid].meta,
                 "score": self._slices[sid].score,
+                "scale": self._scale_of.get(sid, 1.0),
             }
             for sid in self._order
         ]
         header = {
             "version": POOL_FORMAT_VERSION,
             "dim": self._dim,
+            "quantize_bits": self._qbits,
             "count": len(self._order),
             "capacity": self._capacity,
             "index": self._config.index,
@@ -619,6 +649,12 @@ class ContextPool:
                 f"pool at {self._dir} was written with dim={disk_dim}, "
                 f"but this pool expects dim={self._dim}",
             )
+        disk_qbits = int(header.get("quantize_bits", 0))
+        if disk_qbits != self._qbits:
+            raise PoolCorrupt(
+                f"pool at {self._dir} was written with quantize_bits={disk_qbits}, "
+                f"but this pool expects quantize_bits={self._qbits} (codes can't be reinterpreted)",
+            )
         vfile = self._vectors_file()
         if not vfile.exists():
             raise PoolCorrupt(
@@ -631,7 +667,14 @@ class ContextPool:
             for rec in records:
                 sid = rec["id"]
                 row = int(rec["row"])
-                vec = np.asarray(self._mmap[row], dtype=np.float32).copy()
+                if self._qbits:
+                    scale = float(rec.get("scale", 1.0))
+                    self._scale_of[sid] = scale
+                    vec = dequantize(np.asarray(self._mmap[row])[None],
+                                     np.array([scale], dtype=np.float32),
+                                     self._dim, self._qbits)[0]
+                else:
+                    vec = np.asarray(self._mmap[row], dtype=np.float32).copy()
                 sl = Slice(
                     id=sid,
                     session=rec["session"],
@@ -670,7 +713,7 @@ class ContextPool:
         if self._mmap is not None:
             keep = min(self._capacity, len(self._order))
             if keep > 0:
-                carry = np.asarray(self._mmap[:keep], dtype=np.float32).copy()
+                carry = np.asarray(self._mmap[:keep], dtype=self._mdtype).copy()
         self._release_mmap()
         self._dir.mkdir(parents=True, exist_ok=True)
         self._open_mmap(new_cap, carry=carry)
@@ -695,7 +738,7 @@ class ContextPool:
         seed = carry
         if seed is None and vfile.exists() and capacity > 0:
             seed = self._read_existing_rows(vfile, capacity)
-        mm = np.memmap(vfile, dtype=np.float32, mode="w+", shape=(capacity, self._dim))
+        mm = np.memmap(vfile, dtype=self._mdtype, mode="w+", shape=(capacity, self._mcols))
         if seed is not None and seed.shape[0] > 0:
             rows = min(seed.shape[0], capacity)
             mm[:rows] = seed[:rows]
@@ -709,17 +752,17 @@ class ContextPool:
         call — required so the subsequent ``w+`` mmap open succeeds on Windows.
         """
         size = vfile.stat().st_size
-        row_bytes = self._dim * 4
+        row_bytes = self._mcols * np.dtype(self._mdtype).itemsize
         if row_bytes == 0:
             return None
         n_rows = size // row_bytes
         if n_rows == 0:
             return None
         take = min(n_rows, capacity)
-        flat = np.fromfile(vfile, dtype=np.float32, count=take * self._dim)
-        if flat.size < take * self._dim:
+        flat = np.fromfile(vfile, dtype=self._mdtype, count=take * self._mcols)
+        if flat.size < take * self._mcols:
             return None
-        return flat.reshape(take, self._dim)
+        return flat.reshape(take, self._mcols)
 
     # -- helpers ---------------------------------------------------------------
     def _live_matrix(self) -> np.ndarray:
@@ -727,6 +770,9 @@ class ContextPool:
         n = len(self._order)
         if n == 0 or self._mmap is None:
             return np.empty((0, self._dim), dtype=np.float32)
+        if self._qbits:
+            # mmap holds quantized codes; search on the exact float32 RAM copies (recall parity).
+            return np.array([self._slices[sid].vector for sid in self._order], dtype=np.float32)
         return np.asarray(self._mmap[:n])
 
     def _refresh_index(self, matrix: np.ndarray) -> None:
