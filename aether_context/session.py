@@ -155,6 +155,7 @@ class Session:
         pool_dir: "str | Path | None" = None,
         pool_index: str = "flat",
         pool_mode: str = "separate",
+        pool_quantize: int = 0,   # TurboVec: 0=float32 (default), 8=recall-safe (~4x), 4=lossy/flagged
         context_window: int | None = None,
         output_tokens: int | None = None,
         resident_k: int = DEFAULT_RESIDENT_K,
@@ -201,6 +202,7 @@ class Session:
             mode=pool_mode,
             index=pool_index,
             dir=Path(pool_dir) if pool_dir is not None else PoolConfig().dir,
+            quantize_bits=pool_quantize,
         )
         self.pool: ContextPool = ContextPool(
             pool_config, ceiling_bytes=pool_ceiling_bytes
