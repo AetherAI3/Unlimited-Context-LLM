@@ -79,21 +79,22 @@ def _truncate(messages: list[dict], window_tokens: int) -> list[dict]:
     return head + tail
 
 
-_SYS = ("You are an expert software engineer fixing a real bug in a repository. First INVESTIGATE "
-        "with read_file, grep, and list_dir to locate the cause. You have a limited tool budget, so "
-        "be efficient — do not re-read the same files. When you have enough understanding, stop "
-        "calling tools (reply with a brief note) and you will then be asked to produce the fix.")
+_SYS = ("You are an expert software engineer fixing a real bug in a repository. Investigate with "
+        "read_file, grep, and list_dir, then call submit_patch with your fix. You have a LIMITED "
+        "tool budget — be efficient, don't re-read files you already saw. You MUST call submit_patch "
+        "before the budget runs out; an empty patch scores zero.")
 
-# The investigation phase exposes ONLY the read-only tools; the model produces the actual
-# fix in the forced patch turn below (dsv4-pro reliably emits a unified diff but will not
-# drive a stateful editor — it investigates until the budget is gone otherwise).
 _READONLY_SCHEMA = [t for t in RepoTools.TOOLS_SCHEMA
                     if t["function"]["name"] in ("read_file", "grep", "list_dir")]
 
+# Per-tool-result cap written into the (window-bound) transcript. The FULL result is stored in
+# the engine for codepro — that's the off-vs-codepro contrast: off keeps only this truncated
+# tail in its window; codepro recalls the full early reads from the pool.
+_TOOL_RESULT_CAP = 8000
+
 _PATCH_INSTRUCTION = (
-    "You have finished investigating and can no longer read files. Call the submit_patch tool "
-    "now with your complete fix. The `edits` argument must contain one or more blocks in EXACTLY "
-    "this format, one per change:\n\n"
+    "Call submit_patch with your complete fix. The `edits` argument must contain one or more "
+    "blocks in EXACTLY this format, one per change:\n\n"
     "<path/relative/to/repo/root>\n"
     "<<<<<<< SEARCH\n"
     "<exact lines that currently exist in the file>\n"
@@ -101,7 +102,7 @@ _PATCH_INSTRUCTION = (
     "<replacement lines>\n"
     ">>>>>>> REPLACE\n\n"
     "The SEARCH text must match the current file content EXACTLY (whitespace included), from what "
-    "you read. submit_patch is the ONLY tool available — you must call it.")
+    "you read.")
 
 # Phase-2 exposes ONLY this tool. dsv4-pro compulsively calls tools and will not write from
 # memory when asked in plain text (it keeps trying to re-read); giving it a single submit tool
@@ -194,85 +195,87 @@ def run_instance(arm: str, inst: dict, cfg: SweConfig, chat, budget: dict,
             return False
         return True
 
-    # ── Phase 1: investigation (read-only tools, bounded) ──────────────
+    # ── Unified agent loop: read tools + submit_patch available throughout ──
+    # dsv4-pro compulsively reads and won't write from plain text, so submit_patch is always
+    # on the table; the engine keeps the FULL reads in reach (codepro) while off only keeps the
+    # window-truncated tail. Near the budget end we drop the read tools to force a submit.
+    schema_all = _READONLY_SCHEMA + _SUBMIT_SCHEMA
+    applied = 0
+
+    def _convo(extra: Optional[list] = None) -> list:
+        if session is not None:
+            qvec = encoder.encode(inst["problem_statement"])
+            recalled = session._cold_retrieve(session._key(), qvec, cfg.recall_k)
+            mem = "\n".join(f"[mem] {s.text}" for s in recalled) or "(empty)"
+            base = ([transcript[0], {"role": "system", "content": f"Working memory:\n{mem}"}]
+                    + transcript[1:])
+        else:
+            base = transcript
+        return _truncate(base, cfg.window) + (extra or [])
+
     for _step in range(cfg.max_steps):
         if budget["spent"] >= cfg.max_usd:
             halted = "budget_cap"
             break
-        if session is not None:
-            qvec = encoder.encode(inst["problem_statement"])
-            recalled = session._cold_retrieve(session._key(), qvec, cfg.recall_k)
-            mem = "\n".join(f"[mem] {s.text}" for s in recalled) or "(empty)"
-            convo = _truncate([transcript[0],
-                               {"role": "system", "content": f"Working memory:\n{mem}"}]
-                              + transcript[1:], cfg.window)
-        else:
-            convo = _truncate(transcript, cfg.window)
+        near_end = _step >= cfg.max_steps - 3
+        schema = _SUBMIT_SCHEMA if near_end else schema_all
+        extra = ([{"role": "user", "content": "Tool budget almost gone. " + _PATCH_INSTRUCTION}]
+                 if near_end else None)
 
-        out = chat.chat(convo, tools=_READONLY_SCHEMA)
+        out = chat.chat(_convo(extra), tools=schema)
         if not _account(out):
             break
-
         tcs = out.get("tool_calls") or []
-        if not tcs:
-            transcript.append({"role": "assistant", "content": out.get("content") or "ready"})
-            break  # model signalled it's done investigating -> go produce the patch
-        transcript.append({"role": "assistant", "content": out.get("content"),
-                           "tool_calls": tcs})
-        for tc in tcs:
-            fn = tc.get("function", {})
-            try:
-                args = json.loads(fn.get("arguments") or "{}")
-            except json.JSONDecodeError:
-                args = {}
-            try:
-                result = tools.dispatch(fn.get("name", ""), args)
-            except Exception as e:  # a tool crash must not kill the instance
-                result = {"error": f"{type(e).__name__}: {e}"}
-            rjson = json.dumps(result)[:1500]
-            transcript.append({"role": "tool", "tool_call_id": tc.get("id", ""),
-                               "content": rjson})
-            if session is not None:
-                session.remember(f"{fn.get('name')}({args}): {rjson}")
 
-    # ── Phase 2: forced patch turn(s) — SEARCH/REPLACE blocks, applied to the checkout ──
-    # Up to 2 attempts: the second gets feedback on which SEARCH blocks didn't match (so a
-    # near-miss can self-correct). model_patch = git diff of whatever applied.
-    applied = 0
-    instruction = _PATCH_INSTRUCTION
-    for _attempt in range(2):
-        if halted == "cost_spike" or budget["spent"] >= cfg.max_usd:
-            break
-        if session is not None:
-            qvec = encoder.encode(inst["problem_statement"])
-            recalled = session._cold_retrieve(session._key(), qvec, cfg.recall_k)
-            mem = "\n".join(f"[mem] {s.text}" for s in recalled) or "(empty)"
-            convo = _truncate([transcript[0],
-                               {"role": "system", "content": f"Working memory:\n{mem}"}]
-                              + transcript[1:], cfg.window)
-        else:
-            convo = _truncate(transcript, cfg.window)
-        convo = convo + [{"role": "user", "content": instruction}]
-        out = chat.chat(convo, tools=_SUBMIT_SCHEMA)
-        if not _account(out):
-            break
-        # Prefer the submit_patch tool arg; fall back to any blocks in free text.
+        # 1) submit_patch -> apply SEARCH/REPLACE blocks
         edits = _submit_edits(out)
-        blocks = _parse_blocks(edits if edits is not None else (out.get("content") or ""))
-        if not blocks:
-            break  # nothing usable -> give up (empty patch = unresolved)
-        fails = []
-        for path, search, replace in blocks:
-            res = tools.edit_file(path, search, replace)
-            if isinstance(res, dict) and res.get("ok"):
-                applied += 1
-            else:
-                fails.append(f"{path}: {res.get('error') if isinstance(res, dict) else 'failed'}")
-        if applied and not fails:
+        if edits is not None:
+            transcript.append({"role": "assistant", "content": out.get("content"),
+                               "tool_calls": tcs})
+            fails = []
+            for path, search, replace in _parse_blocks(edits):
+                res = tools.edit_file(path, search, replace)
+                if isinstance(res, dict) and res.get("ok"):
+                    applied += 1
+                else:
+                    fails.append(f"{path}: {res.get('error') if isinstance(res, dict) else 'fail'}")
+            sid = next((t.get("id", "") for t in tcs
+                        if t.get("function", {}).get("name") == "submit_patch"), "")
+            if applied and not fails:
+                transcript.append({"role": "tool", "tool_call_id": sid,
+                                   "content": f"applied {applied} edit(s)."})
+                break
+            transcript.append({"role": "tool", "tool_call_id": sid, "content": (
+                "No edits applied — SEARCH text must match the file EXACTLY. "
+                + ("Failures:\n" + "\n".join(fails) if fails else "No valid blocks found."))})
+            continue
+
+        # 2) read/grep/list -> serve; store FULL result in the engine (off keeps only the tail)
+        if tcs:
+            transcript.append({"role": "assistant", "content": out.get("content"),
+                               "tool_calls": tcs})
+            for tc in tcs:
+                fn = tc.get("function", {})
+                try:
+                    args = json.loads(fn.get("arguments") or "{}")
+                except json.JSONDecodeError:
+                    args = {}
+                try:
+                    result = tools.dispatch(fn.get("name", ""), args)
+                except Exception as e:  # a tool crash must not kill the instance
+                    result = {"error": f"{type(e).__name__}: {e}"}
+                full = json.dumps(result)
+                transcript.append({"role": "tool", "tool_call_id": tc.get("id", ""),
+                                   "content": full[:_TOOL_RESULT_CAP]})
+                if session is not None:
+                    session.remember(f"{fn.get('name')}({args}): {full}")
+            continue
+
+        # 3) no tool call -> nudge toward submitting (the model stalled)
+        transcript.append({"role": "assistant", "content": out.get("content") or "..."})
+        if tools.current_patch().strip():
             break
-        instruction = (_PATCH_INSTRUCTION + "\n\nThese blocks did NOT match the file and were "
-                       "skipped — fix the SEARCH text to match EXACTLY and resend ALL needed "
-                       "blocks:\n" + "\n".join(fails))
+        transcript.append({"role": "user", "content": _PATCH_INSTRUCTION})
 
     patch = tools.current_patch()
     if session is not None:
