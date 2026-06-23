@@ -122,17 +122,25 @@ class RepoTools:
 
 
 def prepare_checkout(repo_url: str, base_commit: str, workdir: Path) -> Path:
-    """Clone `repo_url` into `workdir` and checkout `base_commit`. Idempotent: if workdir
-    already holds that commit, reuse it. Returns the checkout path. Used only so the agent's
-    file tools can READ the repo during generation; Phase B does its own isolated checkout."""
+    """Make `workdir` a clean checkout of `repo_url` at `base_commit`.
+
+    `workdir` is keyed PER REPO (not per instance): the first instance of a repo clones it
+    once (network); every later instance of the same repo just hard-resets to its base_commit
+    + cleans — SWE-bench-lite repeats ~12 repos across 300 instances, so this turns ~600 network
+    clones into ~12. Used only so the agent's file tools can READ the repo during generation;
+    Phase B does its own isolated checkout."""
     workdir = Path(workdir)
     if (workdir / ".git").is_dir():
-        head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=workdir,
-                              capture_output=True, text=True).stdout.strip()
-        if head == base_commit:
-            return workdir
-        import shutil
-        shutil.rmtree(workdir, ignore_errors=True)
+        # cached clone of this repo — fetch the commit if missing, then hard-reset clean
+        have = subprocess.run(["git", "cat-file", "-e", f"{base_commit}^{{commit}}"],
+                              cwd=workdir, capture_output=True)
+        if have.returncode != 0:
+            subprocess.run(["git", "fetch", "-q", "origin", base_commit],
+                           cwd=workdir, capture_output=True)  # best-effort; full clone usually has it
+        subprocess.run(["git", "checkout", "-q", "-f", base_commit], cwd=workdir,
+                       check=True, capture_output=True)
+        subprocess.run(["git", "clean", "-qdfx"], cwd=workdir, check=True, capture_output=True)
+        return workdir
     workdir.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(["git", "clone", "-q", repo_url, str(workdir)], check=True,
                    capture_output=True)

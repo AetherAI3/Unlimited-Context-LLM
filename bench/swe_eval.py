@@ -159,7 +159,10 @@ def run_instance(arm: str, inst: dict, cfg: SweConfig, chat, budget: dict,
     """Run ONE SWE instance under ONE arm. Returns a predictions record incl. model_patch.
     OFF: window-truncated transcript. CODEPRO: Session(overpool+turbovec+chain) recall."""
     url = repo_url or f"https://github.com/{inst['repo']}.git"
-    workdir = cfg.work_dir / arm / inst["instance_id"]
+    # Per-REPO checkout dir (shared across instances + arms, sequential) so each repo clones
+    # once; prepare_checkout hard-resets it to this instance's base_commit.
+    repo_slug = re.sub(r"[^A-Za-z0-9]+", "_", inst["repo"])
+    workdir = cfg.work_dir / repo_slug
     try:
         checkout = prepare_checkout(url, inst["base_commit"], workdir)
     except Exception as e:  # clone/checkout failed — record empty patch, keep the batch alive
@@ -329,19 +332,26 @@ def run_swe_eval(cfg: SweConfig, instances: Optional[list[dict]] = None,
                                         for a in cfg.arms},
                                "skipped": 0, "halted": None}
 
-    for arm in cfg.arms:
-        pred_path = cfg.out_dir / f"predictions_{arm}.jsonl"
-        done = _done_ids(pred_path)
-        chat = chat_factory(cfg)
-        for inst in rows:
-            if inst["instance_id"] in done:
+    # Arms run INNER, instances OUTER: every instance gets all arms before moving on, so a
+    # partial (cap-halted) run still yields a valid off-vs-codepro comparison on the instances
+    # completed so far. Same model across arms -> one chat client reused. Per-arm predictions
+    # JSONL + done-set keeps it resumable.
+    pred_paths = {a: cfg.out_dir / f"predictions_{a}.jsonl" for a in cfg.arms}
+    done = {a: _done_ids(pred_paths[a]) for a in cfg.arms}
+    chat = chat_factory(cfg)
+
+    for inst in rows:
+        if summary["halted"]:
+            break
+        for arm in cfg.arms:
+            if inst["instance_id"] in done[arm]:
                 summary["skipped"] += 1
                 continue
             if budget["spent"] >= cfg.max_usd:
                 summary["halted"] = "budget_cap"
                 break
             rec = run_instance(arm, inst, cfg, chat, budget, repo_url=_repo_url(inst))
-            with pred_path.open("a", encoding="utf-8") as fh:
+            with pred_paths[arm].open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(rec) + "\n")
             summary["arms"][arm]["done"] += 1
             summary["arms"][arm]["patched"] += int(rec["patch_nonempty"])
@@ -350,8 +360,6 @@ def run_swe_eval(cfg: SweConfig, instances: Optional[list[dict]] = None,
             if rec.get("halted") in ("budget_cap", "cost_spike"):
                 summary["halted"] = rec["halted"]
                 break
-        if summary["halted"]:
-            break
 
     summary["total_cost_usd"] = round(budget["spent"], 6)
     (cfg.out_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")

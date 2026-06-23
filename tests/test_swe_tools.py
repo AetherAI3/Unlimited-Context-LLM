@@ -80,6 +80,20 @@ def test_grep_survives_non_utf8_bytes(repo):
     assert "matches" in out
 
 
+def test_prepare_checkout_reuses_and_resets(tmp_path, repo):
+    # Per-repo cache: second call on the same workdir must NOT re-clone — it hard-resets the
+    # (dirtied) tree back to base_commit clean.
+    base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo,
+                          capture_output=True, text=True).stdout.strip()
+    work = tmp_path / "cache"
+    prepare_checkout(f"file://{repo.as_posix()}", base, work)
+    (work / "a.py").write_text("DIRTIED", encoding="utf-8")          # mutate the cached tree
+    (work / "junk.txt").write_text("junk", encoding="utf-8")          # add an untracked file
+    prepare_checkout(f"file://{repo.as_posix()}", base, work)         # reuse path
+    assert "def add" in (work / "a.py").read_text(encoding="utf-8")   # reset
+    assert not (work / "junk.txt").exists()                           # cleaned
+
+
 def test_prepare_checkout_at_base_commit(tmp_path, repo):
     # `repo` is a real git repo; clone it to a base commit via file:// (no network).
     base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo,
