@@ -91,16 +91,40 @@ _READONLY_SCHEMA = [t for t in RepoTools.TOOLS_SCHEMA
                     if t["function"]["name"] in ("read_file", "grep", "list_dir")]
 
 _PATCH_INSTRUCTION = (
-    "Now produce the fix. Do NOT call any tools. Output one or more edit blocks in EXACTLY this "
-    "format, one per change:\n\n"
+    "You have finished investigating and can no longer read files. Call the submit_patch tool "
+    "now with your complete fix. The `edits` argument must contain one or more blocks in EXACTLY "
+    "this format, one per change:\n\n"
     "<path/relative/to/repo/root>\n"
     "<<<<<<< SEARCH\n"
     "<exact lines that currently exist in the file>\n"
     "=======\n"
     "<replacement lines>\n"
     ">>>>>>> REPLACE\n\n"
-    "The SEARCH text must match the current file content EXACTLY (whitespace included) — copy it "
-    "from what you read. Keep edits minimal. Output ONLY the blocks, no prose.")
+    "The SEARCH text must match the current file content EXACTLY (whitespace included), from what "
+    "you read. submit_patch is the ONLY tool available — you must call it.")
+
+# Phase-2 exposes ONLY this tool. dsv4-pro compulsively calls tools and will not write from
+# memory when asked in plain text (it keeps trying to re-read); giving it a single submit tool
+# turns that compulsion into the patch submission.
+_SUBMIT_SCHEMA = [{"type": "function", "function": {
+    "name": "submit_patch",
+    "description": "Submit the final fix as SEARCH/REPLACE edit blocks.",
+    "parameters": {"type": "object",
+                   "properties": {"edits": {"type": "string",
+                                            "description": "One or more SEARCH/REPLACE blocks."}},
+                   "required": ["edits"]}}}]
+
+
+def _submit_edits(out: dict) -> Optional[str]:
+    """Return the `edits` string from a submit_patch tool call, or None."""
+    for tc in (out.get("tool_calls") or []):
+        fn = tc.get("function", {})
+        if fn.get("name") == "submit_patch":
+            try:
+                return (json.loads(fn.get("arguments") or "{}") or {}).get("edits")
+            except json.JSONDecodeError:
+                return None
+    return None
 
 # Aider-style SEARCH/REPLACE block. dsv4-pro will not write a line-numbered unified diff from
 # memory (it just keeps trying to re-read), but it can reproduce an exact snippet + replacement.
@@ -229,10 +253,12 @@ def run_instance(arm: str, inst: dict, cfg: SweConfig, chat, budget: dict,
         else:
             convo = _truncate(transcript, cfg.window)
         convo = convo + [{"role": "user", "content": instruction}]
-        out = chat.chat(convo, tools=None)
+        out = chat.chat(convo, tools=_SUBMIT_SCHEMA)
         if not _account(out):
             break
-        blocks = _parse_blocks(out.get("content") or "")
+        # Prefer the submit_patch tool arg; fall back to any blocks in free text.
+        edits = _submit_edits(out)
+        blocks = _parse_blocks(edits if edits is not None else (out.get("content") or ""))
         if not blocks:
             break  # nothing usable -> give up (empty patch = unresolved)
         fails = []
