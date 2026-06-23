@@ -176,8 +176,15 @@ def run_instance(arm: str, inst: dict, cfg: SweConfig, chat, budget: dict,
                 if session is not None:
                     session.remember(f"{fn.get('name')}({args}): {rjson}")
             continue
+        # No tool call = the model thinks it's done. Only accept that if a patch exists;
+        # otherwise it "finished" without editing -> push back and keep going (the step
+        # budget still bounds the loop).
         transcript.append({"role": "assistant", "content": out.get("content") or "done"})
-        break
+        if tools.current_patch().strip():
+            break
+        transcript.append({"role": "system", "content": (
+            "You finished WITHOUT calling edit_file, so the patch is empty (scores zero). "
+            "Do not stop yet — call edit_file now to apply your fix to the repository.")})
 
     patch = tools.current_patch()
     if session is not None:
