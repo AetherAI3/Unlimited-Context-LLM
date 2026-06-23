@@ -78,12 +78,38 @@ def _truncate(messages: list[dict], window_tokens: int) -> list[dict]:
     return head + tail
 
 
-_SYS = ("You are an expert software engineer fixing a real bug in a repository. Investigate with "
-        "read_file, grep, and list_dir — but you have a LIMITED tool budget, so do NOT over-explore. "
-        "Once you have located the cause (usually within ~15 tool calls), you MUST call edit_file to "
-        "apply the fix. An answer with no edit_file call scores ZERO — always make at least one "
-        "edit_file change before you finish. Keep the fix minimal so the repo's own tests pass. "
-        "When done, reply with a one-line summary and STOP.")
+_SYS = ("You are an expert software engineer fixing a real bug in a repository. First INVESTIGATE "
+        "with read_file, grep, and list_dir to locate the cause. You have a limited tool budget, so "
+        "be efficient — do not re-read the same files. When you have enough understanding, stop "
+        "calling tools (reply with a brief note) and you will then be asked to produce the fix.")
+
+# The investigation phase exposes ONLY the read-only tools; the model produces the actual
+# fix in the forced patch turn below (dsv4-pro reliably emits a unified diff but will not
+# drive a stateful editor — it investigates until the budget is gone otherwise).
+_READONLY_SCHEMA = [t for t in RepoTools.TOOLS_SCHEMA
+                    if t["function"]["name"] in ("read_file", "grep", "list_dir")]
+
+_PATCH_INSTRUCTION = (
+    "Now produce the fix. Output the COMPLETE change as a unified diff in `git diff` format "
+    "(lines starting with `diff --git a/<path> b/<path>`, `--- a/<path>`, `+++ b/<path>`, then "
+    "`@@` hunks). Use real file paths relative to the repo root, from the files you read. Output "
+    "ONLY the diff inside a single ```diff code block — no prose, no explanation. Keep it minimal.")
+
+
+def _extract_diff(text: str) -> str:
+    """Pull a unified diff out of the model's text (fenced ```diff block or a raw
+    `diff --git`/`--- a/` region to end). Returns '' when no diff is present."""
+    import re
+    if not text:
+        return ""
+    m = re.search(r"```(?:diff|patch)?\s*\n(.*?)```", text, re.S)
+    body = m.group(1) if m else text
+    for marker in ("diff --git", "\n--- a/", "--- a/"):
+        i = body.find(marker)
+        if i != -1:
+            out = body[i:].strip()
+            return out + "\n" if out else ""
+    return ""
 
 
 def _empty_record(arm: str, inst: dict, halted: str) -> dict:
@@ -123,19 +149,25 @@ def run_instance(arm: str, inst: dict, cfg: SweConfig, chat, budget: dict,
     cost = 0.0
     cached = 0
     halted: Optional[str] = None
-    nudged = False
 
+    def _account(out: dict) -> bool:
+        """Tally cost/cached for one chat call. Returns False if a cost spike trips."""
+        nonlocal cost, cached, halted
+        usage = out.get("usage", {}) or {}
+        call_cost = cost_usd(usage, price_in=cfg.price_in, price_out=cfg.price_out)
+        cost += call_cost
+        budget["spent"] += call_cost
+        cached += cached_tokens(usage)
+        if call_cost > cfg.cost_spike_usd:
+            halted = "cost_spike"
+            return False
+        return True
+
+    # ── Phase 1: investigation (read-only tools, bounded) ──────────────
     for _step in range(cfg.max_steps):
         if budget["spent"] >= cfg.max_usd:
             halted = "budget_cap"
             break
-        # Near the end of the tool budget, force the edit phase: a turn spent still
-        # investigating with no edit yields an empty patch (auto-unresolved).
-        if not nudged and _step >= cfg.max_steps - 5 and not tools.current_patch().strip():
-            transcript.append({"role": "system", "content": (
-                "TOOL BUDGET ALMOST GONE. Stop investigating. Call edit_file NOW with your best "
-                "fix — an empty patch scores zero.")})
-            nudged = True
         if session is not None:
             qvec = encoder.encode(inst["problem_statement"])
             recalled = session._cold_retrieve(session._key(), qvec, cfg.recall_k)
@@ -146,47 +178,49 @@ def run_instance(arm: str, inst: dict, cfg: SweConfig, chat, budget: dict,
         else:
             convo = _truncate(transcript, cfg.window)
 
-        out = chat.chat(convo, tools=RepoTools.TOOLS_SCHEMA)
-        usage = out.get("usage", {}) or {}
-        call_cost = cost_usd(usage, price_in=cfg.price_in, price_out=cfg.price_out)
-        cost += call_cost
-        budget["spent"] += call_cost
-        cached += cached_tokens(usage)
-        if call_cost > cfg.cost_spike_usd:
-            halted = "cost_spike"
+        out = chat.chat(convo, tools=_READONLY_SCHEMA)
+        if not _account(out):
             break
 
         tcs = out.get("tool_calls") or []
-        if tcs:
-            transcript.append({"role": "assistant", "content": out.get("content"),
-                               "tool_calls": tcs})
-            for tc in tcs:
-                fn = tc.get("function", {})
-                try:
-                    args = json.loads(fn.get("arguments") or "{}")
-                except json.JSONDecodeError:
-                    args = {}
-                try:
-                    result = tools.dispatch(fn.get("name", ""), args)
-                except Exception as e:  # a tool crash must not kill the instance
-                    result = {"error": f"{type(e).__name__}: {e}"}
-                rjson = json.dumps(result)[:1500]
-                transcript.append({"role": "tool", "tool_call_id": tc.get("id", ""),
-                                   "content": rjson})
-                if session is not None:
-                    session.remember(f"{fn.get('name')}({args}): {rjson}")
-            continue
-        # No tool call = the model thinks it's done. Only accept that if a patch exists;
-        # otherwise it "finished" without editing -> push back and keep going (the step
-        # budget still bounds the loop).
-        transcript.append({"role": "assistant", "content": out.get("content") or "done"})
-        if tools.current_patch().strip():
-            break
-        transcript.append({"role": "system", "content": (
-            "You finished WITHOUT calling edit_file, so the patch is empty (scores zero). "
-            "Do not stop yet — call edit_file now to apply your fix to the repository.")})
+        if not tcs:
+            transcript.append({"role": "assistant", "content": out.get("content") or "ready"})
+            break  # model signalled it's done investigating -> go produce the patch
+        transcript.append({"role": "assistant", "content": out.get("content"),
+                           "tool_calls": tcs})
+        for tc in tcs:
+            fn = tc.get("function", {})
+            try:
+                args = json.loads(fn.get("arguments") or "{}")
+            except json.JSONDecodeError:
+                args = {}
+            try:
+                result = tools.dispatch(fn.get("name", ""), args)
+            except Exception as e:  # a tool crash must not kill the instance
+                result = {"error": f"{type(e).__name__}: {e}"}
+            rjson = json.dumps(result)[:1500]
+            transcript.append({"role": "tool", "tool_call_id": tc.get("id", ""),
+                               "content": rjson})
+            if session is not None:
+                session.remember(f"{fn.get('name')}({args}): {rjson}")
 
-    patch = tools.current_patch()
+    # ── Phase 2: forced patch turn (no tools) — capture the unified diff ──
+    patch = ""
+    if halted not in ("cost_spike",) and budget["spent"] < cfg.max_usd:
+        if session is not None:
+            qvec = encoder.encode(inst["problem_statement"])
+            recalled = session._cold_retrieve(session._key(), qvec, cfg.recall_k)
+            mem = "\n".join(f"[mem] {s.text}" for s in recalled) or "(empty)"
+            convo = _truncate([transcript[0],
+                               {"role": "system", "content": f"Working memory:\n{mem}"}]
+                              + transcript[1:], cfg.window)
+        else:
+            convo = _truncate(transcript, cfg.window)
+        convo = convo + [{"role": "user", "content": _PATCH_INSTRUCTION}]
+        out = chat.chat(convo, tools=None)
+        _account(out)
+        patch = _extract_diff(out.get("content") or "")
+
     if session is not None:
         session.close()
     return {
