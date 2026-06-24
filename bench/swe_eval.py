@@ -279,8 +279,9 @@ def run_instance(arm: str, inst: dict, cfg: SweConfig, chat, budget: dict,
         # 1) submit_patch -> apply SEARCH/REPLACE blocks
         edits = _submit_edits(out)
         if edits is not None:
-            fails = []
+            fails, tried = [], []
             for path, search, replace in _parse_blocks(edits):
+                tried.append(path)
                 res = tools.edit_file(path, search, replace)
                 if isinstance(res, dict) and res.get("ok"):
                     applied += 1
@@ -289,10 +290,19 @@ def run_instance(arm: str, inst: dict, cfg: SweConfig, chat, budget: dict,
             history.append({"role": "assistant", "content": (say or "") + "\n(submitted patch)"})
             if applied and not fails:
                 break
+            # On a miss, RE-FEED the current file content so the next attempt copies the exact
+            # text (the #1 empty-patch cause is a SEARCH block whose whitespace didn't match).
+            ctx = []
+            for pth in list(dict.fromkeys(tried))[:2]:
+                r = tools.read_file(pth)
+                if isinstance(r, dict) and r.get("content"):
+                    ctx.append(f"--- {pth} (current — copy SEARCH text from here) ---\n"
+                               + r["content"][:_TOOL_RESULT_CAP])
             history.append({"role": "user", "content": (
-                "No edits applied — SEARCH text must match the file EXACTLY. "
-                + ("Failures:\n" + "\n".join(fails) if fails else "No valid blocks found.")
-                + "\nResend ALL needed blocks via submit_patch.")})
+                ("Some edits did not apply:\n" + "\n".join(fails) if fails
+                 else "No valid edit blocks found.")
+                + "\nResend ALL needed blocks via submit_patch; SEARCH must match the file below "
+                "character-for-character.\n\n" + "\n\n".join(ctx))})
             continue
 
         # 2) read/grep/list -> serve; fold result back as TEXT; store FULL in engine (off keeps tail)

@@ -69,6 +69,33 @@ def test_edit_missing_oldstring_is_error(repo):
     assert "error" in r
 
 
+def test_edit_fuzzy_trailing_whitespace(repo):
+    # SEARCH has trailing spaces the file doesn't — should still apply (fuzzy, unique).
+    t = RepoTools(repo)
+    r = t.edit_file("a.py", "    return x - y  # bug   ", "    return x + y")
+    assert r.get("ok") and r.get("fuzzy")
+    assert "+    return x + y" in t.current_patch()
+
+
+def test_edit_fuzzy_indentation(repo):
+    # SEARCH over-indented vs a col-0 line (pkg/b.py = "VALUE = 1") — not a substring, so
+    # exact fails; strip-match locates it uniquely and applies the model's `new`.
+    t = RepoTools(repo)
+    r = t.edit_file("pkg/b.py", "    VALUE = 1", "VALUE = 2")
+    assert r.get("ok") and r.get("fuzzy")
+    assert "+VALUE = 2" in t.current_patch()
+
+
+def test_edit_ambiguous_does_not_apply(repo):
+    # Two identical lines -> not unique -> refuse (no wrong-place edit).
+    (repo / "dup.py").write_text("x = 1\nx = 1\n", encoding="utf-8")
+    _git(["add", "-A"], repo)
+    _git(["commit", "-qm", "dup"], repo)
+    t = RepoTools(repo)
+    r = t.edit_file("dup.py", "x = 1 ", "x = 2")  # trailing-space variant, 2 matches
+    assert "error" in r
+
+
 def test_grep_survives_non_utf8_bytes(repo):
     # A real repo contains non-UTF8 bytes; git grep -I skips binary, but text decode of
     # any stray bytes must not crash the tool (errors="replace").
