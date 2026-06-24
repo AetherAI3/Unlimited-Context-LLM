@@ -42,6 +42,7 @@ class SweConfig:
     cost_spike_usd: float = 0.50
     instance_timeout_s: float = 600.0   # per-instance wall-clock guard (a hung call can't stall the batch)
     atlas_ground: bool = False    # codepro arm: also inject VPS5-atlas API facts (needs AETHER-CLOUD on VPS2)
+    max_output_tokens: int = 4096  # cap per-call output; unset => provider defaults to 65k => 402 on a low-credit key + needless cost
     dry_run: bool = False
     out_dir: Path = field(default_factory=lambda: Path("runs/swe_eval"))
     work_dir: Path = field(default_factory=lambda: Path("runs/swe_eval/checkouts"))
@@ -270,7 +271,7 @@ def run_instance(arm: str, inst: dict, cfg: SweConfig, chat, budget: dict,
         extra = ([{"role": "user", "content": "Tool budget almost gone. " + _PATCH_INSTRUCTION}]
                  if near_end else None)
 
-        out = chat.chat(_convo(extra), tools=schema)
+        out = chat.chat(_convo(extra), tools=schema, max_tokens=cfg.max_output_tokens)
         if not _account(out):
             break
         tcs = out.get("tool_calls") or []
@@ -437,6 +438,8 @@ def _build_config(argv: Optional[list[str]] = None) -> SweConfig:
     p.add_argument("--recall-k", type=int, default=8)
     p.add_argument("--atlas-ground", action="store_true",
                    help="codepro arm: inject VPS5-atlas API facts (needs AETHER-CLOUD on VPS2)")
+    p.add_argument("--max-output-tokens", type=int, default=4096,
+                   help="cap per-call output tokens (avoids 402 on low-credit keys + cuts cost)")
     p.add_argument("--max-usd", type=float, default=25.0)
     p.add_argument("--out", default="runs/swe_eval")
     p.add_argument("--dry-run", action="store_true")
@@ -445,7 +448,7 @@ def _build_config(argv: Optional[list[str]] = None) -> SweConfig:
         model=a.model, arms=tuple(x.strip() for x in a.arms.split(",") if x.strip()),
         instances=a.instances, window=a.window, max_steps=a.max_steps, pool_gb=a.pool_gb,
         turbovec_bits=a.turbovec_bits, mpo_chain=a.mpo_chain, recall_k=a.recall_k,
-        atlas_ground=a.atlas_ground,
+        atlas_ground=a.atlas_ground, max_output_tokens=a.max_output_tokens,
         max_usd=a.max_usd, dry_run=a.dry_run, out_dir=Path(a.out),
         work_dir=Path(a.out) / "checkouts")
 
