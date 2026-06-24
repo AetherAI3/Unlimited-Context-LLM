@@ -40,6 +40,7 @@ class SweConfig:
     price_out: float = 1.2
     max_usd: float = 25.0         # hard global spend cap (shared across arms+instances)
     cost_spike_usd: float = 0.50
+    instance_timeout_s: float = 600.0   # per-instance wall-clock guard (a hung call can't stall the batch)
     dry_run: bool = False
     out_dir: Path = field(default_factory=lambda: Path("runs/swe_eval"))
     work_dir: Path = field(default_factory=lambda: Path("runs/swe_eval/checkouts"))
@@ -217,9 +218,14 @@ def run_instance(arm: str, inst: dict, cfg: SweConfig, chat, budget: dict,
             convo = [convo[0], {"role": "system", "content": f"Working memory:\n{mem}"}] + convo[1:]
         return convo + (extra or [])
 
+    import time as _time
+    _deadline = _time.monotonic() + cfg.instance_timeout_s
     for _step in range(cfg.max_steps):
         if budget["spent"] >= cfg.max_usd:
             halted = "budget_cap"
+            break
+        if _time.monotonic() > _deadline:  # one instance must not stall the batch
+            halted = "instance_timeout"
             break
         near_end = _step >= cfg.max_steps - 3
         schema = _SUBMIT_SCHEMA if near_end else schema_all

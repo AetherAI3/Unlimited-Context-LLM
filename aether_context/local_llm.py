@@ -476,8 +476,10 @@ class OllamaLLM:
 # ---------------------------------------------------------------------------
 #: OpenRouter default base URL when only OPENROUTER_API_KEY is set.
 _OPENROUTER_BASE = "https://openrouter.ai/api/v1"
-#: HTTP timeout (s) for the OpenAI-compatible adapter.
-_OPENAI_TIMEOUT = 600
+#: HTTP timeout (s) for the OpenAI-compatible adapter. Kept tight: a coding turn that
+#: hasn't responded in 3 min is a hung connection — fail fast so the batch can continue
+#: (a 600s hang once stalled a whole sequential run ~30 min). Override via OPENAI_HTTP_TIMEOUT.
+_OPENAI_TIMEOUT = int(os.environ.get("OPENAI_HTTP_TIMEOUT", "180"))
 
 
 class OpenAICompatLLM:
