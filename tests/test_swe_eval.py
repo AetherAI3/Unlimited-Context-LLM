@@ -167,7 +167,8 @@ def test_global_cap_halts(tmp_path, monkeypatch):
 def test_cli_flags_map_to_config():
     cfg = _build_config(["--instances", "5", "--arms", "off,codepro", "--pool-gb", "20",
                          "--turbovec-bits", "8", "--no-mpo-chain", "--max-usd", "25",
-                         "--window", "4096", "--max-steps", "12", "--dry-run"])
+                         "--window", "4096", "--max-steps", "12", "--atlas-ground", "--dry-run"])
+    assert cfg.atlas_ground is True
     assert cfg.instances == 5
     assert cfg.arms == ("off", "codepro")
     assert cfg.pool_gb == 20 and cfg.turbovec_bits == 8
