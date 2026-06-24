@@ -71,10 +71,21 @@ class RepoTools:
         if p is None or not p.is_file():
             return {"error": f"no file {path}"}
         src = p.read_text(encoding="utf-8", errors="replace")
-        if old not in src:
-            return {"error": f"old string not found in {path}"}
-        p.write_text(src.replace(old, new, 1), encoding="utf-8")
-        return {"ok": True, "path": path}
+        # 1) exact match
+        if old in src:
+            p.write_text(src.replace(old, new, 1), encoding="utf-8")
+            return {"ok": True, "path": path}
+        # 2) whitespace-tolerant UNIQUE line-block match — models misremember exact
+        # indentation/trailing space; locate the real span and apply the model's `new`
+        # (which it usually indents correctly). Unique-only, so no wrong-place edits.
+        m = _match_block_lines(src, old)
+        if m is not None:
+            i, length = m
+            lines = src.split("\n")
+            out = lines[:i] + new.split("\n") + lines[i + length:]
+            p.write_text("\n".join(out), encoding="utf-8")
+            return {"ok": True, "path": path, "fuzzy": True}
+        return {"error": f"old string not found in {path}"}
 
     def current_patch(self) -> str:
         """Unified diff of the working tree vs HEAD (the base commit) = model_patch."""
@@ -119,6 +130,26 @@ class RepoTools:
         if name == "edit_file":
             return self.edit_file(args.get("path", ""), args.get("old", ""), args.get("new", ""))
         return {"error": f"unknown tool {name}"}
+
+
+def _match_block_lines(src: str, old: str) -> "tuple[int, int] | None":
+    """Find `old` as a contiguous block of lines in `src`, tolerating whitespace the model
+    got wrong. Returns (start_line_index, length) only when the match is UNIQUE (so we never
+    edit the wrong place); None otherwise. Tries rstrip (trailing ws) then strip (indentation)."""
+    old_lines = old.strip("\n").split("\n")
+    if not old_lines or not old.strip():
+        return None
+    src_lines = src.split("\n")
+    n = len(old_lines)
+    if n > len(src_lines):
+        return None
+    for norm in (lambda s: s.rstrip(), lambda s: s.strip()):
+        o = [norm(x) for x in old_lines]
+        sl = [norm(x) for x in src_lines]
+        hits = [i for i in range(len(sl) - n + 1) if sl[i:i + n] == o]
+        if len(hits) == 1:
+            return (hits[0], n)
+    return None
 
 
 def prepare_checkout(repo_url: str, base_commit: str, workdir: Path) -> Path:
