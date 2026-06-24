@@ -41,6 +41,7 @@ class SweConfig:
     max_usd: float = 25.0         # hard global spend cap (shared across arms+instances)
     cost_spike_usd: float = 0.50
     instance_timeout_s: float = 600.0   # per-instance wall-clock guard (a hung call can't stall the batch)
+    atlas_ground: bool = False    # codepro arm: also inject VPS5-atlas API facts (needs AETHER-CLOUD on VPS2)
     dry_run: bool = False
     out_dir: Path = field(default_factory=lambda: Path("runs/swe_eval"))
     work_dir: Path = field(default_factory=lambda: Path("runs/swe_eval/checkouts"))
@@ -145,6 +146,33 @@ def _parse_blocks(text: str) -> list[tuple[str, str, str]]:
              m.group("search"), m.group("replace")) for m in _BLOCK_RE.finditer(text)]
 
 
+def _atlas_facts(problem: str, k: int = 8) -> str:
+    """Query the VPS5 atlas oracle (signed) for API/library facts relevant to `problem` and
+    render a grounding block, or '' on any failure. Reuses AETHER-CLOUD's signed client +
+    node key (present on VPS2); import-guarded + fail-soft so --atlas-ground never breaks a run."""
+    try:
+        import asyncio
+        import sys
+        if "/opt/aether-cloud" not in sys.path:
+            sys.path.insert(0, "/opt/aether-cloud")
+        from lib.orchestrator.atlas.client import AtlasOracleClient
+        from mcp_worker.node_auth import NodeAuth
+        auth = NodeAuth(node_id="VPS2",
+                        private_key_path=os.environ.get("VPS2_NODE_KEY_PATH",
+                                                        "/opt/aether-cloud/certs/VPS2.key"))
+        cli = AtlasOracleClient(
+            base_url=os.environ.get("ATLAS_ORACLE_URL", "http://127.0.0.1:8097"), auth=auth)
+        res = asyncio.run(cli.query(problem, [], k)) or {}
+        facts = [(c.get("payload") or {}).get("claim") or (c.get("payload") or {}).get("text")
+                 for c in res.get("facts", [])]
+        facts = [f for f in facts if f]
+        if not facts:
+            return ""
+        return "# Relevant API facts (atlas grounding):\n" + "\n".join(f"- {x}" for x in facts)
+    except Exception:
+        return ""
+
+
 def _empty_record(arm: str, inst: dict, halted: str) -> dict:
     return {
         "instance_id": inst["instance_id"],
@@ -209,13 +237,23 @@ def run_instance(arm: str, inst: dict, cfg: SweConfig, chat, budget: dict,
     schema_all = _READONLY_SCHEMA + _SUBMIT_SCHEMA
     applied = 0
 
+    # Atlas grounding (codepro + --atlas-ground): one signed query for API facts, pinned into
+    # every turn's context. Empty string when off/unavailable -> byte-identical to plain codepro.
+    atlas_block = (_atlas_facts(inst["problem_statement"], cfg.recall_k)
+                   if (cfg.atlas_ground and arm == "codepro") else "")
+
     def _convo(extra: Optional[list] = None) -> list:
         convo = _truncate([{"role": "system", "content": _SYS}] + history, cfg.window)
+        pins = []
         if session is not None:
             qvec = encoder.encode(inst["problem_statement"])
             recalled = session._cold_retrieve(session._key(), qvec, cfg.recall_k)
             mem = "\n".join(f"[mem] {s.text}" for s in recalled) or "(empty)"
-            convo = [convo[0], {"role": "system", "content": f"Working memory:\n{mem}"}] + convo[1:]
+            pins.append({"role": "system", "content": f"Working memory:\n{mem}"})
+        if atlas_block:
+            pins.append({"role": "system", "content": atlas_block})
+        if pins:
+            convo = [convo[0]] + pins + convo[1:]
         return convo + (extra or [])
 
     import time as _time
@@ -387,6 +425,8 @@ def _build_config(argv: Optional[list[str]] = None) -> SweConfig:
     mpo.add_argument("--mpo-chain", dest="mpo_chain", action="store_true", default=True)
     mpo.add_argument("--no-mpo-chain", dest="mpo_chain", action="store_false")
     p.add_argument("--recall-k", type=int, default=8)
+    p.add_argument("--atlas-ground", action="store_true",
+                   help="codepro arm: inject VPS5-atlas API facts (needs AETHER-CLOUD on VPS2)")
     p.add_argument("--max-usd", type=float, default=25.0)
     p.add_argument("--out", default="runs/swe_eval")
     p.add_argument("--dry-run", action="store_true")
@@ -395,6 +435,7 @@ def _build_config(argv: Optional[list[str]] = None) -> SweConfig:
         model=a.model, arms=tuple(x.strip() for x in a.arms.split(",") if x.strip()),
         instances=a.instances, window=a.window, max_steps=a.max_steps, pool_gb=a.pool_gb,
         turbovec_bits=a.turbovec_bits, mpo_chain=a.mpo_chain, recall_k=a.recall_k,
+        atlas_ground=a.atlas_ground,
         max_usd=a.max_usd, dry_run=a.dry_run, out_dir=Path(a.out),
         work_dir=Path(a.out) / "checkouts")
 
