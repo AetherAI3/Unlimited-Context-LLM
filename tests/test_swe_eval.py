@@ -175,3 +175,30 @@ def test_cli_flags_map_to_config():
     assert cfg.mpo_chain is False
     assert cfg.max_usd == 25.0 and cfg.window == 4096 and cfg.max_steps == 12
     assert cfg.dry_run is True
+
+
+def test_codepro_debate_heavy_routes_to_debate(tmp_path, monkeypatch):
+    repo = _make_repo(tmp_path)
+    monkeypatch.setattr("bench.swe_debate.classify_complexity", lambda *a, **k: "heavy")
+    def _fake_debate(chat, tools, ground_fn, problem, **kw):
+        tools.edit_file("a.py", "    return x - y  # bug", "    return x + y")
+        return {"accepted": True, "applied": 1, "rounds_used": 1}
+    monkeypatch.setattr("bench.swe_debate.debate_patch", _fake_debate)
+    cfg = SweConfig(dry_run=True, arms=("codepro_debate",), out_dir=tmp_path/"o",
+                    work_dir=tmp_path/"w", pool_gb=5, debate=True)
+    rec = run_instance("codepro_debate", _inst(repo), cfg, _SRChat(), {"spent":0.0},
+                       repo_url=f"file://{repo.as_posix()}")
+    assert rec["arm"] == "codepro_debate"
+    assert rec["patch_nonempty"] is True
+    assert rec.get("complexity") == "heavy"
+    assert "+    return x + y" in rec["model_patch"]
+
+
+def test_codepro_debate_flag_off_no_debate(tmp_path):
+    repo = _make_repo(tmp_path)
+    cfg = SweConfig(dry_run=True, arms=("codepro_debate",), out_dir=tmp_path/"o2",
+                    work_dir=tmp_path/"w2", pool_gb=5, debate=False)
+    rec = run_instance("codepro_debate", _inst(repo), cfg, _SRChat(), {"spent":0.0},
+                       repo_url=f"file://{repo.as_posix()}")
+    assert rec["arm"] == "codepro_debate"
+    assert rec.get("complexity") is None

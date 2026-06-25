@@ -43,6 +43,8 @@ class SweConfig:
     instance_timeout_s: float = 600.0   # per-instance wall-clock guard (a hung call can't stall the batch)
     atlas_ground: bool = False    # codepro arm: also inject VPS5-atlas API facts (needs AETHER-CLOUD on VPS2)
     max_output_tokens: int = 4096  # cap per-call output; unset => provider defaults to 65k => 402 on a low-credit key + needless cost
+    debate: bool = False          # codepro_debate arm: gate hard instances into propose↔critique
+    debate_rounds: int = 2        # max propose↔critique rounds on a heavy instance
     dry_run: bool = False
     out_dir: Path = field(default_factory=lambda: Path("runs/swe_eval"))
     work_dir: Path = field(default_factory=lambda: Path("runs/swe_eval/checkouts"))
@@ -201,7 +203,7 @@ def run_instance(arm: str, inst: dict, cfg: SweConfig, chat, budget: dict,
 
     session: Optional[Session] = None
     encoder = StaticEncoder(dim=256)
-    if arm == "codepro":
+    if arm in ("codepro", "codepro_debate"):
         session = Session("swe", pool_gb=cfg.pool_gb,
                           pool_dir=cfg.out_dir / f"pool_{inst['instance_id']}_{arm}",
                           context_window=cfg.window, mpo_chain=cfg.mpo_chain,
@@ -333,6 +335,21 @@ def run_instance(arm: str, inst: dict, cfg: SweConfig, chat, budget: dict,
             break
         history.append({"role": "user", "content": _PATCH_INSTRUCTION})
 
+    # ── Complexity gate: heavy + codepro_debate -> propose↔critique escalation ──
+    complexity = None
+    if arm == "codepro_debate" and cfg.debate:
+        from bench import swe_debate as _dbg  # lazy import (no circular dependency)
+        complexity = _dbg.classify_complexity(inst["problem_statement"], len(tools._read))
+        if complexity == "heavy" and not tools.current_patch().strip() and budget["spent"] < cfg.max_usd:
+            def _ground(q: str) -> str:
+                if session is None:
+                    return ""
+                qv = encoder.encode(q)
+                hits = session._cold_retrieve(session._key(), qv, cfg.recall_k)
+                return "\n".join(f"[mem] {s.text}" for s in hits)
+            _dbg.debate_patch(chat, tools, _ground, inst["problem_statement"],
+                              rounds=cfg.debate_rounds, max_output_tokens=cfg.max_output_tokens,
+                              account=_account)
     patch = tools.current_patch()
     if session is not None:
         session.close()
@@ -347,6 +364,7 @@ def run_instance(arm: str, inst: dict, cfg: SweConfig, chat, budget: dict,
         "redundant_tool_calls": tools.redundant,
         "patch_nonempty": bool(patch.strip()),
         "halted": halted,
+        "complexity": complexity,
     }
 
 
