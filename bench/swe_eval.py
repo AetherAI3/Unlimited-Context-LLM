@@ -456,6 +456,9 @@ def _build_config(argv: Optional[list[str]] = None) -> SweConfig:
     p.add_argument("--recall-k", type=int, default=8)
     p.add_argument("--atlas-ground", action="store_true",
                    help="codepro arm: inject VPS5-atlas API facts (needs AETHER-CLOUD on VPS2)")
+    p.add_argument("--debate", action="store_true",
+                   help="codepro_debate arm: gate heavy instances into a propose↔critique loop")
+    p.add_argument("--debate-rounds", type=int, default=2)
     p.add_argument("--max-output-tokens", type=int, default=4096,
                    help="cap per-call output tokens (avoids 402 on low-credit keys + cuts cost)")
     p.add_argument("--max-usd", type=float, default=25.0)
@@ -467,6 +470,7 @@ def _build_config(argv: Optional[list[str]] = None) -> SweConfig:
         instances=a.instances, window=a.window, max_steps=a.max_steps, pool_gb=a.pool_gb,
         turbovec_bits=a.turbovec_bits, mpo_chain=a.mpo_chain, recall_k=a.recall_k,
         atlas_ground=a.atlas_ground, max_output_tokens=a.max_output_tokens,
+        debate=a.debate, debate_rounds=a.debate_rounds,
         max_usd=a.max_usd, dry_run=a.dry_run, out_dir=Path(a.out),
         work_dir=Path(a.out) / "checkouts")
 

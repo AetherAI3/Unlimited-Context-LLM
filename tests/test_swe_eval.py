@@ -202,3 +202,10 @@ def test_codepro_debate_flag_off_no_debate(tmp_path):
                        repo_url=f"file://{repo.as_posix()}")
     assert rec["arm"] == "codepro_debate"
     assert rec.get("complexity") is None
+
+
+def test_cli_debate_flags():
+    cfg = _build_config(["--arms","codepro_debate","--debate","--debate-rounds","3","--dry-run"])
+    assert cfg.arms == ("codepro_debate",)
+    assert cfg.debate is True
+    assert cfg.debate_rounds == 3
