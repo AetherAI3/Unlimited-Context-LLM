@@ -39,7 +39,7 @@ def classify_complexity(problem: str, files_seen: int = 0) -> str:
     return "medium"
 
 
-from bench.swe_eval import _parse_blocks  # safe: swe_eval imports swe_debate only lazily
+from bench.swe_parse import _parse_blocks  # shared parser module (no swe_eval import)
 
 _PROPOSE_SYS = (
     "You are the PROPOSER. Produce a minimal fix as SEARCH/REPLACE edit blocks, EXACTLY:\n"
@@ -88,13 +88,17 @@ def debate_patch(chat: Any, tools: Any, ground_fn: Callable[[str], str], problem
         # this candidate's SEARCH blocks (which always quote the ORIGINAL file) apply cleanly,
         # and current_patch() reflects ONLY the latest candidate (the best attempt so far).
         subprocess.run(["git", "checkout", "-q", "--", "."], cwd=tools.root,
-                       capture_output=True)
+                       capture_output=True, check=True)
         applied_here = 0
         for path, search, replace in _parse_blocks(out.get("content") or ""):
             res = tools.edit_file(path, search, replace)
             if isinstance(res, dict) and res.get("ok"):
                 applied_here += 1
                 applied_total += 1
+        if applied_here == 0:
+            focus = problem + "\n\nYour previous output had no applicable edit blocks. " \
+                    "Resend valid SEARCH/REPLACE blocks."
+            continue
         patch = tools.current_patch()
         crit_msgs = [{"role": "system", "content": _CRITIQUE_SYS},
                      {"role": "user", "content": f"CRITIQUE this fix for:\n{problem}\n\nProposed patch:\n{patch}"}]

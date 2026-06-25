@@ -204,6 +204,15 @@ def test_codepro_debate_flag_off_no_debate(tmp_path):
     assert rec.get("complexity") is None
 
 
+def test_codepro_debate_model_name_not_off(tmp_path):
+    repo = _make_repo(tmp_path)
+    cfg = SweConfig(dry_run=True, arms=("codepro_debate",), out_dir=tmp_path/"mn",
+                    work_dir=tmp_path/"mw", pool_gb=5, debate=False)
+    rec = run_instance("codepro_debate", _inst(repo), cfg, _SRChat(), {"spent":0.0},
+                       repo_url=f"file://{repo.as_posix()}")
+    assert not rec["model_name_or_path"].endswith("-off")
+
+
 def test_cli_debate_flags():
     cfg = _build_config(["--arms","codepro_debate","--debate","--debate-rounds","3","--dry-run"])
     assert cfg.arms == ("codepro_debate",)

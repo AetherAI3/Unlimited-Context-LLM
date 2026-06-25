@@ -18,6 +18,7 @@ from typing import Any, Optional
 from aether_context.encoder import StaticEncoder
 from aether_context.session import Session
 from bench.api_eval import cached_tokens, cost_usd
+from bench.swe_parse import _parse_blocks  # noqa: F401  (re-exported; tests import from here)
 from bench.swe_tools import RepoTools, prepare_checkout
 
 DEFAULT_MODEL = "deepseek/deepseek-v4-pro"
@@ -132,23 +133,6 @@ def _submit_edits(out: dict) -> Optional[str]:
                 return None
     return None
 
-# Aider-style SEARCH/REPLACE block. dsv4-pro will not write a line-numbered unified diff from
-# memory (it just keeps trying to re-read), but it can reproduce an exact snippet + replacement.
-# Applying via edit_file makes the off-vs-codepro gap a function of whether the model REMEMBERS
-# the exact code: off (truncated transcript) misremembers -> SEARCH miss; codepro recalls it.
-_BLOCK_RE = re.compile(
-    r"(?P<path>[^\n<>=]+?)\n<{5,7} SEARCH\n(?P<search>.*?)\n={5,7}\n(?P<replace>.*?)\n>{5,7} REPLACE",
-    re.S)
-
-
-def _parse_blocks(text: str) -> list[tuple[str, str, str]]:
-    """Extract (path, search, replace) edit blocks from the model's patch-turn text."""
-    if not text:
-        return []
-    return [(m.group("path").strip().strip("`").strip(),
-             m.group("search"), m.group("replace")) for m in _BLOCK_RE.finditer(text)]
-
-
 def _atlas_facts(problem: str, k: int = 8) -> str:
     """Query the VPS5 atlas oracle (signed) for API/library facts relevant to `problem` and
     render a grounding block, or '' on any failure. Reuses AETHER-CLOUD's signed client +
@@ -179,7 +163,7 @@ def _atlas_facts(problem: str, k: int = 8) -> str:
 def _empty_record(arm: str, inst: dict, halted: str) -> dict:
     return {
         "instance_id": inst["instance_id"],
-        "model_name_or_path": MODEL_NAME if arm == "codepro" else f"{MODEL_NAME}-off",
+        "model_name_or_path": MODEL_NAME if arm in ("codepro", "codepro_debate") else f"{MODEL_NAME}-off",
         "model_patch": "", "arm": arm, "cost_usd": 0.0, "cached_tokens": 0,
         "tool_calls": 0, "redundant_tool_calls": 0, "patch_nonempty": False,
         "halted": halted,
@@ -355,7 +339,7 @@ def run_instance(arm: str, inst: dict, cfg: SweConfig, chat, budget: dict,
         session.close()
     return {
         "instance_id": inst["instance_id"],
-        "model_name_or_path": MODEL_NAME if arm == "codepro" else f"{MODEL_NAME}-off",
+        "model_name_or_path": MODEL_NAME if arm in ("codepro", "codepro_debate") else f"{MODEL_NAME}-off",
         "model_patch": patch,
         "arm": arm,
         "cost_usd": round(cost, 6),
