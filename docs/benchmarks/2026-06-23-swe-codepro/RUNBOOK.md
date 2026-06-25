@@ -37,3 +37,13 @@
 - $25 hard cap shared across arms+instances; halts clean + resumes (re-run same command).
 - codepro arm uses the LOCAL engine (no VPS5 atlas oracle) -> Docker CPU/disk only.
 - pool floor is 5 GB (engine guard); --pool-gb below 5 is rejected.
+
+## Reasoning escalation (codepro_debate)
+
+    # 3-arm comparison; heavy instances escalate into propose↔critique
+    python -m bench.swe_eval --instances 0 --arms off,codepro,codepro_debate \
+      --debate --debate-rounds 2 --max-output-tokens 4096 --max-usd 35 --out runs/debate
+
+Score all three arms (VPS5) as usual. Headline metric: resolved-rate on the **heavy** subset
+(`complexity == "heavy"` in predictions) — codepro_debate vs codepro. Also track escalation rate
+(% heavy) and extra $/heavy instance.
