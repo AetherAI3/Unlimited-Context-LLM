@@ -156,13 +156,20 @@ def test_full_open_to_close_holds_budget_and_runs_clean(tmp_pool_dir):
 def test_pool_survives_reopen_and_fact_still_recoverable(tmp_pool_dir):
     """The encoded fact is disk-resident: closing and reopening the same pool dir restores
     it, and it is still recoverable (mmap persistence carries the load-bearing fact)."""
-    s = _tiny_window_session(tmp_pool_dir)
+    session_id = "persistent-e2e-session"
+    s = _tiny_window_session(tmp_pool_dir, session_id=session_id)
     s.remember(PLANTED_FACT, tags={"kind": "constraint"})
     s.run("a long build")
     s.close()  # flush to disk
 
-    # reopen a fresh session over the SAME pool dir
-    s2 = Session(model="mock", pool_gb=5, pool_dir=tmp_pool_dir)
+    # Reopen the same explicit namespace over the SAME pool dir. Separate mode must never
+    # recover persistence by leaking through a global-search fallback.
+    s2 = Session(
+        model="mock",
+        pool_gb=5,
+        pool_dir=tmp_pool_dir,
+        session_id=session_id,
+    )
     try:
         hits = s2.recall(RECOVERY_QUERY, k=5)
         joined = " ".join(h.text.lower() for h in hits)

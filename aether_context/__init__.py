@@ -18,12 +18,14 @@ deterministic model (offline, zero deps) — great for trying the API, tests, an
 
 Public surface (intentionally tiny):
   * :class:`Session` — the lifecycle controller you drive.
+  * :class:`MemoryRecord` / :class:`MemoryPage` - vector-free memory management DTOs.
   * :func:`load_model` — resolve a model spec / bring-your-own backend to a ``LocalLLM``.
   * :data:`__version__` — the package version.
 """
+from aether_context.context_pool import MemoryPage, MemoryRecord
 from aether_context.local_llm import load_model
 from aether_context.session import Session
 
 __version__ = "0.1.0"
 
-__all__ = ["Session", "load_model", "__version__"]
+__all__ = ["Session", "MemoryRecord", "MemoryPage", "load_model", "__version__"]

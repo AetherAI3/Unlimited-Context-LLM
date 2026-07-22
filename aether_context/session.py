@@ -47,7 +47,13 @@ import numpy as np
 
 from aether_context._log import get_logger
 from aether_context.config import PoolConfig, SessionConfig, reach_tokens
-from aether_context.context_pool import ContextPool, Slice, slice_cost_bytes
+from aether_context.context_pool import (
+    ContextPool,
+    MemoryPage,
+    MemoryRecord,
+    Slice,
+    slice_cost_bytes,
+)
 from aether_context.encoder import StaticEncoder
 from aether_context.errors import (
     AetherContextError,
@@ -168,6 +174,7 @@ class Session:
         **cfg: Any,
     ) -> None:
         self.id: str = session_id or f"sess-{uuid.uuid4().hex[:12]}"
+        self._memory_lock = threading.RLock()
         self._closed: bool = False
         self._resident_k: int = max(1, int(resident_k))
         # Pool sharing discipline. "separate" (default) keeps every search/encode scoped to
@@ -321,6 +328,105 @@ class Session:
         """
         return None if self.pool_mode == "shared" else self.id
 
+    def _ensure_memory_open(self) -> None:
+        """Reject memory management after the owning session has closed."""
+        if self._closed:
+            raise AetherContextError(
+                "Memory management called on a closed Session.",
+                hint="Open a Session with the same session_id and pool_dir to manage its memories.",
+            )
+
+    def memory_page(
+        self,
+        *,
+        limit: int = 50,
+        cursor: str | None = None,
+        memory_type: str | None = None,
+    ) -> MemoryPage:
+        """List a bounded page of this session's vector-free durable memories."""
+        with self._memory_lock:
+            self._ensure_memory_open()
+            return self.pool.memory_page(
+                self.id,
+                limit=limit,
+                cursor=cursor,
+                memory_type=memory_type,
+            )
+
+    def memory_get(self, memory_id: str) -> MemoryRecord:
+        """Return one vector-free memory owned by this session."""
+        with self._memory_lock:
+            self._ensure_memory_open()
+            return self.pool.memory_get(self.id, memory_id)
+
+    def memory_replace(
+        self,
+        memory_id: str,
+        *,
+        text: str,
+        expected_version: int,
+        meta_patch: dict[str, Any] | None = None,
+        durable: bool = True,
+    ) -> MemoryRecord:
+        """Replace one memory using optimistic versioning and refresh its embedding."""
+        with self._memory_lock:
+            self._ensure_memory_open()
+            clean_text = text.strip() if isinstance(text, str) else ""
+            if not clean_text:
+                raise AetherContextError(
+                    "Replacement memory text must be a non-empty string.",
+                    hint="Pass non-whitespace text to memory_replace().",
+                )
+            vector = self.encoder.encode(clean_text)
+            record = self.pool.memory_replace(
+                self.id,
+                memory_id,
+                text=clean_text,
+                vector=np.asarray(vector, dtype=np.float32),
+                tokens=int(self._count_tokens(clean_text)),
+                expected_version=expected_version,
+                meta_patch=meta_patch,
+                durable=durable,
+            )
+            self.pager.reset()
+            return record
+
+    def memory_delete(
+        self,
+        memory_id: str,
+        *,
+        expected_version: int,
+        durable: bool = True,
+    ) -> MemoryRecord:
+        """Delete one memory using optimistic versioning."""
+        with self._memory_lock:
+            self._ensure_memory_open()
+            record = self.pool.memory_delete(
+                self.id,
+                memory_id,
+                expected_version=expected_version,
+                durable=durable,
+            )
+            self.pager.reset()
+            return record
+
+    def memory_clear(
+        self,
+        *,
+        expected_count: int,
+        durable: bool = True,
+    ) -> int:
+        """Atomically clear only this session's memories when the count still matches."""
+        with self._memory_lock:
+            self._ensure_memory_open()
+            removed = self.pool.memory_clear(
+                self.id,
+                expected_count=expected_count,
+                durable=durable,
+            )
+            self.pager.reset()
+            return removed
+
     def _cold_retrieve(self, key: SliceKey, query_vec: np.ndarray, k: int) -> list[Slice]:
         """Pager cold path honoring the session's pool mode (shared -> global search).
 
@@ -356,7 +462,7 @@ class Session:
 
     # -- plant / recover a fact -----------------------------------------------
     def remember(self, text: str, *, tags: dict[str, Any] | None = None,
-                 source: str = MEMORY_SOURCE_USER) -> Slice | None:
+                 source: str = MEMORY_SOURCE_USER, durable: bool = True) -> Slice | None:
         """Encode ``text`` as a high-salience slice into the pool (a load-bearing fact).
 
         This is how a durable constraint is established before a long run so it survives the
@@ -364,9 +470,29 @@ class Session:
         is tagged ``meta["source"]`` (default :data:`MEMORY_SOURCE_USER` — high authority) so a
         caller can later recall trusted memory only. Returns the stored :class:`Slice` (or
         ``None`` if encoding fails — fail-soft).
+
+        Caller tags cannot override provenance or storage-owned metadata. Explicit memories are
+        durably flushed by default; pass ``durable=False`` only when a later close/flush is
+        guaranteed.
         """
-        meta = {"source": source, **(tags or {})}
-        return self._encode_slice(text, salience=_REMEMBER_SALIENCE, tags=meta)
+        with self._memory_lock:
+            self._ensure_memory_open()
+            meta = {
+                key: value
+                for key, value in (tags or {}).items()
+                if isinstance(key, str) and not key.startswith("_") and key != "source"
+            }
+            meta["source"] = source
+            sl = self._encode_slice(text, salience=_REMEMBER_SALIENCE, tags=meta)
+            if sl is not None and durable:
+                try:
+                    self.pool.flush()
+                except AetherContextError as exc:
+                    logger.warning(
+                        "remember durable flush failed (%s); reporting the write as failed", exc
+                    )
+                    return None
+            return sl
 
     def recall(self, query: str, k: int = DEFAULT_RESIDENT_K, *,
                sources: set[str] | None = None) -> list[Slice]:
@@ -387,20 +513,22 @@ class Session:
             logger.warning("recall encode failed (%s); returning no local hits", exc)
             return []
         try:
-            scoped = self.pool.search(qvec, k, session=self._scope(), sources=sources)
-            if scoped:
-                return scoped
-            # Reopen case: a fresh Session over an existing pool dir has a new session id, so
-            # the prior run's slices live under a different namespace. Fall back to a global
-            # search so a disk-resident fact is still recoverable after a close + reopen.
-            # (In shared mode the scoped search is already global, so this is a harmless re-run.)
-            return self.pool.search(qvec, k, session=None, sources=sources)
+            return self.pool.search(qvec, k, session=self._scope(), sources=sources)
         except AetherContextError as exc:
             logger.warning("recall pool search failed (%s); returning no local hits", exc)
             return []
 
     # -- encode-on-spill ------------------------------------------------------
     def _encode_slice(
+        self, text: str, *, salience: float, tags: dict[str, Any]
+    ) -> Slice | None:
+        """Serialize id/sequence generation and writes through the session memory lock."""
+        with self._memory_lock:
+            return self._encode_slice_locked(
+                text, salience=salience, tags=tags
+            )
+
+    def _encode_slice_locked(
         self, text: str, *, salience: float, tags: dict[str, Any]
     ) -> Slice | None:
         """Encode ``text`` into a pool slice and add it (fail-soft).
@@ -418,7 +546,7 @@ class Session:
             logger.warning("encode-on-spill failed (%s); slice dropped, run continues", exc)
             return None
         self._spill_seq += 1
-        sid = f"{self.id}:slice:{self._spill_seq}"
+        sid = str(uuid.uuid4())
         tokens = self._count_tokens(text)
         score = self._salience(text, salience)
         # Chain coordinate component for this slice (monotonic per encode).
@@ -766,5 +894,7 @@ __all__ = [
     "Session",
     "RunResult",
     "HarvestCandidate",
+    "MemoryRecord",
+    "MemoryPage",
     "DEFAULT_RESIDENT_K",
 ]
