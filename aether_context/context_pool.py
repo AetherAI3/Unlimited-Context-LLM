@@ -34,11 +34,16 @@ requires the optional ``hnswlib`` to have been present when the pool was written
 """
 from __future__ import annotations
 
+import base64
+import copy
 import json
 import math
 import os
+import threading
 import warnings
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
+from functools import wraps
 from pathlib import Path
 from typing import Any
 
@@ -46,7 +51,14 @@ import numpy as np
 
 from aether_context._log import get_logger
 from aether_context.config import PoolConfig, TOKENS_PER_GB
-from aether_context.errors import PoolBudgetError, PoolCorrupt
+from aether_context.errors import (
+    AetherContextError,
+    MemoryConflict,
+    MemoryCursorError,
+    MemoryNotFound,
+    PoolBudgetError,
+    PoolCorrupt,
+)
 from aether_context.quantize import dequantize, packed_bytes_per_row, quantize
 from aether_context.witness import Witness
 
@@ -60,6 +72,15 @@ try:  # pragma: no cover - import availability is environment-dependent
 except ImportError:  # pragma: no cover - the common CI path (flat fallback)
     _hnswlib = None
     _HNSWLIB_AVAILABLE = False
+
+_MEMORY_VERSION_KEY = "_version"
+_MEMORY_CREATED_KEY = "_created_at"
+_MEMORY_UPDATED_KEY = "_updated_at"
+_MEMORY_STORAGE_META = frozenset(
+    {_MEMORY_VERSION_KEY, _MEMORY_CREATED_KEY, _MEMORY_UPDATED_KEY}
+)
+_MEMORY_PRIVATE_META = _MEMORY_STORAGE_META | {"_ct"}
+_MAX_MEMORY_PAGE = 200
 
 # --- persistence constants ---------------------------------------------------
 #: On-disk format version for the sidecar/header. Bump on any layout change.
@@ -121,6 +142,54 @@ class Slice:
     tokens: int
     meta: dict[str, Any] = field(default_factory=dict)
     score: float = 0.0
+
+
+@dataclass(frozen=True)
+class MemoryRecord:
+    """Vector-free snapshot of one session-owned durable memory."""
+
+    id: str
+    text: str
+    tokens: int
+    meta: dict[str, Any]
+    score: float
+    version: int
+    created_at: str | None
+    updated_at: str | None
+
+
+@dataclass(frozen=True)
+class MemoryPage:
+    """Bounded page of vector-free memories for one session."""
+
+    items: tuple[MemoryRecord, ...]
+    next_cursor: str | None
+    total: int
+
+
+def _utc_now() -> str:
+    """Current UTC time in a stable, JSON-safe representation."""
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _synchronized(method: Any) -> Any:
+    """Run a ContextPool method under its single re-entrant state lock."""
+
+    @wraps(method)
+    def wrapped(self: "ContextPool", *args: Any, **kwargs: Any) -> Any:
+        with self._lock:
+            return method(self, *args, **kwargs)
+
+    return wrapped
+
+
+def _memory_version(sl: Slice) -> int:
+    """Read an optimistic version, treating pre-versioning records as version 1."""
+    try:
+        version = int(sl.meta.get(_MEMORY_VERSION_KEY, 1))
+    except (TypeError, ValueError):
+        return 1
+    return max(1, version)
 
 
 class _FlatIndex:
@@ -248,6 +317,7 @@ class ContextPool:
     """
 
     def __init__(self, config: PoolConfig, *, ceiling_bytes: int | None = None) -> None:
+        self._lock = threading.RLock()
         self._config = config
         self._dim = config.dim
         # TurboVec: 0 = float32 (default; this whole class is byte-identical to before). >0 stores
@@ -340,19 +410,23 @@ class ContextPool:
 
     # -- introspection ---------------------------------------------------------
     @property
+    @_synchronized
     def index_kind(self) -> str:
         """The resolved index kind actually in use (``"flat"`` or ``"hnsw"``)."""
         return self._index.kind
 
     @property
+    @_synchronized
     def ceiling_bytes(self) -> int:
         """The byte ceiling the governor holds the pool at or below."""
         return self._ceiling_bytes
 
+    @_synchronized
     def __len__(self) -> int:
         return len(self._slices)
 
     # -- write -----------------------------------------------------------------
+    @_synchronized
     def add(self, sl: Slice) -> None:
         """Store ``sl`` (overwriting any slice with the same id), then enforce the budget.
 
@@ -378,13 +452,28 @@ class ContextPool:
         stored_vec = self._unit(vec)
         assert self._mmap is not None
         self._write_row(row, sl.id, stored_vec)
+        existing = self._slices.get(sl.id)
+        meta = copy.deepcopy(sl.meta)
+        fallback_version = _memory_version(existing) if existing is not None else 1
+        try:
+            version = int(meta.get(_MEMORY_VERSION_KEY, fallback_version))
+        except (TypeError, ValueError):
+            version = fallback_version
+        meta[_MEMORY_VERSION_KEY] = max(1, version)
+        now = _utc_now()
+        if existing is not None:
+            created_at = existing.meta.get(_MEMORY_CREATED_KEY, now)
+        else:
+            created_at = now
+        meta.setdefault(_MEMORY_CREATED_KEY, created_at)
+        meta.setdefault(_MEMORY_UPDATED_KEY, meta[_MEMORY_CREATED_KEY])
         self._slices[sl.id] = Slice(
             id=sl.id,
             session=sl.session,
             vector=stored_vec.copy(),
             text=sl.text,
             tokens=int(sl.tokens),
-            meta=dict(sl.meta),
+            meta=meta,
             score=float(sl.score),
         )
         # Touch at the current write tick so the witness's temporal lock-in can protect this
@@ -395,6 +484,7 @@ class ContextPool:
         self.evict_to_budget()
 
     # -- read ------------------------------------------------------------------
+    @_synchronized
     def search(
         self, query_vec: np.ndarray, k: int, session: str | None = None,
         *, sources: set[str] | None = None,
@@ -424,12 +514,33 @@ class ContextPool:
             return self._search_global(query, k)
         return self._search_filtered(query, k, session, sources)
 
+    @staticmethod
+    def _retrieval_slice(sl: Slice) -> Slice:
+        """Return a detached retrieval snapshot without storage-owned metadata."""
+        return Slice(
+            id=sl.id,
+            session=sl.session,
+            vector=sl.vector.copy(),
+            text=sl.text,
+            tokens=int(sl.tokens),
+            meta={
+                key: copy.deepcopy(value)
+                for key, value in sl.meta.items()
+                if key not in _MEMORY_STORAGE_META
+            },
+            score=float(sl.score),
+        )
+
+
     def _search_global(self, query: np.ndarray, k: int) -> list[Slice]:
         """Unfiltered top-``k`` over every live slice (uses the resolved ANN index)."""
         matrix = self._live_matrix()
         self._refresh_index(matrix)
         pairs = self._index.search(matrix, query, k)
-        return [self._slices[self._order[row]] for row, _ in pairs]
+        return [
+            self._retrieval_slice(self._slices[self._order[row]])
+            for row, _ in pairs
+        ]
 
     def _search_filtered(
         self, query: np.ndarray, k: int, session: str | None, sources: set[str] | None,
@@ -457,9 +568,259 @@ class ContextPool:
         kk = min(k, len(rows))
         top = np.argpartition(-cosines, kk - 1)[:kk]
         top = top[np.argsort(-cosines[top], kind="stable")]
-        return [self._slices[self._order[rows[int(j)]]] for j in top]
+        return [
+            self._retrieval_slice(self._slices[self._order[rows[int(j)]]])
+            for j in top
+        ]
+
+    # -- scoped memory management ---------------------------------------------
+    def _memory_record(self, sl: Slice) -> MemoryRecord:
+        """Return a detached, vector-free public snapshot."""
+        public_meta = {
+            key: copy.deepcopy(value)
+            for key, value in sl.meta.items()
+            if key not in _MEMORY_PRIVATE_META
+        }
+        created_at = sl.meta.get(_MEMORY_CREATED_KEY)
+        updated_at = sl.meta.get(_MEMORY_UPDATED_KEY)
+        return MemoryRecord(
+            id=sl.id,
+            text=sl.text,
+            tokens=int(sl.tokens),
+            meta=public_meta,
+            score=float(sl.score),
+            version=_memory_version(sl),
+            created_at=str(created_at) if created_at is not None else None,
+            updated_at=str(updated_at) if updated_at is not None else None,
+        )
+
+    def _scoped_memory(self, session_id: str, memory_id: str) -> Slice:
+        """Resolve an id without revealing records from another namespace."""
+        sl = self._slices.get(memory_id)
+        if sl is None or sl.session != session_id:
+            raise MemoryNotFound(
+                f"Memory {memory_id!r} was not found in this session."
+            )
+        return sl
+
+    @staticmethod
+    def _check_expected_version(sl: Slice, expected_version: int) -> None:
+        """Enforce compare-and-swap semantics for one memory."""
+        actual = _memory_version(sl)
+        if (
+            isinstance(expected_version, bool)
+            or not isinstance(expected_version, int)
+            or expected_version < 1
+            or expected_version != actual
+        ):
+            raise MemoryConflict(
+                f"Memory version conflict: expected {expected_version!r}, current is {actual}."
+            )
+
+    @staticmethod
+    def _encode_memory_cursor(
+        session_id: str, memory_type: str | None, offset: int
+    ) -> str:
+        payload = json.dumps(
+            [session_id, memory_type, offset], separators=(",", ":"), ensure_ascii=False
+        ).encode("utf-8")
+        return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+    @staticmethod
+    def _decode_memory_cursor(
+        cursor: str, session_id: str, memory_type: str | None
+    ) -> int:
+        try:
+            if not isinstance(cursor, str) or not cursor:
+                raise ValueError("empty cursor")
+            padded = cursor + ("=" * (-len(cursor) % 4))
+            raw = base64.b64decode(
+                padded.encode("ascii"), altchars=b"-_", validate=True
+            )
+            payload = json.loads(raw.decode("utf-8"))
+            if (
+                not isinstance(payload, list)
+                or len(payload) != 3
+                or payload[0] != session_id
+                or payload[1] != memory_type
+                or isinstance(payload[2], bool)
+                or not isinstance(payload[2], int)
+                or payload[2] < 0
+            ):
+                raise ValueError("cursor scope or offset mismatch")
+            return payload[2]
+        except (UnicodeError, ValueError, TypeError, json.JSONDecodeError) as exc:
+            raise MemoryCursorError("Invalid memory-page cursor.") from exc
+
+    @_synchronized
+    def memory_page(
+        self,
+        session_id: str,
+        *,
+        limit: int = 50,
+        cursor: str | None = None,
+        memory_type: str | None = None,
+    ) -> MemoryPage:
+        """Return a bounded, session-scoped page without vectors or namespace data."""
+        if (
+            isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not 1 <= limit <= _MAX_MEMORY_PAGE
+        ):
+            raise AetherContextError(
+                f"memory page limit must be between 1 and {_MAX_MEMORY_PAGE}, got {limit!r}.",
+                hint=f"Pass an integer limit in the range 1..{_MAX_MEMORY_PAGE}.",
+            )
+        matching = [
+            sid
+            for sid in self._order
+            if self._slices[sid].session == session_id
+            and (
+                memory_type is None
+                or self._slices[sid].meta.get("kind") == memory_type
+            )
+        ]
+        offset = (
+            self._decode_memory_cursor(cursor, session_id, memory_type)
+            if cursor is not None
+            else 0
+        )
+        if offset > len(matching):
+            raise MemoryCursorError(
+                "Memory-page cursor is stale after the scoped inventory changed."
+            )
+        end = min(offset + limit, len(matching))
+        items = tuple(
+            self._memory_record(self._slices[sid])
+            for sid in matching[offset:end]
+        )
+        next_cursor = (
+            self._encode_memory_cursor(session_id, memory_type, end)
+            if end < len(matching)
+            else None
+        )
+        return MemoryPage(items=items, next_cursor=next_cursor, total=len(matching))
+
+    @_synchronized
+    def memory_get(self, session_id: str, memory_id: str) -> MemoryRecord:
+        """Get one vector-free memory snapshot in ``session_id``."""
+        return self._memory_record(self._scoped_memory(session_id, memory_id))
+
+    @_synchronized
+    def memory_replace(
+        self,
+        session_id: str,
+        memory_id: str,
+        *,
+        text: str,
+        vector: np.ndarray,
+        tokens: int,
+        expected_version: int,
+        meta_patch: dict[str, Any] | None = None,
+        durable: bool = True,
+    ) -> MemoryRecord:
+        """Atomically replace text/vector when ``expected_version`` still matches."""
+        current = self._scoped_memory(session_id, memory_id)
+        self._check_expected_version(current, expected_version)
+        clean_text = text.strip() if isinstance(text, str) else ""
+        if not clean_text:
+            raise AetherContextError(
+                "Replacement memory text must be a non-empty string.",
+                hint="Pass non-whitespace text to memory_replace().",
+            )
+        if meta_patch is not None and not isinstance(meta_patch, dict):
+            raise AetherContextError(
+                "meta_patch must be a dictionary when provided.",
+                hint="Pass a JSON-serializable dict, or omit meta_patch.",
+            )
+        patch = meta_patch or {}
+        invalid_keys = [
+            key
+            for key in patch
+            if not isinstance(key, str) or key == "source" or key.startswith("_")
+        ]
+        if invalid_keys:
+            raise AetherContextError(
+                "meta_patch cannot change provenance or reserved metadata keys.",
+                hint="Patch application metadata only; source/version/timestamps are immutable.",
+            )
+        now = _utc_now()
+        meta = copy.deepcopy(current.meta)
+        meta.update(copy.deepcopy(patch))
+        meta[_MEMORY_VERSION_KEY] = _memory_version(current) + 1
+        meta.setdefault(_MEMORY_CREATED_KEY, now)
+        meta[_MEMORY_UPDATED_KEY] = now
+        updated = Slice(
+            id=current.id,
+            session=current.session,
+            vector=np.asarray(vector, dtype=np.float32),
+            text=clean_text,
+            tokens=int(tokens),
+            meta=meta,
+            score=float(current.score),
+        )
+        self.add(updated)
+        if durable:
+            self.flush()
+        return self._memory_record(self._slices[memory_id])
+
+    @_synchronized
+    def memory_delete(
+        self,
+        session_id: str,
+        memory_id: str,
+        *,
+        expected_version: int,
+        durable: bool = True,
+    ) -> MemoryRecord:
+        """Delete exactly one scoped memory using compare-and-swap semantics."""
+        current = self._scoped_memory(session_id, memory_id)
+        self._check_expected_version(current, expected_version)
+        deleted = self._memory_record(current)
+        old_count = len(self._order)
+        self._remove(memory_id)
+        self._compact_rows(old_count=old_count)
+        self._dirty = True
+        self._index_rebuild = True
+        if durable:
+            self.flush()
+        return deleted
+
+    @_synchronized
+    def memory_clear(
+        self,
+        session_id: str,
+        *,
+        expected_count: int,
+        durable: bool = True,
+    ) -> int:
+        """Clear one namespace only when its current count matches ``expected_count``."""
+        scoped_ids = [
+            sid for sid in self._order if self._slices[sid].session == session_id
+        ]
+        actual = len(scoped_ids)
+        if (
+            isinstance(expected_count, bool)
+            or not isinstance(expected_count, int)
+            or expected_count < 0
+            or expected_count != actual
+        ):
+            raise MemoryConflict(
+                f"Memory count conflict: expected {expected_count!r}, current is {actual}."
+            )
+        if scoped_ids:
+            old_count = len(self._order)
+            for sid in scoped_ids:
+                self._remove(sid)
+            self._compact_rows(old_count=old_count)
+            self._dirty = True
+            self._index_rebuild = True
+        if durable:
+            self.flush()
+        return actual
 
     # -- governor --------------------------------------------------------------
+    @_synchronized
     def evict_to_budget(self) -> list[str]:
         """Evict the lowest-retention slices until the pool fits under its byte ceiling.
 
@@ -480,10 +841,11 @@ class ContextPool:
         full_order = unranked + order
         n_evict = len(self._order) - max_slices
         evict_ids = full_order[:n_evict]
+        old_count = len(self._order)
         for sid in evict_ids:
             self._remove(sid)
         if evict_ids:
-            self._compact_rows()
+            self._compact_rows(old_count=old_count)
             self._dirty = True
             self._index_rebuild = True  # rows renumbered by compaction -> full graph rebuild
             logger.debug(
@@ -492,6 +854,7 @@ class ContextPool:
             )
         return evict_ids
 
+    @_synchronized
     def clear_session(self, session_id: str | None) -> int:
         """Remove every live slice belonging to ``session_id`` and return the count removed.
 
@@ -512,9 +875,10 @@ class ContextPool:
             ]
         if not removed:
             return 0
+        old_count = len(self._order)
         for sid in removed:
             self._remove(sid)
-        self._compact_rows()
+        self._compact_rows(old_count=old_count)
         self._dirty = True
         self._index_rebuild = True  # rows renumbered by compaction -> full graph rebuild
         logger.debug(
@@ -533,7 +897,7 @@ class ContextPool:
         except ValueError:
             pass
 
-    def _compact_rows(self) -> None:
+    def _compact_rows(self, *, old_count: int) -> None:
         """Re-pack live slices into contiguous rows ``[0..len)`` after eviction.
 
         Keeps the mmap dense so ``_live_matrix`` is a simple prefix slice and row indices
@@ -543,26 +907,31 @@ class ContextPool:
         if self._mmap is None:
             return
         n = len(self._order)
-        if n == 0:
+        if n:
+            packed = np.empty((n, self._mcols), dtype=self._mdtype)
+            for new_row, sid in enumerate(self._order):
+                v = self._slices[sid].vector
+                if self._qbits:
+                    codes, scale = quantize(v[None], self._qbits)
+                    packed[new_row] = codes[0]
+                    self._scale_of[sid] = float(scale[0])
+                else:
+                    packed[new_row] = v
+                self._row_of[sid] = new_row
+            self._mmap[:n] = packed
+        else:
             self._row_of = {}
-            return
-        packed = np.empty((n, self._mcols), dtype=self._mdtype)
-        for new_row, sid in enumerate(self._order):
-            v = self._slices[sid].vector
-            if self._qbits:
-                codes, scale = quantize(v[None], self._qbits)
-                packed[new_row] = codes[0]
-                self._scale_of[sid] = float(scale[0])
-            else:
-                packed[new_row] = v
-            self._row_of[sid] = new_row
-        self._mmap[:n] = packed
+        freed_end = min(max(old_count, n), self._capacity)
+        if freed_end > n:
+            self._mmap[n:freed_end] = 0
 
     # -- accounting ------------------------------------------------------------
+    @_synchronized
     def bytes_used(self) -> int:
         """Total bytes the live slices occupy, by the same accounting the governor uses."""
         return len(self._slices) * slice_cost_bytes(self._dim)
 
+    @_synchronized
     def stats(self) -> dict[str, Any]:
         """A small dict snapshot: count, bytes, ceiling, dim, index kind, sessions."""
         return {
@@ -577,6 +946,7 @@ class ContextPool:
         }
 
     # -- persistence -----------------------------------------------------------
+    @_synchronized
     def close(self) -> None:
         """Flush vectors + sidecar to disk and release the mmap. Idempotent.
 
@@ -589,18 +959,25 @@ class ContextPool:
 
     def __del__(self) -> None:  # pragma: no cover - best-effort flush on GC
         try:
-            self._flush()
-            self._release_mmap()
+            lock = getattr(self, "_lock", None)
+            if lock is None:
+                return
+            with lock:
+                self._flush()
+                self._release_mmap()
         except Exception:  # noqa: BLE001 - never raise from a finalizer
             pass
 
+    @_synchronized
+    def flush(self) -> None:
+        """Durably flush changed vector rows and the atomic metadata sidecar."""
+        self._flush()
+
     def _flush(self) -> None:
-        """Write the mmap and sidecar metadata if anything changed since the last flush."""
+        """Write and fsync the mmap and sidecar if state changed."""
         if not self._dirty:
             return
         self._dir.mkdir(parents=True, exist_ok=True)
-        if self._mmap is not None:
-            self._mmap.flush()
         records = [
             {
                 "id": sid,
@@ -625,8 +1002,35 @@ class ContextPool:
             "slices": records,
         }
         tmp = self._metadata_file().with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(header), encoding="utf-8")
-        os.replace(tmp, self._metadata_file())
+        try:
+            if self._mmap is not None:
+                self._mmap.flush()
+                with self._vectors_file().open("r+b", buffering=0) as vector_file:
+                    os.fsync(vector_file.fileno())
+            with tmp.open("w", encoding="utf-8", newline="") as metadata_file:
+                json.dump(
+                    header,
+                    metadata_file,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+                metadata_file.flush()
+                os.fsync(metadata_file.fileno())
+            os.replace(tmp, self._metadata_file())
+            with self._metadata_file().open("r+b", buffering=0) as metadata_file:
+                os.fsync(metadata_file.fileno())
+            if os.name != "nt":
+                directory_fd = os.open(
+                    self._dir, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+                )
+                try:
+                    os.fsync(directory_fd)
+                finally:
+                    os.close(directory_fd)
+        except (OSError, TypeError, ValueError) as exc:
+            raise PoolCorrupt(
+                f"could not durably flush pool metadata at {self._metadata_file()}: {exc}"
+            ) from exc
         self._dirty = False
 
     def _load(self) -> None:
@@ -811,6 +1215,8 @@ class ContextPool:
 __all__ = [
     "ContextPool",
     "Slice",
+    "MemoryRecord",
+    "MemoryPage",
     "slice_cost_bytes",
     "POOL_FORMAT_VERSION",
     "VECTORS_FILENAME",

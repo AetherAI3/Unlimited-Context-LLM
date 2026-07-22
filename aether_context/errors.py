@@ -82,6 +82,28 @@ class PoolCorrupt(AetherContextError):
     )
 
 
+class MemoryNotFound(AetherContextError):
+    """A memory id is absent from the caller's session namespace."""
+
+    default_hint = (
+        "Refresh the session memory page and retry with an id returned for this session."
+    )
+
+
+class MemoryConflict(AetherContextError):
+    """An optimistic memory mutation was based on stale state."""
+
+    default_hint = (
+        "Refresh the memory record (or page), then retry with its current version/count."
+    )
+
+
+class MemoryCursorError(AetherContextError):
+    """A memory-page cursor is malformed or belongs to a different scope/filter."""
+
+    default_hint = "Start a fresh memory-page request without a cursor."
+
+
 __all__ = [
     "AetherContextError",
     "PoolBudgetError",
@@ -90,4 +112,7 @@ __all__ = [
     "BackendUnavailable",
     "EncoderError",
     "PoolCorrupt",
+    "MemoryNotFound",
+    "MemoryConflict",
+    "MemoryCursorError",
 ]
