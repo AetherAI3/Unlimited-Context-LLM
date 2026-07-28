@@ -225,7 +225,7 @@ class Session:
             retrieve_fn=self._cold_retrieve,
         )
 
-        # -- optional MPO context chain (assists retrieval; off by default) ----
+        # -- optional MPO context chain (assists retrieval; on by default) -----
         # Cosine stays the retrieval mechanism; when enabled, the chain widens each cosine
         # result with the slices most coupled to it on (cost, time) — connected context.
         self.mpo_chain_enabled: bool = bool(mpo_chain)
@@ -234,6 +234,12 @@ class Session:
             MpoChain(width=max(1, int(chain_width)), hops=max(1, int(chain_hops)))
             if self.mpo_chain_enabled else None
         )
+        # Observability: the chain is fail-soft, so a caller cannot tell from the result
+        # whether it ran, widened, or silently fell back to cosine. Count all three so a
+        # readiness surface can report OBSERVED chain behaviour, not just configuration.
+        self._chain_expansions: int = 0
+        self._chain_slices_added: int = 0
+        self._chain_fallbacks: int = 0
 
         # -- run state --------------------------------------------------------
         self._harvest: list[HarvestCandidate] = []
@@ -321,17 +327,24 @@ class Session:
         """
         return None if self.pool_mode == "shared" else self.id
 
-    def _cold_retrieve(self, key: SliceKey, query_vec: np.ndarray, k: int) -> list[Slice]:
-        """Pager cold path honoring the session's pool mode (shared -> global search).
+    def _search_chained(self, query_vec: np.ndarray, k: int, *, scope: str | None,
+                        sources: set[str] | None = None) -> list[Slice]:
+        """Retrieve ``k`` slices: cosine selects the entry hits, the MPO chain widens them.
 
-        With ``mpo_chain`` enabled, cosine still selects the entry hits; the MPO chain then
-        widens the window with the slices most coupled to them — connected context. Fail-soft:
-        any chain error returns the plain cosine ``slices[:k]``.
+        This is the ONE retrieval primitive. Both the pager's cold path and the public
+        :meth:`recall` route through it, because a chain reachable from only one of them is a
+        silent correctness hole: a caller that retrieves directly would get isolated nearest
+        neighbours while believing it had connected context. Provenance (``sources``) is
+        applied to the candidate search, so a filtered recall can never be widened back into
+        slices the caller excluded.
+
+        Fail-soft — any chain error serves the plain cosine order — but never silent: every
+        expansion and every fallback is counted for :meth:`status_dict`.
         """
-        scope = self._scope()
         if self.chain is None:
-            return self.pool.search(query_vec, k, session=scope)
-        candidates = self.pool.search(query_vec, max(k, k * self._chain_fanout), session=scope)
+            return self.pool.search(query_vec, k, session=scope, sources=sources)
+        candidates = self.pool.search(query_vec, max(k, k * self._chain_fanout),
+                                      session=scope, sources=sources)
         if len(candidates) <= k:
             return candidates[:k]
         try:
@@ -344,10 +357,22 @@ class Session:
             order = self.chain.expand(seed, items, width=k)
             by_id = {sl.id: sl for sl in candidates}
             widened = [by_id[i] for i in order if i in by_id]
-            return (widened or candidates)[:k]
+            if not widened:
+                self._chain_fallbacks += 1
+                return candidates[:k]
+            result = widened[:k]
+            cosine_top = {sl.id for sl in candidates[:k]}
+            self._chain_expansions += 1
+            self._chain_slices_added += sum(1 for sl in result if sl.id not in cosine_top)
+            return result
         except Exception as exc:  # noqa: BLE001 - fail-soft: chain only ever augments
             logger.warning("MPO chain expand failed (%s); serving cosine order", exc)
+            self._chain_fallbacks += 1
             return candidates[:k]
+
+    def _cold_retrieve(self, key: SliceKey, query_vec: np.ndarray, k: int) -> list[Slice]:
+        """Pager cold path honoring the session's pool mode (shared -> global search)."""
+        return self._search_chained(query_vec, k, scope=self._scope())
 
     @staticmethod
     def _c_t(sl: Slice, warm: set[str]) -> tuple[float, float]:
@@ -387,14 +412,14 @@ class Session:
             logger.warning("recall encode failed (%s); returning no local hits", exc)
             return []
         try:
-            scoped = self.pool.search(qvec, k, session=self._scope(), sources=sources)
+            scoped = self._search_chained(qvec, k, scope=self._scope(), sources=sources)
             if scoped:
                 return scoped
             # Reopen case: a fresh Session over an existing pool dir has a new session id, so
             # the prior run's slices live under a different namespace. Fall back to a global
             # search so a disk-resident fact is still recoverable after a close + reopen.
             # (In shared mode the scoped search is already global, so this is a harmless re-run.)
-            return self.pool.search(qvec, k, session=None, sources=sources)
+            return self._search_chained(qvec, k, scope=None, sources=sources)
         except AetherContextError as exc:
             logger.warning("recall pool search failed (%s); returning no local hits", exc)
             return []
@@ -734,6 +759,15 @@ class Session:
             "model": getattr(self.local_llm, "name", str(self.config.model)),
             "extended": self.extended,
             "mpo_chain": self.mpo_chain_enabled,
+            # Observed chain behaviour, not configuration: a consumer can tell whether the
+            # chain actually ran, how much connected context it contributed, and how often it
+            # fell back to plain cosine.
+            "mpo_chain_width": self.chain.width if self.chain is not None else 0,
+            "mpo_chain_hops": self.chain.hops if self.chain is not None else 0,
+            "mpo_chain_fanout": self._chain_fanout,
+            "mpo_chain_expansions": self._chain_expansions,
+            "mpo_chain_slices_added": self._chain_slices_added,
+            "mpo_chain_fallbacks": self._chain_fallbacks,
         }
 
     # -- close + context manager ----------------------------------------------
