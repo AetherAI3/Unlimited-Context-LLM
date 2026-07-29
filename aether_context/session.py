@@ -155,6 +155,7 @@ class Session:
         pool_dir: "str | Path | None" = None,
         pool_index: str = "flat",
         pool_mode: str = "separate",
+        recall_scope_fallback: bool = False,   # widen an empty scoped recall to a global one
         pool_quantize: int = 0,   # TurboVec: 0=float32 (default), 8=recall-safe (~4x), 4=lossy/flagged
         context_window: int | None = None,
         output_tokens: int | None = None,
@@ -175,6 +176,10 @@ class Session:
         # slices. "shared" makes reach global (search/encode with session=None) so a named or
         # persistent pool can be read across sessions. The PoolConfig records the same mode.
         self.pool_mode: str = pool_mode
+        # Defaults to False so isolation is the resting state. When True, a recall whose own
+        # namespace is empty re-searches the whole pool dir — useful for a caller that cannot
+        # derive a stable session id, unsafe wherever one pool dir serves several principals.
+        self.recall_scope_fallback: bool = bool(recall_scope_fallback)
         # Extended-Thinking toggle (honest): in the mock it only widens the resident set and
         # surfaces in status; it is never a silent capability claim.
         self.extended: bool = False
@@ -413,12 +418,16 @@ class Session:
             return []
         try:
             scoped = self._search_chained(qvec, k, scope=self._scope(), sources=sources)
-            if scoped:
+            if scoped or not self.recall_scope_fallback:
+                # ``pool_mode="separate"`` is an isolation promise. Widening an empty scoped
+                # search to a global one silently breaks it: a session whose own namespace has
+                # nothing yet would read every other session's slices out of a shared pool dir,
+                # and those slices flow straight into the caller's prompt. An empty result is
+                # the correct answer for an empty namespace.
                 return scoped
-            # Reopen case: a fresh Session over an existing pool dir has a new session id, so
-            # the prior run's slices live under a different namespace. Fall back to a global
-            # search so a disk-resident fact is still recoverable after a close + reopen.
-            # (In shared mode the scoped search is already global, so this is a harmless re-run.)
+            # Opt-in reopen rescue: a caller that does NOT derive a stable session id can ask
+            # for a global re-search so a disk-resident fact survives close + reopen under a
+            # new namespace. Only safe when the pool dir holds a single principal's memory.
             return self._search_chained(qvec, k, scope=None, sources=sources)
         except AetherContextError as exc:
             logger.warning("recall pool search failed (%s); returning no local hits", exc)
