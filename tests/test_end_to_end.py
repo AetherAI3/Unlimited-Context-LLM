@@ -157,12 +157,17 @@ def test_pool_survives_reopen_and_fact_still_recoverable(tmp_pool_dir):
     """The encoded fact is disk-resident: closing and reopening the same pool dir restores
     it, and it is still recoverable (mmap persistence carries the load-bearing fact)."""
     s = _tiny_window_session(tmp_pool_dir)
+    sid = s.id
     s.remember(PLANTED_FACT, tags={"kind": "constraint"})
     s.run("a long build")
     s.close()  # flush to disk
 
-    # reopen a fresh session over the SAME pool dir
-    s2 = Session(model="mock", pool_gb=5, pool_dir=tmp_pool_dir)
+    # Reopen over the SAME pool dir AND the same namespace. Continuity comes from a stable
+    # session id, which is what a real deployment derives; this test used to reopen under a
+    # fresh random id and recover the fact only because an empty scoped recall silently
+    # widened to a global one — the same widening that let one principal read another's
+    # memory. Persistence is the property under test, not scope-widening.
+    s2 = Session(model="mock", pool_gb=5, pool_dir=tmp_pool_dir, session_id=sid)
     try:
         hits = s2.recall(RECOVERY_QUERY, k=5)
         joined = " ".join(h.text.lower() for h in hits)
