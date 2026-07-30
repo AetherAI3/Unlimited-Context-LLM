@@ -427,35 +427,77 @@ def _cmd_status(args: argparse.Namespace) -> int:
     """
     pool_dir = _resolve_dir(args.dir)
     cfg = PoolConfig.load(pool_dir)
+    from aether_context.context_pool import (
+        METADATA_FILENAME,
+        VECTORS_FILENAME,
+        check_heap_budget,
+        project_loaded_heap_bytes,
+    )
+
     slices, capacity = _pool_counts(cfg)
     reach = reach_tokens(cfg.pool_gb)
-    resident_mb = cfg.pool_gb * _INDEX_MB_PER_GB
+
+    # Observed disk, read from the filesystem. Cheap, and true.
+    pool_path = Path(cfg.dir)
+    def _size(name: str) -> int:
+        try:
+            return (pool_path / name).stat().st_size
+        except OSError:
+            return 0
+
+    vectors = max(
+        _size(VECTORS_FILENAME),
+        *(_size(f"vectors.q{bits}") for bits in (4, 8)),
+    )
+    sidecar = _size(METADATA_FILENAME)
+    gib = 1024**3
+
     print("aether-context status")
     print(f"  pool:        {cfg.pool_gb} GB  (reach ~= {reach / 1e9:.2f}B tokens)")
     print(f"  slices:      {slices} / {capacity}")
     print(f"  reach:       {reach:,} tokens")
     print("  hit rate:    N/A (no live session)")
-    print(f"  resident RAM ~= {resident_mb} MB (estimate)")
     print(f"  pool-mode:   {cfg.mode}")
     print(f"  index:       {cfg.index}")
+    # Observed and projected are printed apart, and labelled. They used to be one
+    # line reading "resident RAM ~= N MB (estimate)" derived from a hardcoded
+    # 29 MB/GB constant — configured, never measured, and wrong by ~85x.
+    print("  --- observed (from disk) ---")
+    print(f"  vectors:     {vectors / 1e6:.1f} MB")
+    print(f"  sidecar:     {sidecar / 1e6:.1f} MB")
+    print(f"  total disk:  {(vectors + sidecar) / 1e6:.1f} MB")
+    print("  --- projected (not measured) ---")
+    print(f"  heap if full: ~{project_loaded_heap_bytes(cfg.pool_gb, cfg.dim) / gib:.1f} GiB")
+    within, message = check_heap_budget(cfg.pool_gb, cfg.dim)
+    if not within:
+        print(f"  WARNING: {message}")
     return 0
 
 
 def _pool_counts(cfg: PoolConfig) -> tuple[int, int]:
     """``(slices_used, capacity)`` for the pool at ``cfg.dir`` (0/0 if none on disk yet).
 
-    Opens the pool read-only via :class:`Session`'s storage layer; on a fresh/absent pool
-    the count is 0. Closed immediately so no mmap handle lingers (Windows-safe).
+    Reads the sidecar rather than constructing a :class:`ContextPool`. Opening the
+    pool materialises every slice — the vectors are dequantized into the heap and
+    the text is loaded verbatim — so asking "how big is this pool?" used to cost
+    the entire pool: on the order of 75 s and 12 GiB for a full 5 GB configuration,
+    to print two integers. `pool.json` already carries `count` and `capacity`.
     """
-    from aether_context.context_pool import ContextPool, slice_cost_bytes
+    import json
 
-    pool = ContextPool(cfg)
+    from aether_context.context_pool import METADATA_FILENAME, slice_cost_bytes
+
+    sidecar = Path(cfg.dir) / METADATA_FILENAME
     try:
-        used = len(pool)
-        capacity = pool.ceiling_bytes // slice_cost_bytes(cfg.dim)
-        return used, int(capacity)
-    finally:
-        pool.close()
+        header = json.loads(sidecar.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return 0, 0  # absent or unreadable: report nothing rather than guessing
+
+    used = int(header.get("count", 0) or 0)
+    ceiling = header.get("ceiling_bytes")
+    if not isinstance(ceiling, int) or ceiling <= 0:
+        return used, int(header.get("capacity", 0) or 0)
+    return used, int(ceiling // max(1, slice_cost_bytes(int(header.get("dim", cfg.dim)))))
 
 
 # ---------------------------------------------------------------------------

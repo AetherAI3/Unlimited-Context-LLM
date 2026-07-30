@@ -77,6 +77,60 @@ _INITIAL_CAPACITY: int = 64
 #: 256 float32 = 1024 B of vector, leaving ~1.2 KB for text + meta + index bookkeeping.
 SLICE_PAYLOAD_BYTES: int = 1200
 
+#: MEASURED retained heap per slice at 512-token text, 256-dim (ATSv2
+#: docs/POOL_RESIDENCY.md). Linear from 2k to 128k slices with under 1% drift.
+#: This is not the admission charge — :data:`SLICE_PAYLOAD_BYTES` is a policy
+#: constant, this is an observation, and they disagree by roughly 1.8x because
+#: `_load` retains the float32 vector, the verbatim text and the meta.
+MEASURED_HEAP_BYTES_PER_SLICE: int = 3_922
+
+#: Refuse to open a pool whose projected retained heap exceeds this. A pool is
+#: fully resident once loaded, so a configuration that cannot fit is not a
+#: degraded mode — it is an OOM partway through a trading session.
+DEFAULT_HEAP_BUDGET_BYTES: int = 4 * 1024**3
+
+
+def project_loaded_heap_bytes(pool_gb: float, dim: int = 256) -> int:
+    """PROJECTED retained heap for a full pool of ``pool_gb``. Not a measurement.
+
+    Uses the admission charge to derive how many slices the ceiling admits, then
+    prices each at the measured per-slice heap cost. The two differ, which is the
+    whole point: the ceiling is denominated in budget bytes while RAM is consumed
+    at the observed rate, so a pool sized against the ceiling can be far larger
+    in memory than its nominal size suggests.
+    """
+    ceiling = int(pool_gb * 1024**3)
+    admits = max(0, ceiling // max(1, slice_cost_bytes(dim)))
+    return admits * MEASURED_HEAP_BYTES_PER_SLICE
+
+
+def check_heap_budget(
+    pool_gb: float,
+    dim: int = 256,
+    budget_bytes: int = DEFAULT_HEAP_BUDGET_BYTES,
+) -> tuple[bool, str]:
+    """``(within_budget, message)`` for a configured pool size.
+
+    Callers that can refuse should refuse; callers that cannot should warn
+    loudly. The failure this prevents is specific and was reachable from the
+    published guidance: a 5 GB pool projects past 8 GiB of retained heap, so the
+    documented "5 GB pool on an 8 GB machine" does not fit even once.
+    """
+    projected = project_loaded_heap_bytes(pool_gb, dim)
+    gib = 1024**3
+    if projected <= budget_bytes:
+        return True, (
+            f"pool_gb={pool_gb} projects ~{projected / gib:.1f} GiB retained heap "
+            f"(budget {budget_bytes / gib:.1f} GiB) — projected, not measured"
+        )
+    return False, (
+        f"pool_gb={pool_gb} projects ~{projected / gib:.1f} GiB retained heap, over the "
+        f"{budget_bytes / gib:.1f} GiB budget. The pool is FULLY RESIDENT once loaded, so this "
+        f"is an out-of-memory partway through a session rather than a slower pool. Reduce "
+        f"pool_gb, or raise the budget deliberately if the machine really has the headroom. "
+        f"(projected from {MEASURED_HEAP_BYTES_PER_SLICE} B/slice measured, not from config)"
+    )
+
 
 def slice_cost_bytes(dim: int) -> int:
     """Bytes the pool charges per resident slice: vector bytes + fixed payload overhead.
@@ -559,9 +613,117 @@ class ContextPool:
         self._mmap[:n] = packed
 
     # -- accounting ------------------------------------------------------------
-    def bytes_used(self) -> int:
-        """Total bytes the live slices occupy, by the same accounting the governor uses."""
+    #
+    # One number used to stand for four different quantities, and it was wrong
+    # about most of them. `bytes_used()` is a BUDGET: a flat per-slice charge the
+    # admission governor uses to decide what to evict. It is not disk, and it is
+    # not heap. Measured against a real pool it undercounts disk by ~45% (a
+    # 512-token slice occupies ~3,229 on-disk bytes against 2,224 charged) and
+    # understates retained heap by a similar margin.
+    #
+    # The metrics below are named for what they actually measure, and each says
+    # whether it was OBSERVED from the filesystem or PROJECTED from a constant.
+
+    def budget_bytes(self) -> int:
+        """The governor's charge for the live slices. A policy number, not a measurement.
+
+        Deliberately flat and quantization-independent, because eviction has to be
+        cheap and predictable. Do not read this as disk or as memory.
+        """
         return len(self._slices) * slice_cost_bytes(self._dim)
+
+    def bytes_used(self) -> int:
+        """Deprecated alias for :meth:`budget_bytes`.
+
+        Kept because the admission path and the witness both call it, and this
+        pass is a truthfulness fix rather than an eviction redesign. New callers
+        should use :meth:`budget_bytes` for policy or :meth:`disk_metrics` for
+        anything they intend to show a human.
+        """
+        return self.budget_bytes()
+
+    def vector_disk_bytes(self) -> int:
+        """OBSERVED size of the vectors file on disk, or 0 when it does not exist."""
+        try:
+            return self._vectors_file().stat().st_size
+        except OSError:
+            return 0
+
+    def sidecar_disk_bytes(self) -> int:
+        """OBSERVED size of pool.json — slice text, meta and row map, stored verbatim.
+
+        Typically the largest component: ~2.1x the vectors file at 512-token
+        slices. Nothing in the persistence path compresses it, despite the
+        published description calling it compressed text.
+        """
+        try:
+            return self._metadata_file().stat().st_size
+        except OSError:
+            return 0
+
+    def metadata_disk_bytes(self) -> int:
+        """OBSERVED size of everything in the pool directory that is neither the
+        vectors file nor the sidecar — temp files, index artifacts, leftovers."""
+        try:
+            entries = list(self._dir.iterdir())
+        except OSError:
+            return 0
+        skip = {self._vectors_file().name, self._metadata_file().name}
+        total = 0
+        for entry in entries:
+            if entry.name in skip:
+                continue
+            try:
+                if entry.is_file():
+                    total += entry.stat().st_size
+            except OSError:
+                continue
+        return total
+
+    def total_disk_bytes(self) -> int:
+        """OBSERVED total footprint of the pool directory."""
+        return self.vector_disk_bytes() + self.sidecar_disk_bytes() + self.metadata_disk_bytes()
+
+    def loaded_heap_bytes_observed(self) -> int:
+        """OBSERVED retained heap for the loaded slices, walked rather than assumed.
+
+        Sums the actual float32 vector buffers plus the encoded text and meta.
+        This is the number that decides whether a pool fits in RAM, and it is the
+        one the published ~29 MB/GB estimate was most wrong about — measurement
+        puts a realistic slice near 3.9 KB against roughly 64 B implied.
+
+        Returns 0 for an unloaded pool rather than projecting a figure.
+        """
+        total = 0
+        for sl in self._slices.values():
+            vector = getattr(sl, "vector", None)
+            total += int(getattr(vector, "nbytes", 0) or 0)
+            text = getattr(sl, "text", "") or ""
+            total += len(text.encode("utf-8", "ignore"))
+            meta = getattr(sl, "meta", None)
+            if isinstance(meta, dict):
+                for key, value in meta.items():
+                    total += len(str(key)) + len(str(value))
+        return total
+
+    def disk_metrics(self) -> dict[str, Any]:
+        """Every accounting number at once, each labelled observed or projected."""
+        return {
+            "vector_disk_bytes": self.vector_disk_bytes(),
+            "sidecar_disk_bytes": self.sidecar_disk_bytes(),
+            "metadata_disk_bytes": self.metadata_disk_bytes(),
+            "total_disk_bytes": self.total_disk_bytes(),
+            "loaded_heap_bytes_observed": self.loaded_heap_bytes_observed(),
+            "budget_bytes_projected": self.budget_bytes(),
+            "measurement": {
+                "vector_disk_bytes": "observed",
+                "sidecar_disk_bytes": "observed",
+                "metadata_disk_bytes": "observed",
+                "total_disk_bytes": "observed",
+                "loaded_heap_bytes_observed": "observed",
+                "budget_bytes_projected": "projected",
+            },
+        }
 
     def stats(self) -> dict[str, Any]:
         """A small dict snapshot: count, bytes, ceiling, dim, index kind, sessions."""
@@ -816,4 +978,8 @@ __all__ = [
     "VECTORS_FILENAME",
     "METADATA_FILENAME",
     "SLICE_PAYLOAD_BYTES",
+    "MEASURED_HEAP_BYTES_PER_SLICE",
+    "DEFAULT_HEAP_BUDGET_BYTES",
+    "project_loaded_heap_bytes",
+    "check_heap_budget",
 ]

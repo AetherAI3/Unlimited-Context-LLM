@@ -4,9 +4,24 @@
 """TurboVec — scalar quantization of unit retrieval vectors (the context pool's compression codec).
 
 The context pool stores L2-normalized 256-dim float32 vectors (1024 B/row). TurboVec quantizes each
-row to ``bits``-bit codes + a per-row float32 scale, so the footprint drops to ``dim*bits/8 + 4`` bytes
-— ~8x at 4-bit, ~4x at 8-bit. The same byte ceiling then holds that many more slices in the hot set,
-which is the coherence-at-scale win (more of the run stays resident, fewer cold reads).
+row to ``bits``-bit codes + a per-row float32 scale, so the ON-DISK footprint drops to
+``dim*bits/8`` bytes per row — measured at exactly 4.00x for the vectors file at 8-bit.
+
+WHAT THIS DOES NOT DO — corrected 2026-07-30 after measurement. An earlier version of this
+docstring claimed "the same byte ceiling then holds that many more slices in the hot set". That is
+false, in two independent ways:
+
+  * ``ContextPool._load`` dequantizes every row back to a float32 ``Slice.vector`` and retains it
+    in ``self._slices``. Measured retained heap is IDENTICAL between an fp32 pool and an 8-bit pool
+    (~3,960 B/slice at 512-token text). Quantization buys disk, not resident memory.
+  * the pool's admission budget, :func:`context_pool.slice_cost_bytes`, takes only ``dim``. It is
+    not quantization-aware, so a quantized pool is charged the same bytes per slice and admits the
+    same number of slices. Verified behaviourally: an fp32 and an 8-bit pool under one ceiling
+    evict at the same count.
+
+So quantization does not increase hot-set capacity and does not reduce cold reads. Whole-pool disk
+saving at 8-bit measured -23.8%, because the JSON sidecar (verbatim slice text) is ~2.1x the size
+of the vectors file and is not compressed. See ATSv2 docs/POOL_RESIDENCY.md for the measurements.
 
 Per-row SYMMETRIC quantization: ``code = round(v/scale) + half`` over ``scale = max|v| / half``, so the
 row's dynamic range maps onto the integer grid. Dequantization recovers ``(code-half)*scale`` and
