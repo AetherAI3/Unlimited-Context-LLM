@@ -330,3 +330,41 @@ def test_pinning_an_unseen_id_is_remembered() -> None:
     for tick in range(1, 40):
         w.decay(float(tick))
     assert w.score("later") == 0.5
+
+
+def test_pins_survive_closing_and_reopening_the_pool(tmp_path) -> None:
+    """A pin that does not outlive a restart is not a durable memory.
+
+    The witness is in-memory; the pool is on disk. Without rehydration a
+    session reopened against an existing pool starts with an empty witness, so
+    every previously pinned slice returns as ordinary content and fades on the
+    first long run -- the pins would hold only until the next restart, which is
+    exactly when durability is supposed to prove itself.
+    """
+    from aether_context import Session
+
+    pool_dir = str(tmp_path / "pool")
+
+    first = Session("mock", pool_gb=5, pool_dir=pool_dir, pool_mode="separate",
+                    session_id="agent-x", fallback_to_mock=True)
+    doctrine = first.pin("OPERATING CONTRACT: abstain when evidence is thin.")
+    noise = first.remember("unremarkable chatter about the weather")
+    assert first.witness.is_permanent(doctrine.id)
+    first.close()
+
+    reopened = Session("mock", pool_gb=5, pool_dir=pool_dir, pool_mode="separate",
+                       session_id="agent-x", fallback_to_mock=True)
+    try:
+        assert reopened.witness.is_permanent(doctrine.id), "pin lost across restart"
+        assert not reopened.witness.is_permanent(noise.id)
+
+        for tick in range(200):
+            reopened._fade()
+        assert reopened.witness.score(doctrine.id) > 0.0
+
+        evicted = reopened.witness.budget_evict(
+            ceiling_bytes=1, bytes_per_slice=1, now=999.0
+        )
+        assert doctrine.id not in evicted
+    finally:
+        reopened.close()

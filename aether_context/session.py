@@ -218,6 +218,7 @@ class Session:
         # window can draw on slices from any session; "separate" keeps the default
         # session-scoped cold path (key.session) so namespaces never bleed.
         self.witness: Witness = Witness()
+        self._rehydrate_pins()
         self.pager: Pager = Pager(
             self.pool,
             self.encoder,
@@ -616,6 +617,46 @@ class Session:
                 "hit_rate": self.pager.hit_rate(),
             }
         )
+
+    def _rehydrate_pins(self) -> None:
+        """Re-pin slices the pool already holds as permanent. Fail-soft.
+
+        The witness is in-memory; the pool is on disk. Without this a session
+        reopened against an existing pool starts with an empty witness, so
+        every previously pinned slice comes back as ordinary content and fades
+        on the first long run -- the pins would only hold until the next
+        restart, which is precisely when a durable memory is supposed to prove
+        itself.
+
+        The tag is the record. Permanence is re-derived from the slices
+        themselves rather than tracked in a second file that could disagree
+        with them.
+        """
+        try:
+            stored = getattr(self.pool, "_slices", None)
+            if not stored:
+                return
+            pinned = 0
+            for sid, sl in stored.items():
+                meta = getattr(sl, "meta", None) or {}
+                if meta.get("pinned") is not True:
+                    continue
+                if self.pool_mode == "separate":
+                    # Never adopt another session's pins in a scoped pool.
+                    if getattr(sl, "session", None) not in (None, self.id):
+                        continue
+                # Anchored at 0.0 deliberately: a pinned slice never decays,
+                # so its anchor time carries no meaning, and the session
+                # clock does not exist yet at rehydration time.
+                self.witness.touch(
+                    sid, salience=getattr(sl, "score", _REMEMBER_SALIENCE), now=0.0
+                )
+                self.witness.pin(sid)
+                pinned += 1
+            if pinned:
+                logger.debug("rehydrated %d pinned slice(s) from the pool", pinned)
+        except Exception as exc:  # noqa: BLE001 - never block session open
+            logger.warning("pin rehydration skipped (%s)", exc)
 
     def _fade(self) -> None:
         """Advance the witness clock and fade cold slices (page-replacement). Fail-soft."""
