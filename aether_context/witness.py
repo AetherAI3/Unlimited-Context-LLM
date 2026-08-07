@@ -153,6 +153,11 @@ class Witness:
         self._pin_periods: float = max(0.0, float(pin_periods))
         self._pin_bonus: float = max(0.0, float(pin_bonus))
         self._entries: dict[str, _Entry] = {}
+        # Permanently retained ids. Distinct from the temporal lock-in above,
+        # which only holds a *recently touched* slice back against comparable
+        # churn and expires. A permanent slice never fades and is never
+        # evicted, at any pressure, until it is explicitly released.
+        self._permanent: set[str] = set()
 
     # -- harden / re-harden ----------------------------------------------------
     def touch(self, slice_id: str, salience: float, now: float = 0.0) -> float:
@@ -173,6 +178,35 @@ class Witness:
         self._entries[slice_id] = _Entry(base=s, last_touch=float(now))
         return s
 
+    # -- permanence ------------------------------------------------------------
+    def pin(self, slice_id: str) -> None:
+        """Retain ``slice_id`` permanently: never faded, never evicted.
+
+        For the load-bearing content an agent must not lose no matter how long
+        it runs -- its operating doctrine, its skills, its grounding. Those are
+        resident because of *what they are*, not because they happened to
+        embed near the current query, and salience ranking cannot express that:
+        a slice that is never queried decays exactly like one that is
+        irrelevant.
+
+        Pinning an id the witness has not seen is allowed and remembered, so
+        callers may pin before or after the first touch without ordering care.
+        """
+        self._permanent.add(str(slice_id))
+
+    def unpin(self, slice_id: str) -> None:
+        """Release ``slice_id`` back to ordinary fade and eviction."""
+        self._permanent.discard(str(slice_id))
+
+    def is_permanent(self, slice_id: str) -> bool:
+        """True when ``slice_id`` is permanently retained."""
+        return str(slice_id) in self._permanent
+
+    @property
+    def permanent_ids(self) -> frozenset[str]:
+        """The permanently retained ids (a snapshot)."""
+        return frozenset(self._permanent)
+
     # -- fade ------------------------------------------------------------------
     def decay(self, now: float) -> None:
         """**Fade** every slice: collapse each live (decayed) score into its base at ``now``.
@@ -182,6 +216,11 @@ class Witness:
         never negative. Calling repeatedly with non-decreasing ``now`` keeps fading.
         """
         for slice_id, entry in self._entries.items():
+            if slice_id in self._permanent:
+                # Re-anchor without fading: a permanent slice is as fresh at
+                # hour ten as at minute one.
+                self._entries[slice_id] = _Entry(base=entry.base, last_touch=float(now))
+                continue
             faded = self._decayed_score(entry, now)
             self._entries[slice_id] = _Entry(base=faded, last_touch=float(now))
 
@@ -252,10 +291,18 @@ class Witness:
         Ties break on insertion order for determinism. With ``now=None`` (or the lock-in
         disabled) this is simply ascending salience.
         """
-        scored = [(sid, self._eviction_score(e, now)) for sid, e in self._entries.items()]
+        scored = [
+            (sid, self._eviction_score(e, now))
+            for sid, e in self._entries.items()
+            if sid not in self._permanent
+        ]
         # stable ascending sort; ties keep dict insertion order (most-evictable first)
         scored.sort(key=lambda pair: pair[1])
-        return [sid for sid, _ in scored]
+        # Permanent ids rank last unconditionally: they are not candidates at
+        # any score, so no amount of pressure can order them forward.
+        return [sid for sid, _ in scored] + [
+            sid for sid in self._entries if sid in self._permanent
+        ]
 
     # -- budget eviction -------------------------------------------------------
     def budget_evict(
@@ -280,6 +327,14 @@ class Witness:
             return []
         # drop the most-evictable prefix; keep the `max_slices` most-retained survivors
         evicted = order[: len(order) - max_slices]
+        # A permanent slice is not evictable at any pressure. Without this the
+        # prefix would reach the permanent tail once the ceiling fell below the
+        # permanent count -- exactly the moment the guarantee matters most, and
+        # the pool would silently drop the agent's doctrine to make room for
+        # whatever it happened to be reading.
+        evicted = [sid for sid in evicted if sid not in self._permanent]
+        if not evicted:
+            return []
         for sid in evicted:
             del self._entries[sid]
         _log.debug(

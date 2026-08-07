@@ -245,3 +245,88 @@ def test_eviction_order_without_now_is_ascending_score():
     w.touch("lo", salience=0.1, now=0.0)
     w.touch("mid", salience=0.5, now=0.0)
     assert w.eviction_order() == ["lo", "mid", "hi"]
+
+
+# -- permanence ---------------------------------------------------------------
+
+
+def test_a_pinned_slice_never_fades() -> None:
+    """Salience cannot express 'keep this because of what it is'.
+
+    A slice nothing queries decays exactly like one nothing needs, so an
+    agent's doctrine fades out of reach precisely because it is background.
+    """
+    w = Witness(decay_rate=0.5)
+    w.touch("doctrine", salience=0.9, now=0.0)
+    w.touch("chatter", salience=0.9, now=0.0)
+    w.pin("doctrine")
+
+    for tick in range(1, 60):
+        w.decay(float(tick))
+
+    assert w.score("doctrine") == 0.9, "a pinned base must be preserved exactly"
+    assert w.score("chatter") < 0.01
+    assert w.is_permanent("doctrine")
+    assert not w.is_permanent("chatter")
+
+
+def test_a_pinned_slice_is_never_evictable() -> None:
+    w = Witness()
+    w.touch("doctrine", salience=0.01, now=0.0)   # deliberately the weakest
+    for i in range(10):
+        w.touch(f"loud-{i}", salience=1.0, now=0.0)
+    w.pin("doctrine")
+
+    order = w.eviction_order()
+    assert order[-1] == "doctrine", "the weakest slice must still rank last once pinned"
+    assert order.index("doctrine") == len(order) - 1
+
+
+def test_budget_eviction_cannot_reach_a_pinned_slice_at_any_pressure() -> None:
+    """The guarantee has to hold at the moment it matters most.
+
+    Ranking pinned slices last is not enough: once the ceiling falls below the
+    pinned count the evictable prefix reaches them anyway, and the pool drops
+    the agent's doctrine to make room for whatever it was reading.
+    """
+    w = Witness()
+    for name in ("doctrine", "skills", "grounding"):
+        w.touch(name, salience=0.05, now=0.0)
+        w.pin(name)
+    for i in range(20):
+        w.touch(f"spill-{i}", salience=0.99, now=0.0)
+
+    # A ceiling of one slice, with three pinned. Nothing pinned may go.
+    evicted = w.budget_evict(ceiling_bytes=1, bytes_per_slice=1, now=1.0)
+
+    assert "doctrine" not in evicted
+    assert "skills" not in evicted
+    assert "grounding" not in evicted
+    for name in ("doctrine", "skills", "grounding"):
+        assert w.score(name) > 0.0, f"{name} was dropped from the witness"
+
+
+def test_unpin_returns_a_slice_to_ordinary_decay() -> None:
+    w = Witness(decay_rate=0.5)
+    w.touch("temp", salience=0.9, now=0.0)
+    w.pin("temp")
+    for tick in range(1, 20):
+        w.decay(float(tick))
+    assert w.score("temp") == 0.9
+
+    w.unpin("temp")
+    assert not w.is_permanent("temp")
+    for tick in range(20, 80):
+        w.decay(float(tick))
+    assert w.score("temp") < 0.01
+
+
+def test_pinning_an_unseen_id_is_remembered() -> None:
+    """Callers should not have to order pin and touch."""
+    w = Witness()
+    w.pin("later")
+    assert w.is_permanent("later")
+    w.touch("later", salience=0.5, now=0.0)
+    for tick in range(1, 40):
+        w.decay(float(tick))
+    assert w.score("later") == 0.5
