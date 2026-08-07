@@ -353,6 +353,18 @@ class Session:
         return (float(sl.meta.get("_ct", 0.0)), float(sl.tokens) / (2.0 if sl.id in warm else 1.0))
 
     # -- plant / recover a fact -----------------------------------------------
+    def pin(self, text: str, *, tags: dict[str, Any] | None = None,
+            source: str = MEMORY_SOURCE_USER) -> Slice | None:
+        """Encode ``text`` as a **permanently retained** slice.
+
+        Equivalent to :meth:`remember` with ``pinned=True``: the slice never
+        fades and is never evicted, at any pool pressure, for the life of the
+        session. Use it for what the session must not lose -- an operating
+        contract, a hard constraint, an identity -- not for merely important
+        content, which ordinary salience already handles.
+        """
+        return self.remember(text, tags={**(tags or {}), "pinned": True}, source=source)
+
     def remember(self, text: str, *, tags: dict[str, Any] | None = None,
                  source: str = MEMORY_SOURCE_USER) -> Slice | None:
         """Encode ``text`` as a high-salience slice into the pool (a load-bearing fact).
@@ -433,6 +445,12 @@ class Session:
             return None
         self._clock += 1.0
         self.witness.touch(sid, salience=score, now=self._clock)
+        # A caller marks load-bearing content with ``pinned``: an agent's
+        # doctrine, its skills, its grounding. Salience cannot express that --
+        # a slice nothing queries decays exactly like one nothing needs -- so
+        # the tag is honoured here as permanence rather than as a hint.
+        if meta.get("pinned") is True:
+            self.witness.pin(sid)
         # Every encoded durable artifact (planted fact or spill) is a run artifact:
         # text + its 256-dim retrieval vector + tags, retained locally.
         self._harvest.append(
