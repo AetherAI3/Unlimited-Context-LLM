@@ -19,6 +19,7 @@ Style mirrors the package's own ``test_slice_loader.py``.
 """
 from __future__ import annotations
 
+import threading
 import time
 from pathlib import Path
 
@@ -206,16 +207,29 @@ def test_run_uses_background_prefetch_when_streaming(tmp_pool_dir):
     """When the model streams (>1 chunk), the session prefetches on a side thread *while*
     the model generates — the prefetch overlaps generation rather than serializing after it.
 
-    We prove overlap with a slow-generating mock and a slow prefetch: wall-clock for the run
-    is close to max(generation, prefetch), not their sum."""
+    Overlap is asserted structurally, not by wall-clock: a prefetch must run off the main
+    thread, and must *start* before generation emits its last chunk. A serialised design
+    fails both regardless of how fast or slow the machine is. (The previous
+    ``elapsed < 0.30`` bound was flaky on shared CI runners — and since a serial run costs
+    generation + 5 prefetches ≈ 200ms, a 300ms bound could not actually tell the two
+    designs apart.)"""
+
+    gen_ticks: list[float] = []
+    prefetches: list[tuple[str, float]] = []
 
     class SlowMock:
         name = "slow-mock"
-        context_window = 4096
+        # small window on purpose: the background prefetch only launches once `pending`
+        # crosses int(window * TRIGGER_FRACTION) * 4 chars. At the old 4096 that trigger was
+        # 12288 chars while this mock emits ~285 in total, so the branch never ran and the
+        # test passed without ever exercising the thing it claims to prove. 16 -> 48 chars,
+        # which each ~57-char chunk clears.
+        context_window = 16
 
         def generate(self, prompt, *, system=None, stop=None, max_tokens=None):
             for _ in range(5):
-                time.sleep(0.02)  # 5 * 20ms = 100ms of "generation"
+                time.sleep(0.02)  # 5 * 20ms of "generation" — room for a prefetch to start
+                gen_ticks.append(time.perf_counter())
                 yield "slice token plan build module function class test verify "
 
         def count_tokens(self, text):
@@ -223,22 +237,30 @@ def test_run_uses_background_prefetch_when_streaming(tmp_pool_dir):
 
     s = Session(model=SlowMock(), pool_gb=5, pool_dir=tmp_pool_dir)
 
-    # make a prefetch noticeably slow so a *serial* design would clearly add its cost
+    # record which thread each prefetch lands on, and when it starts
     original = s.pager.prefetch_from
 
     def _slow_prefetch(*a, **k):
+        prefetches.append((threading.current_thread().name, time.perf_counter()))
         time.sleep(0.02)
         return original(*a, **k)
 
     s.pager.prefetch_from = _slow_prefetch  # type: ignore[method-assign]
     try:
-        t0 = time.perf_counter()
         result = s.run("overlap test")
-        elapsed = time.perf_counter() - t0
         assert result.text
-        # generation alone is ~100ms; a fully-serial prefetch-after-each-chunk would add a
-        # lot more. Overlap keeps us well under generation + (5 * prefetch) = ~200ms.
-        assert elapsed < 0.30
+        assert len(gen_ticks) == 5, "the mock should have streamed five chunks"
+        assert prefetches, "expected at least one prefetch during the run"
+
+        # 1. backgrounded — Session._launch_prefetch names its threads "prefetch-<id>".
+        #    The final synchronous _page_working_set call runs on MainThread; ignore it.
+        backgrounded = [p for p in prefetches if p[0].startswith("prefetch-")]
+        assert backgrounded, f"no prefetch ran on a background thread: {prefetches}"
+
+        # 2. genuinely overlapping — it started before generation had finished.
+        assert backgrounded[0][1] < gen_ticks[-1], (
+            "prefetch started only after the last chunk — serialised, not overlapped"
+        )
     finally:
         s.close()
 
