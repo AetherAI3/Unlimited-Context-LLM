@@ -6,7 +6,15 @@ All notable changes to `aether-context` are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-08-13
+
 ### Added
+- **Permanently retained slices.** `Session.pin(text, tags=...)` encodes a slice the witness
+  never fades and the byte governor never evicts, at any pool pressure (equivalent to
+  `remember(..., pinned=True)`). Permanent slices are **re-pinned from the pool when a session
+  opens**: permanence is re-derived from the slices' own tags, so a pinned fact survives a
+  restart instead of coming back as ordinary content and fading on the first long run. Use it
+  for the handful of load-bearing constraints a long-running agent must never lose.
 - **MPO context chain (on by default).** Links the session's slices into one connected
   structure and assists retrieval: when cosine pulls an entry slice, the MPO (Matrix Product
   Operator) chain pulls in the slices most coupled to it — widening the working set with the
