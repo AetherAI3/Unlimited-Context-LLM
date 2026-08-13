@@ -1,11 +1,30 @@
 name: publish
 
 # Publish to PyPI via OIDC Trusted Publishing (no API token stored in the repo).
-# Triggered by pushing a version tag, e.g. `git push origin v0.1.0`.
+#
+# DORMANT — run this manually, on purpose, and only once a PyPI trusted publisher
+# exists for this repository. There is currently no `aether-context` project on
+# PyPI and no publisher configured, so this job cannot succeed: it fails at the
+# OIDC exchange with `invalid-publisher`.
+#
+# It used to run on `push: tags: v*`, which meant every release tag produced a
+# red X on an otherwise green repo while nothing was ever published. Tagging and
+# publishing are now separate decisions, so cutting a release no longer pretends
+# to ship a package.
+#
+# To enable publishing later:
+#   1. On PyPI add a *pending* publisher (the project does not exist yet) with
+#      owner `AetherAI3`, repository `Unlimited-Context-LLM`, workflow
+#      `publish.yml`, environment `pypi`. All four are matched literally — OIDC
+#      does not follow the DBarr3 -> AetherAI3 transfer redirect.
+#   2. Run this workflow from the Actions tab against the release tag.
+#   3. Once it succeeds, restoring the `push: tags: v*` trigger is safe.
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Tag to build and publish, e.g. v0.2.0"
+        required: true
 
 permissions:
   contents: read
@@ -20,6 +39,9 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Build the tag that was asked for, not the default branch.
+          ref: ${{ inputs.ref }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"

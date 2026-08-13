@@ -42,12 +42,22 @@ pushing the very first tag, or the publish job fails.
 
 ## Cutting a release
 
-1. **Bump the version** in [`pyproject.toml`](pyproject.toml):
+1. **Bump the version in BOTH places it lives.** They are separate strings and nothing keeps
+   them in sync:
 
    ```toml
+   # pyproject.toml
    [project]
    version = "X.Y.Z"
    ```
+
+   ```python
+   # aether_context/__init__.py
+   __version__ = "X.Y.Z"
+   ```
+
+   `cli.py` imports `__version__`, so the second one is what `aether-context --version`
+   prints. Bumping only `pyproject.toml` ships a CLI that reports the previous version.
 
 2. **Update [`CHANGELOG.md`](CHANGELOG.md):** move items out of `## [Unreleased]` into a new
    `## [X.Y.Z] — YYYY-MM-DD` section. The format follows
@@ -61,31 +71,46 @@ pushing the very first tag, or the publish job fails.
    git commit -m "release: vX.Y.Z"
    ```
 
-4. **Tag and push.** The tag (prefixed with `v`) is what triggers the publish workflow:
+4. **Tag, push, and cut the GitHub Release:**
 
    ```bash
    git tag -a vX.Y.Z -m "aether-context vX.Y.Z"
    git push origin vX.Y.Z
+   gh release create vX.Y.Z --title "vX.Y.Z — <one concrete capability>" --notes-file notes.md
    ```
 
-   Pushing the tag fires [`.github/workflows/publish.yml`](.github/workflows/publish.yml), which:
-   `actions/checkout@v4` → `actions/setup-python@v5` (3.12) → `pip install build` →
-   `python -m build` (sdist + wheel) → `pypa/gh-action-pypi-publish@release/v1` (OIDC, no token)
-   → upload to PyPI.
+   The tag **no longer triggers a publish**. `publish.yml` is dormant
+   (`workflow_dispatch` only) because there is no `aether-context` project on PyPI and no
+   trusted publisher configured — every tag used to produce a red X while nothing shipped.
+   Tagging and publishing are separate decisions now.
 
-5. **Verify.** Watch the **publish** run in the Actions tab, then confirm the new version at
-   <https://pypi.org/project/aether-context/> and:
+   Until PyPI is set up, the supported install is straight from GitHub:
 
    ```bash
-   pip install --upgrade aether-context==X.Y.Z
+   pip install git+https://github.com/AetherAI3/Unlimited-Context-LLM.git@vX.Y.Z
    ```
+
+   Say that in the release notes rather than `pip install aether-context`, which does not
+   work yet.
+
+5. **Verify.** Confirm the release renders correctly, then check the tag installs cleanly from
+   a throwaway environment:
+
+   ```bash
+   pip install git+https://github.com/AetherAI3/Unlimited-Context-LLM.git@vX.Y.Z
+   aether-context --version   # must print X.Y.Z, not the previous version
+   ```
+
+   Once PyPI is configured, additionally dispatch **publish** from the Actions tab against the
+   tag, then confirm at <https://pypi.org/project/aether-context/>.
 
 ---
 
 ## Notes & troubleshooting
 
-- **Tag format matters.** The workflow triggers on `v*` tags only. A bare `X.Y.Z` tag (no `v`)
-  will not publish.
+- **The tag no longer publishes anything.** `publish.yml` is `workflow_dispatch` only. It used
+  to fire on `v*` tags, but with no trusted publisher configured every tag just produced a red
+  X. Restore the `push: tags: v*` trigger once a manual dispatch has actually succeeded.
 - **Re-tagging.** PyPI files are immutable — you cannot re-upload the same version. If a release
   is broken, bump to a new patch version and tag again.
 - **Version mismatch.** The published version comes from `pyproject.toml`, not the tag string.
