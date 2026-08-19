@@ -27,11 +27,11 @@ classifiers = [
 dependencies = ["numpy>=1.24,<3.0"]       # CORE = numpy only. Works offline with MockLLM.
 
 [project.urls]
-Homepage = "https://github.com/DBarr3/Unlimited-Context"
-Repository = "https://github.com/DBarr3/Unlimited-Context.git"
-Documentation = "https://github.com/DBarr3/Unlimited-Context#readme"
-Issues = "https://github.com/DBarr3/Unlimited-Context/issues"
-Changelog = "https://github.com/DBarr3/Unlimited-Context/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/AetherAI3/Unlimited-Context-LLM"
+Repository = "https://github.com/AetherAI3/Unlimited-Context-LLM.git"
+Documentation = "https://github.com/AetherAI3/Unlimited-Context-LLM#readme"
+Issues = "https://github.com/AetherAI3/Unlimited-Context-LLM/issues"
+Changelog = "https://github.com/AetherAI3/Unlimited-Context-LLM/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 ollama   = []                              # primary path uses stdlib urllib — no extra dep needed

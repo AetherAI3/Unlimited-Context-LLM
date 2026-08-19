@@ -1,6 +1,6 @@
 # Aether Coding Agent — 1-command install (Windows, PowerShell).
 #
-#   irm https://raw.githubusercontent.com/DBarr3/Unlimited-Context/main/aether_agent/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/AetherAI3/Unlimited-Context-LLM/main/aether_agent/install.ps1 | iex
 #
 # Installs the engine + agent (pip), checks Ollama, and pulls the default model.
 $ErrorActionPreference = "Stop"
@@ -13,7 +13,10 @@ if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
 }
 
 Write-Host "Installing aether-context (Unlimited Context engine + Aether agent)..."
-python -m pip install --upgrade aether-context
+# `aether-context` is not on PyPI yet (see RELEASING.md); install from the
+# canonical repository. Switch back to `aether-context` once the first PyPI
+# release is published.
+python -m pip install --upgrade "git+https://github.com/AetherAI3/Unlimited-Context-LLM.git"
 
 if (-not (Get-Command ollama -ErrorAction SilentlyContinue)) {
   Write-Host "Install Ollama from https://ollama.com/download, then re-run this."
