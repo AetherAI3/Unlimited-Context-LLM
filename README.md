@@ -11,7 +11,7 @@
 [![Built by Aether](https://img.shields.io/badge/Built_by-Aether-7c3aed?style=flat-square)](https://aethersystems.net)
 [![Local-first](https://img.shields.io/badge/Local--first-100%25_offline-0ea5e9?style=flat-square)](#what-you-get)
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-22c55e?style=flat-square)](CONTRIBUTING.md)
-[![Stars](https://img.shields.io/github/stars/DBarr3/Unlimited-Context-LLM?style=flat-square&logo=github&color=eab308)](https://github.com/DBarr3/Unlimited-Context-LLM/stargazers)
+[![Stars](https://img.shields.io/github/stars/AetherAI3/Unlimited-Context-LLM?style=flat-square&logo=github&color=eab308)](https://github.com/AetherAI3/Unlimited-Context-LLM/stargazers)
 
 **An open project from [Aether](https://aethersystems.net)** · Apache-2.0 · [Install](#quickstart)
 
@@ -268,7 +268,7 @@ aether-context run "..." --no-mpo-chain                      # disable for one r
 The same install ships a second command — **`aether`** — an open-source agentic **coding terminal**
 running on the Unlimited Context engine. It's **local-first**: turns run on your local **[Ollama](https://ollama.com)**
 by default (no account, no network); sign in and they switch to the **Aether cloud API**. It's the
-Python-native twin of [`aether-code`](https://github.com/DBarr3/aether-agent) (the TypeScript terminal)
+Python-native twin of [`aether-code`](https://github.com/AetherAI3/aether-agent) (the TypeScript terminal)
 — same commands, same backend, same tools.
 
 | Command | What it does |
@@ -293,7 +293,7 @@ Python-native twin of [`aether-code`](https://github.com/DBarr3/aether-agent) (t
 
 ```bash
 # Install straight from GitHub — works today, always the latest:
-pip install git+https://github.com/DBarr3/Unlimited-Context-LLM.git
+pip install git+https://github.com/AetherAI3/Unlimited-Context-LLM.git
 
 # From PyPI, once published — the package name is "aether-context"
 # (note: `pip install unlimited-context` is NOT the package name):
@@ -324,7 +324,7 @@ If Unlimited Context helps your work, please cite it. Built and maintained by **
   author       = {Barrante, Brandon},
   organization = {Aether AI},
   year         = {2026},
-  url          = {https://github.com/DBarr3/Unlimited-Context-LLM},
+  url          = {https://github.com/AetherAI3/Unlimited-Context-LLM},
   license      = {Apache-2.0}
 }
 ```
