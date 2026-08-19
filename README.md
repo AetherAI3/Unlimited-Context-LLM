@@ -268,8 +268,8 @@ aether-context run "..." --no-mpo-chain                      # disable for one r
 The same install ships a second command — **`aether`** — an open-source agentic **coding terminal**
 running on the Unlimited Context engine. It's **local-first**: turns run on your local **[Ollama](https://ollama.com)**
 by default (no account, no network); sign in and they switch to the **Aether cloud API**. It's the
-Python-native twin of [`aether-code`](https://github.com/AetherAI3/aether-agent) (the TypeScript terminal)
-— same commands, same backend, same tools.
+Python-native twin of [Aether Agent](https://github.com/AetherAI3/aether-agent) — the TypeScript terminal,
+published on npm as [`aether-agents`](https://www.npmjs.com/package/aether-agents) — same commands, same backend, same tools.
 
 | Command | What it does |
 |---|---|
