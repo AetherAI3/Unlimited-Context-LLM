@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aether-context"
-version = "0.2.0"
+dynamic = ["version"]
 description = "Unlimited Context — virtual memory for an LLM's attention. Local-first, numpy-only core."
 readme = "README.md"
 requires-python = ">=3.10,<3.15"
@@ -43,11 +43,17 @@ dev      = ["pytest>=8", "pytest-cov", "ruff>=0.5", "mypy>=1.10"]
 
 [project.scripts]
 aether-context = "aether_context.cli:main"
-aether = "aether_agent.cli:main"
-aether-smoke = "aether_agent.smoke:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "aether_context.__version__" }
 
 [tool.setuptools]
-packages = ["aether_context", "aether_agent"]
+# Only `aether_context` is distributed. `aether_agent/` also lives in this repo, but the
+# `aether-agent` distribution on PyPI already owns that import path and the `aether` console
+# script; shipping a second copy here would silently overwrite the other package's files on
+# any machine that installed both. The agent stays in-repo (and importable in the test suite,
+# which runs `python -m pytest` from the repo root) but out of the wheel.
+packages = ["aether_context"]
 
 [tool.setuptools.package-data]
 aether_context = ["py.typed"]

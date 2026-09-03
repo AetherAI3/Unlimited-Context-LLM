@@ -1,0 +1,40 @@
+{
+  "name": "aether-context",
+  "version": "0.3.0",
+  "description": "Unlimited Context — virtual memory for an LLM's attention. Local-first, numpy-only core. npm launcher for the aether-context Python engine.",
+  "bin": {
+    "aether-context": "bin/aether-context.js"
+  },
+  "files": [
+    "bin/aether-context.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "check": "node --check bin/aether-context.js"
+  },
+  "keywords": [
+    "llm",
+    "context",
+    "retrieval",
+    "ollama",
+    "local",
+    "rag",
+    "agents",
+    "unlimited-context"
+  ],
+  "author": "Aether AI",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/AetherAI3/Unlimited-Context-LLM#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AetherAI3/Unlimited-Context-LLM.git",
+    "directory": "packages/npm-cli"
+  },
+  "bugs": {
+    "url": "https://github.com/AetherAI3/Unlimited-Context-LLM/issues"
+  }
+}

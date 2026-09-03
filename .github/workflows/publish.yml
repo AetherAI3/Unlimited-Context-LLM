@@ -1,30 +1,30 @@
-name: publish
+name: publish (pypi)
 
-# Publish to PyPI via OIDC Trusted Publishing (no API token stored in the repo).
+# Publish `aether-context` to PyPI via OIDC Trusted Publishing (no API token in the repo).
 #
-# DORMANT — run this manually, on purpose, and only once a PyPI trusted publisher
-# exists for this repository. There is currently no `aether-context` project on
-# PyPI and no publisher configured, so this job cannot succeed: it fails at the
-# OIDC exchange with `invalid-publisher`.
+# Manual on purpose. Tagging and publishing are separate decisions: a release tag that fails to
+# publish used to leave a red X on an otherwise green repo while nothing shipped.
 #
-# It used to run on `push: tags: v*`, which meant every release tag produced a
-# red X on an otherwise green repo while nothing was ever published. Tagging and
-# publishing are now separate decisions, so cutting a release no longer pretends
-# to ship a package.
+# One-time setup, done by a maintainer on PyPI (https://pypi.org/manage/account/publishing/):
+#   Add a *pending* publisher (the project does not exist there yet) with
+#     owner        AetherAI3
+#     repository   Unlimited-Context-LLM
+#     workflow     publish.yml
+#     environment  pypi-production
+#   All four are matched literally. OIDC does not follow the DBarr3 -> AetherAI3 transfer
+#   redirect, and the environment below must match the registered one exactly — the same
+#   `pypi-production` the sibling `aether-agent` and `agent-browser` repos already use.
 #
-# To enable publishing later:
-#   1. On PyPI add a *pending* publisher (the project does not exist yet) with
-#      owner `AetherAI3`, repository `Unlimited-Context-LLM`, workflow
-#      `publish.yml`, environment `pypi`. All four are matched literally — OIDC
-#      does not follow the DBarr3 -> AetherAI3 transfer redirect.
-#   2. Run this workflow from the Actions tab against the release tag.
-#   3. Once it succeeds, restoring the `push: tags: v*` trigger is safe.
+# Then create the `pypi-production` environment in this repo's settings and run this workflow
+# from the Actions tab against the release tag. Publish PyPI BEFORE npm: the npm launcher pins
+# `aether-context==<its own version>` and its first run fails until that version exists here.
 on:
   workflow_dispatch:
     inputs:
       ref:
-        description: "Tag to build and publish, e.g. v0.2.0"
+        description: "Tag (or branch) to build and publish, e.g. v0.3.0"
         required: true
+        default: main
 
 permissions:
   contents: read
@@ -33,21 +33,47 @@ jobs:
   publish:
     name: build + publish to PyPI
     runs-on: ubuntu-latest
-    environment: pypi
+    environment: pypi-production
     permissions:
       id-token: write # OIDC token for Trusted Publishing
       contents: read
     steps:
       - uses: actions/checkout@v4
         with:
-          # Build the tag that was asked for, not the default branch.
+          # Build the ref that was asked for, not the default branch.
           ref: ${{ inputs.ref }}
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
       - name: Install build backend
-        run: python -m pip install build
+        run: python -m pip install build twine
+
       - name: Build sdist + wheel
         run: python -m build
+
+      # The collision this guard exists for: PyPI's `aether-agent` distribution already owns the
+      # `aether_agent` import path and the `aether` console script. `aether_agent/` still lives
+      # in this repo, so a packaging change that put it back into `packages` would ship a second
+      # copy that silently overwrites the other package's files wherever both are installed.
+      - name: Assert the wheel ships only aether_context
+        run: |
+          python - <<'PY'
+          import glob
+          import sys
+          import zipfile
+
+          wheel = glob.glob("dist/*.whl")[0]
+          names = zipfile.ZipFile(wheel).namelist()
+          intruders = sorted(n for n in names if n.startswith("aether_agent"))
+          if intruders:
+              sys.exit(f"{wheel} must not contain aether_agent files: {intruders[:5]}")
+          print(f"{wheel}: clean ({len(names)} files, aether_context only)")
+          PY
+
+      - name: Check distribution metadata
+        run: python -m twine check dist/*
+
       - name: Publish to PyPI (OIDC Trusted Publishing)
         uses: pypa/gh-action-pypi-publish@release/v1

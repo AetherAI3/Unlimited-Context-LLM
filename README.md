@@ -253,6 +253,7 @@ aether-context run "..." --no-mpo-chain                      # disable for one r
 
 | Command | What it's for |
 |---|---|
+| `aether-context setup` | **Start here.** Guided first run: size the pool, check your model, verify the engine. |
 | `aether-context init` | Pick your pool size — the on-disk storage slider — on first run. |
 | `aether-context run "<task>" --no-mpo-chain` | Run with the MPO context chain disabled (plain cosine). |
 | `aether-context run "<task>"` | One-shot a task with full reach, then print the result. |
@@ -265,11 +266,21 @@ aether-context run "..." --no-mpo-chain                      # disable for one r
 
 ## The `aether` coding terminal
 
-The same install ships a second command — **`aether`** — an open-source agentic **coding terminal**
-running on the Unlimited Context engine. It's **local-first**: turns run on your local **[Ollama](https://ollama.com)**
-by default (no account, no network); sign in and they switch to the **Aether cloud API**. It's the
-Python-native twin of [Aether Agent](https://github.com/AetherAI3/aether-agent) — the TypeScript terminal,
-published on npm as [`aether-agents`](https://www.npmjs.com/package/aether-agents) — same commands, same backend, same tools.
+**`aether`** is an open-source agentic **coding terminal** that runs on the Unlimited Context
+engine. It's **local-first**: turns run on your local **[Ollama](https://ollama.com)** by default
+(no account, no network); sign in and they switch to the **Aether cloud API**.
+
+It ships as its own package, not as part of `aether-context`:
+
+```bash
+pip install aether-agent      # or: npm install -g aether-agents
+```
+
+Source lives at [AetherAI3/aether-agent](https://github.com/AetherAI3/aether-agent). The
+`aether_agent/` directory in *this* repo is the Python-native twin — same commands, same backend,
+same tools — kept here for development, and deliberately **not** published from this package:
+PyPI's `aether-agent` already owns that import path and the `aether` command, so shipping a
+second copy would silently overwrite it wherever both are installed.
 
 | Command | What it does |
 |---|---|
@@ -287,18 +298,39 @@ published on npm as [`aether-agents`](https://www.npmjs.com/package/aether-agent
 
 **Backend** — `local` (the default) runs every turn on your own Ollama; nothing leaves your machine and no account is needed. Opt into the hosted Aether API with `aether config set backend auto|cloud` (or `AETHER_BACKEND=auto`) plus `aether auth login` — `auto` uses the cloud only when you're signed in and falls back to local otherwise. The hosted API is the maintainer's own instance, so a fresh clone never calls it.
 
-**Smoke test** — with Ollama up, `python -m aether_agent.smoke` (or `aether-smoke`) runs the SSRF guard, a real local turn, a web search + fetch, and the cloud path (when signed in), printing `PASS`/`SKIP`/`FAIL` (exit non-zero only on a real failure — missing Ollama/network/sign-in are skips).
+**Smoke test** — from a clone of this repo, with Ollama up, `python -m aether_agent.smoke` runs the SSRF guard, a real local turn, a web search + fetch, and the cloud path (when signed in), printing `PASS`/`SKIP`/`FAIL` (exit non-zero only on a real failure — missing Ollama/network/sign-in are skips).
 
 ## Quickstart
 
 ```bash
-# Install straight from GitHub — works today, always the latest:
+pip install aether-context
+aether-context setup
+```
+
+Prefer npm? Same software, same release — the npm package is a launcher that installs the
+Python engine into a private virtualenv for you (it needs Python 3.10+ on your PATH):
+
+```bash
+npx aether-context setup
+```
+
+`setup` sizes the pool, checks for a local model, and verifies the engine end to end. It works
+with no daemon, no network and no model pulled — the check runs against the built-in mock model.
+
+<details>
+<summary>Other install routes</summary>
+
+```bash
+# Straight from source, always the latest main:
 pip install git+https://github.com/AetherAI3/Unlimited-Context-LLM.git
 
-# From PyPI, once published — the package name is "aether-context"
-# (note: `pip install unlimited-context` is NOT the package name):
-pip install aether-context
+# Isolated, if you only want the CLI:
+pipx install aether-context
 ```
+
+The distribution name is **`aether-context`** — `pip install unlimited-context` is not this
+package.
+</details>
 
 ```python
 from aether_context import Session
