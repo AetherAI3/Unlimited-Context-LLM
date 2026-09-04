@@ -14,6 +14,7 @@ reaches it in slices, one small window at a time. Local-first, offline, free.
 [![Built by Aether](https://img.shields.io/badge/Built_by-Aether-7c3aed?style=flat-square)](https://aethersystems.net)
 [![Stars](https://img.shields.io/github/stars/AetherAI3/Unlimited-Context-LLM?style=flat-square&logo=github&color=eab308)](https://github.com/AetherAI3/Unlimited-Context-LLM/stargazers)
 
+[Site](https://aetherai3.github.io/Unlimited-Context-LLM/) ·
 [Install](https://github.com/AetherAI3/Unlimited-Context-LLM#install) ·
 [How it works](https://github.com/AetherAI3/Unlimited-Context-LLM#how-it-works) ·
 [The proof](https://github.com/AetherAI3/Unlimited-Context-LLM#the-proof) ·
