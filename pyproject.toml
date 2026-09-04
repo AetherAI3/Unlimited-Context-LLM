@@ -39,7 +39,7 @@ llamacpp = ["llama-cpp-python>=0.2"]
 hf       = ["transformers>=4.40", "torch>=2.2"]
 fast     = ["hnswlib>=0.8"]                # faster ANN; flat numpy index is the fallback
 all      = ["aether-context[llamacpp,hf,fast]"]
-dev      = ["pytest>=8", "pytest-cov", "ruff>=0.5", "mypy>=1.10"]
+dev      = ["pytest>=8", "pytest-cov", "ruff>=0.5", "mypy>=1.10", "pyyaml>=6"]
 
 [project.scripts]
 aether-context = "aether_context.cli:main"
