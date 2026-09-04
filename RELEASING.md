@@ -1,123 +1,154 @@
 # Releasing `aether-context`
 
-This project publishes to [PyPI](https://pypi.org/project/aether-context/) automatically
-when a version tag is pushed. The release is built and uploaded by
-[`.github/workflows/publish.yml`](.github/workflows/publish.yml) using **PyPI OIDC Trusted
-Publishing** — there is **no API token** stored in the repo or in GitHub secrets.
+`aether-context` ships to **two registries from one commit**: the Python package to
+[PyPI](https://pypi.org/project/aether-context/), and an npm launcher that installs that exact
+PyPI release. Both publishes are **manual workflow dispatches** — tagging and publishing are
+separate decisions, so cutting a tag never pretends to ship a package.
+
+- [`.github/workflows/publish.yml`](.github/workflows/publish.yml) — PyPI, via **OIDC Trusted
+  Publishing**. No API token is stored in the repo or in GitHub secrets.
+- [`.github/workflows/publish-npm.yml`](.github/workflows/publish-npm.yml) — npm, via an
+  `NPM_TOKEN` automation token in the `npm-production` environment, published with
+  `--provenance`.
 
 Source of truth for the repo: <https://github.com/AetherAI3/Unlimited-Context-LLM>
 
+> **Order matters: PyPI first, npm second.** The npm launcher pins
+> `aether-context==<its own version>`, so publishing it before that version exists on PyPI ships
+> a launcher that fails on every first run. The npm workflow has a preflight that refuses to
+> publish in that state.
+
 ---
 
-## One-time PyPI setup (do this BEFORE the first tag)
+## One-time PyPI setup (do this BEFORE the first publish)
 
-The publish workflow authenticates to PyPI via OIDC. PyPI will reject the upload unless a
-matching **Trusted Publisher** has been configured for the project. Set this up once, before
-pushing the very first tag, or the publish job fails.
+The publish workflow authenticates to PyPI via OIDC. PyPI rejects the upload unless a matching
+**Trusted Publisher** exists.
 
 1. Sign in at <https://pypi.org>.
-2. If the project does not exist yet, create the Trusted Publisher under
-   **Your projects → Publishing → Add a pending publisher** (a "pending" publisher creates the
-   `aether-context` project on first successful upload). For an existing project use
-   **Manage → Publishing → Add a new publisher**.
+2. The project does not exist yet, so add a **pending** publisher under
+   **Your account → Publishing → Add a pending publisher**. (For an existing project it is
+   **Manage → Publishing → Add a new publisher**.)
 3. Enter exactly:
-   - **PyPI project name:** `aether-context`
-   - **Owner:** the GitHub org/user that owns the repo **at publish time** (currently `AetherAI3`)
-   - **Repository name:** `Unlimited-Context-LLM` (the repo's exact current name — OIDC matches
-     this literally and does **not** follow GitHub's rename redirect, so it must be exact)
-   - **Workflow name:** `publish.yml`
-   - **Environment name:** `pypi`
 
-> **Repo transfer note.** This repository may be transferred to an **aether-ai** org before the
-> first release. The Trusted Publisher **owner** must match the repo's **final** owner at the
-> moment a tag is pushed. If you transfer the repo after configuring the publisher, update (or
-> re-add) the Trusted Publisher so its owner matches the new org — otherwise the OIDC claim will
-> not match and the upload is rejected.
+   | Field | Value |
+   | --- | --- |
+   | **PyPI project name** | `aether-context` |
+   | **Owner** | `AetherAI3` |
+   | **Repository name** | `Unlimited-Context-LLM` |
+   | **Workflow name** | `publish.yml` |
+   | **Environment name** | `pypi-production` |
 
-4. (GitHub) Confirm a repo **Environment** named `pypi` exists
-   (**Settings → Environments**). The workflow's `environment: pypi` references it; you can attach
-   required reviewers there if you want a manual approval gate before each publish.
+   > **The project-name field is not the repo name.** It must equal the distribution name in
+   > `pyproject.toml` (`aether-context`). Getting this wrong does *not* fail the OIDC exchange —
+   > authentication succeeds and the **upload** is then rejected with
+   > `400 Non-user identities cannot create new projects`, which reads like a permissions problem
+   > but is a name mismatch. (Hyphen vs underscore is fine; PyPI normalizes those.)
+
+   > **Owner must be the repo's owner at publish time.** OIDC matches it literally and does
+   > **not** follow GitHub's transfer redirect — this repo moved from `DBarr3` to `AetherAI3`, so
+   > a publisher naming `DBarr3` will never match.
+
+4. (GitHub) Confirm a repo **Environment** named `pypi-production` exists
+   (**Settings → Environments**). The workflow's `environment: pypi-production` references it;
+   attach required reviewers there if you want a manual approval gate before each publish.
+
+## One-time npm setup
+
+1. Create the **`npm-production`** environment (**Settings → Environments**).
+2. Generate an **Automation** token at npmjs.com → **Access Tokens** (automation tokens bypass
+   2FA, which CI cannot answer), and add it to that environment as the secret **`NPM_TOKEN`**:
+
+   ```bash
+   gh secret set NPM_TOKEN --env npm-production --repo AetherAI3/Unlimited-Context-LLM
+   ```
 
 ---
 
 ## Cutting a release
 
-1. **Bump the version in BOTH places it lives.** They are separate strings and nothing keeps
-   them in sync:
-
-   ```toml
-   # pyproject.toml
-   [project]
-   version = "X.Y.Z"
-   ```
+1. **Bump the version** in [`aether_context/__init__.py`](aether_context/__init__.py):
 
    ```python
-   # aether_context/__init__.py
    __version__ = "X.Y.Z"
    ```
 
-   `cli.py` imports `__version__`, so the second one is what `aether-context --version`
-   prints. Bumping only `pyproject.toml` ships a CLI that reports the previous version.
+   That is the single source of truth. `pyproject.toml` declares `dynamic = ["version"]` and
+   reads the attribute, so there is no second literal to keep in sync.
 
-2. **Update [`CHANGELOG.md`](CHANGELOG.md):** move items out of `## [Unreleased]` into a new
+2. **Bump the npm launcher** in
+   [`packages/npm-cli/package.json`](packages/npm-cli/package.json) to the *same* `X.Y.Z`. The
+   launcher installs the PyPI release matching its own version, and
+   `tests/test_release_parity.py` fails the build if the two drift.
+
+3. **Update [`CHANGELOG.md`](CHANGELOG.md):** move items out of `## [Unreleased]` into a new
    `## [X.Y.Z] — YYYY-MM-DD` section. The format follows
    [Keep a Changelog](https://keepachangelog.com/) and
    [SemVer](https://semver.org/).
 
-3. **Commit** the bump on `main` (or via PR):
+4. **Commit and merge** to `main` via PR, and let CI go green.
 
-   ```bash
-   git add pyproject.toml CHANGELOG.md
-   git commit -m "release: vX.Y.Z"
-   ```
-
-4. **Tag, push, and cut the GitHub Release:**
+5. **Tag the merge commit and push:**
 
    ```bash
    git tag -a vX.Y.Z -m "aether-context vX.Y.Z"
    git push origin vX.Y.Z
-   gh release create vX.Y.Z --title "vX.Y.Z — <one concrete capability>" --notes-file notes.md
    ```
 
-   The tag **no longer triggers a publish**. `publish.yml` is dormant
-   (`workflow_dispatch` only) because there is no `aether-context` project on PyPI and no
-   trusted publisher configured — every tag used to produce a red X while nothing shipped.
-   Tagging and publishing are separate decisions now.
+   The tag does not trigger anything — it is the auditable ref you publish *from*.
 
-   Until PyPI is set up, the supported install is straight from GitHub:
+6. **Publish to PyPI**, passing the tag as the `ref` input:
 
    ```bash
-   pip install git+https://github.com/AetherAI3/Unlimited-Context-LLM.git@vX.Y.Z
+   gh workflow run publish.yml -f ref=vX.Y.Z
    ```
 
-   Say that in the release notes rather than `pip install aether-context`, which does not
-   work yet.
+   The job builds an sdist and wheel, asserts the wheel contains no `aether_agent` files, runs
+   `twine check`, then uploads via OIDC.
 
-5. **Verify.** Confirm the release renders correctly, then check the tag installs cleanly from
-   a throwaway environment:
+7. **Publish to npm**, once PyPI shows the new version:
 
    ```bash
-   pip install git+https://github.com/AetherAI3/Unlimited-Context-LLM.git@vX.Y.Z
-   aether-context --version   # must print X.Y.Z, not the previous version
+   gh workflow run publish-npm.yml -f ref=vX.Y.Z
    ```
 
-   Once PyPI is configured, additionally dispatch **publish** from the Actions tab against the
-   tag, then confirm at <https://pypi.org/project/aether-context/>.
+   Add `-f dry_run=true` first to see the packed tarball without publishing.
+
+8. **Verify both:**
+
+   ```bash
+   pip install --upgrade "aether-context==X.Y.Z" && aether-context --version
+   npx --yes aether-context@X.Y.Z --version
+   ```
+
+---
+
+## What the distribution contains — and deliberately does not
+
+The wheel ships **`aether_context` only**, and declares one console script, `aether-context`.
+
+`aether_agent/` also lives in this repo and is exercised by the test suite, but it is **not
+packaged**. PyPI's separate [`aether-agent`](https://pypi.org/project/aether-agent/)
+distribution already owns that import path and the `aether` command, and pip does not detect
+file conflicts *across* distributions — shipping a second copy would silently overwrite the
+other package's files on any machine that installed both. `publish.yml` re-checks the built
+wheel for `aether_agent` files and fails the release if any appear.
 
 ---
 
 ## Notes & troubleshooting
 
-- **The tag no longer publishes anything.** `publish.yml` is `workflow_dispatch` only. It used
-  to fire on `v*` tags, but with no trusted publisher configured every tag just produced a red
-  X. Restore the `push: tags: v*` trigger once a manual dispatch has actually succeeded.
-- **Re-tagging.** PyPI files are immutable — you cannot re-upload the same version. If a release
-  is broken, bump to a new patch version and tag again.
-- **Version mismatch.** The published version comes from `pyproject.toml`, not the tag string.
-  Keep them in lockstep (tag `vX.Y.Z` ⇔ `version = "X.Y.Z"`).
-- **OIDC failure ("not a trusted publisher").** Almost always an owner/repo/workflow/environment
-  mismatch — re-check the four values above against the repo's current owner (see the transfer
-  note).
+- **`400 Non-user identities cannot create new projects`.** The pending publisher's *project
+  name* does not match the distribution name. Fix that field to `aether-context`; nothing is
+  uploaded on a failed attempt, so the version is still free.
+- **`invalid-publisher` at the OIDC step.** An owner / repository / workflow / environment
+  mismatch. Re-check all four against the table above — the environment is `pypi-production`,
+  not `pypi`.
+- **Re-publishing.** PyPI files are immutable: a version cannot be re-uploaded, even after it is
+  deleted. If a release is broken, bump to a new patch version.
+- **Version mismatch.** The published version comes from `aether_context.__version__`, not the
+  tag string. Keep them in lockstep (tag `vX.Y.Z` ⇔ `__version__ = "X.Y.Z"`).
+- **npm 2FA.** A *publish* token fails in CI when 2FA is enforced; use an **automation** token.
 - **Local dev hygiene.** Install the pre-commit hook so commits stay ruff-clean:
   `pip install pre-commit && pre-commit install` (config:
   [`.pre-commit-config.yaml`](.pre-commit-config.yaml)).
