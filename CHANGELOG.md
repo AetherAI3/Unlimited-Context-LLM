@@ -6,6 +6,27 @@ All notable changes to `aether-context` are documented here. Format follows
 
 ## [Unreleased]
 
+### Fixed
+- `publish-npm.yml` was not valid YAML — `run: echo "dry run: packed ..."` put `": "` inside a
+  plain scalar, so the file did not parse and GitHub could not see its `on:` block. Dispatching
+  it failed with `Workflow does not have 'workflow_dispatch' trigger` while the trigger was
+  present in the source. Both `run:` steps are block scalars now.
+
+### Added
+- `tests/test_workflow_yaml.py` — every workflow file must parse *and* still declare at least
+  one trigger, with both publish workflows pinned as dispatchable. Nothing in CI parsed workflow
+  YAML before, which is how the above reached `main`. `pyyaml` joins the `dev` extra for it; the
+  runtime dependency set is unchanged (numpy only).
+- PyPI and npm version badges, now that both registries carry the package.
+
+### Changed
+- `RELEASING.md` rewritten. It had documented tag-triggered publishing (removed in #63), owner
+  `DBarr3` (a deleted account), environment `pypi` (the workflow uses `pypi-production`), and a
+  `version` literal in `pyproject.toml` (now dynamic) — and it now records the trap that failed
+  the first real publish: the pending publisher's *project name* field is the distribution name,
+  not the repository name. A mismatch passes the OIDC exchange and then fails the upload with
+  `400 Non-user identities cannot create new projects`.
+
 ## [0.3.0] — 2026-09-03
 
 First release published to a package registry: PyPI as `aether-context`, npm as `aether-context`.
@@ -105,5 +126,6 @@ pool — local-first, numpy-only core.
   completion), hermetic via `MockLLM`.
 - Docs (`how-it-works`, `local-models`), examples, CI, Apache-2.0 license.
 
-[Unreleased]: https://github.com/AetherAI3/Unlimited-Context-LLM/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/AetherAI3/Unlimited-Context-LLM/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/AetherAI3/Unlimited-Context-LLM/releases/tag/v0.3.0
 [0.2.0]: https://github.com/AetherAI3/Unlimited-Context-LLM/releases/tag/v0.2.0

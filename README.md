@@ -6,6 +6,8 @@
 
 <img width="537" height="405" alt="Unlimited Context" src="https://github.com/user-attachments/assets/79758729-ead7-42ca-9784-831cae68ef06" />
 
+[![PyPI](https://img.shields.io/pypi/v/aether-context?style=flat-square&logo=pypi&logoColor=white&color=06b6d4)](https://pypi.org/project/aether-context/)
+[![npm](https://img.shields.io/npm/v/aether-context?style=flat-square&logo=npm&logoColor=white&color=cb3837)](https://www.npmjs.com/package/aether-context)
 [![License](https://img.shields.io/badge/License-Apache_2.0-06b6d4?style=flat-square)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-14b8a6?style=flat-square&logo=python&logoColor=white)](https://www.python.org)
 [![Built by Aether](https://img.shields.io/badge/Built_by-Aether-7c3aed?style=flat-square)](https://aethersystems.net)
