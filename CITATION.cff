@@ -6,8 +6,8 @@ authors:
     given-names: "Brandon"
     affiliation: "Aether AI"
   - name: "Aether AI"
-version: "0.2.0"
-date-released: 2026-08-13
+version: "0.3.0"
+date-released: 2026-09-04
 license: Apache-2.0
 url: "https://github.com/AetherAI3/Unlimited-Context-LLM"
 repository-code: "https://github.com/AetherAI3/Unlimited-Context-LLM"
