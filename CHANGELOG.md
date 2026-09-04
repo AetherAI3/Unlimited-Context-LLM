@@ -6,11 +6,21 @@ All notable changes to `aether-context` are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.3.1] — 2026-09-04
+
 ### Fixed
 - `publish-npm.yml` was not valid YAML — `run: echo "dry run: packed ..."` put `": "` inside a
   plain scalar, so the file did not parse and GitHub could not see its `on:` block. Dispatching
   it failed with `Workflow does not have 'workflow_dispatch' trigger` while the trigger was
   present in the source. Both `run:` steps are block scalars now.
+- The PyPI and npm project descriptions rendered with broken images and dead links.
+  `pyproject.toml` sets `readme = "README.md"`, so the README *is* the long description, and
+  neither registry resolves relative links: the live page showed three broken images and eight
+  dead links (`SAFETY.md`, `USE_POLICY.md`, `CONTRIBUTING.md`, `LICENSE`, `CITATION.cff`,
+  `docs/`, `examples/`). Every link and image is absolute now, and the three images that lived
+  on GitHub `user-attachments` are committed under `assets/` and served from
+  `raw.githubusercontent.com`, so they are versioned with the repo. A registry only re-reads the
+  description on upload, which is the reason this release exists.
 
 ### Added
 - `tests/test_workflow_yaml.py` — every workflow file must parse *and* still declare at least
@@ -18,6 +28,11 @@ All notable changes to `aether-context` are documented here. Format follows
   YAML before, which is how the above reached `main`. `pyyaml` joins the `dev` extra for it; the
   runtime dependency set is unchanged (numpy only).
 - PyPI and npm version badges, now that both registries carry the package.
+- `assets/demo.gif` — a real captured session (`npx aether-context setup`, `doctor`, `status`)
+  against a live Ollama, now the README hero in place of generated artwork.
+- `docs/index.html` — the project landing page, published from `main` `/docs` at
+  <https://aetherai3.github.io/Unlimited-Context-LLM/>, with Open Graph and Twitter card tags so
+  a shared link unfurls instead of showing a bare URL.
 
 ### Changed
 - `RELEASING.md` rewritten. It had documented tag-triggered publishing (removed in #63), owner
@@ -26,6 +41,19 @@ All notable changes to `aether-context` are documented here. Format follows
   the first real publish: the pending publisher's *project name* field is the distribution name,
   not the repository name. A mismatch passes the OIDC exchange and then fails the upload with
   `400 Non-user identities cannot create new projects`.
+- **README rebuilt.** Install moved to the top (it had been at line 310 of 386, below five
+  separate tables about pool size and RAM); those five tables are now one **Sizing** section —
+  the RAM material had been split in half by the MPO section, with the resident-index table and
+  the shared-vs-separate summary sitting under a heading about the context chain. The
+  `1,000×+` and `~9,000×` figures, four lines apart, are now one number. Every caveat is kept,
+  and the benchmark caveat now leads with the fact that the headline run used a hosted model
+  rather than a local one.
+- `CITATION.cff` tracks the release version again.
+
+### Removed
+- `docs/superpowers/` and `docs/plans/` — 5,241 lines of internal build plans and specs, written
+  for an agent workflow rather than for readers, several of them for work that has not shipped.
+  History keeps them.
 
 ## [0.3.0] — 2026-09-03
 
@@ -126,6 +154,7 @@ pool — local-first, numpy-only core.
   completion), hermetic via `MockLLM`.
 - Docs (`how-it-works`, `local-models`), examples, CI, Apache-2.0 license.
 
-[Unreleased]: https://github.com/AetherAI3/Unlimited-Context-LLM/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/AetherAI3/Unlimited-Context-LLM/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/AetherAI3/Unlimited-Context-LLM/releases/tag/v0.3.1
 [0.3.0]: https://github.com/AetherAI3/Unlimited-Context-LLM/releases/tag/v0.3.0
 [0.2.0]: https://github.com/AetherAI3/Unlimited-Context-LLM/releases/tag/v0.2.0
