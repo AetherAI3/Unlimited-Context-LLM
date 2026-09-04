@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 import re
-from importlib.metadata import distribution
+from importlib.metadata import PackageNotFoundError, distribution
 from pathlib import Path
 
 import pytest
@@ -28,6 +28,15 @@ try:  # tomllib landed in 3.11; the package floor is 3.10, so this import is opt
     import tomllib
 except ModuleNotFoundError:  # pragma: no cover - only taken on the 3.10 leg of the matrix
     tomllib = None  # type: ignore[assignment]
+
+#: The installed distribution, or None when the tests run from a clone with nothing installed.
+#: The metadata assertions below need a real install to read; the build-configuration ones read
+#: `pyproject.toml` and do not, so the invariant stays covered either way (CI installs
+#: `-e ".[dev]"`, so both halves run there).
+try:
+    DIST = distribution("aether-context")
+except PackageNotFoundError:  # pragma: no cover - only when running uninstalled
+    DIST = None
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 NPM_DIR = REPO_ROOT / "packages" / "npm-cli"
@@ -66,6 +75,7 @@ def test_pyproject_takes_its_version_from_the_package() -> None:
 # Read from the build configuration and the installed metadata rather than by scanning the
 # TOML for a substring: the prose comment above the setting mentions `aether_agent` too, and a
 # test that a comment can satisfy is not a test.
+@pytest.mark.skipif(DIST is None, reason="aether-context is not installed in this environment")
 def test_the_installed_distribution_owns_only_aether_context() -> None:
     """`aether_agent` must stay out of the wheel: PyPI's `aether-agent` owns that import path.
 
@@ -73,7 +83,8 @@ def test_the_installed_distribution_owns_only_aether_context() -> None:
     does not detect conflicts across distributions — the second install silently wins.
     """
     # Act
-    top_level = distribution("aether-context").read_text("top_level.txt")
+    assert DIST is not None  # narrowed by the skipif above
+    top_level = DIST.read_text("top_level.txt")
 
     # Assert
     assert top_level is not None
@@ -91,10 +102,12 @@ def test_the_build_configuration_declares_only_aether_context() -> None:
     assert config["project"]["scripts"] == {"aether-context": "aether_context.cli:main"}
 
 
+@pytest.mark.skipif(DIST is None, reason="aether-context is not installed in this environment")
 def test_the_distribution_declares_only_its_own_console_script() -> None:
     """`aether` and `aether-smoke` belong to the `aether-agent` distribution, not this one."""
     # Act
-    installed = {entry.name: entry.value for entry in distribution("aether-context").entry_points}
+    assert DIST is not None  # narrowed by the skipif above
+    installed = {entry.name: entry.value for entry in DIST.entry_points}
 
     # Assert
     assert installed == {"aether-context": "aether_context.cli:main"}
