@@ -1,0 +1,129 @@
+name: publish (npm)
+
+# Publish the `aether-context` npm launcher (packages/npm-cli) to the npm registry.
+#
+# The launcher is a thin Node shim: it finds a Python interpreter, builds a private virtualenv,
+# and installs the matching `aether-context` release from PyPI. So it is only publishable *after*
+# that PyPI release exists — the preflight below refuses to ship a launcher whose pin points at
+# a version nobody can install.
+#
+# One-time setup, done by a maintainer:
+#   1. Create the `npm-production` environment in this repo's settings.
+#   2. Add an npm automation token as the `NPM_TOKEN` secret in that environment
+#      (npmjs.com -> Access Tokens -> Generate -> Automation).
+#   3. Run this workflow from the Actions tab.
+#
+# `--provenance` publishes a signed attestation linking the tarball to this workflow run, which
+# needs `id-token: write` and a `repository` field in package.json matching this repo.
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Tag (or branch) to publish, e.g. v0.3.0"
+        required: true
+        default: main
+      dry_run:
+        description: "Pack and verify without publishing"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: pack + publish to npm
+    runs-on: ubuntu-latest
+    environment: npm-production
+    permissions:
+      id-token: write # provenance attestation
+      contents: read
+    defaults:
+      run:
+        working-directory: packages/npm-cli
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Syntax-check the launcher
+        run: node --check bin/aether-context.js
+
+      # The launcher's version IS the version it installs from PyPI, so a drift between the two
+      # is the one defect that breaks every first run. Checked here as well as in the test suite
+      # because this job can be dispatched against any ref.
+      - name: Assert version parity with the Python package
+        working-directory: .
+        run: |
+          python - <<'PY'
+          import json
+          import pathlib
+          import re
+          import sys
+
+          npm = json.loads(pathlib.Path("packages/npm-cli/package.json").read_text())["version"]
+          init = pathlib.Path("aether_context/__init__.py").read_text()
+          py = re.search(r'__version__ = "([^"]+)"', init).group(1)
+          if npm != py:
+              sys.exit(f"version drift: npm {npm} != aether_context {py}")
+          print(f"version parity: {npm}")
+          PY
+
+      # A launcher pinned to a release that is not on PyPI installs nothing on first run. Publish
+      # the Python package first; this step is what stops the two registries drifting apart.
+      - name: Require the pinned PyPI release to exist
+        run: |
+          python - <<'PY'
+          import json
+          import pathlib
+          import sys
+          import urllib.error
+          import urllib.request
+
+          version = json.loads(pathlib.Path("package.json").read_text())["version"]
+          url = f"https://pypi.org/pypi/aether-context/{version}/json"
+          try:
+              with urllib.request.urlopen(url, timeout=30) as response:
+                  json.load(response)
+          except urllib.error.HTTPError as exc:
+              if exc.code == 404:
+                  sys.exit(
+                      f"aether-context {version} is not on PyPI yet. Run the `publish (pypi)` "
+                      "workflow first — this launcher pins that exact version."
+                  )
+              raise
+          print(f"aether-context {version} is on PyPI")
+          PY
+
+      - name: Pack the tarball
+        id: pack
+        run: |
+          tarball="$(npm pack --silent)"
+          echo "tarball=$tarball" >> "$GITHUB_OUTPUT"
+          tar -tzf "$tarball"
+
+      - name: Require an npm publishing credential
+        if: ${{ !inputs.dry_run }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: test -n "$NODE_AUTH_TOKEN" || {
+          echo "NPM_TOKEN is not set in the npm-production environment"; exit 1; }
+
+      - name: Publish to npm
+        if: ${{ !inputs.dry_run }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish "${{ steps.pack.outputs.tarball }}" --access public --provenance
+
+      - name: Dry run summary
+        if: ${{ inputs.dry_run }}
+        run: echo "dry run: packed ${{ steps.pack.outputs.tarball }} without publishing"

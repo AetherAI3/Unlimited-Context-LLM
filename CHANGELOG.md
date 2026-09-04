@@ -6,6 +6,47 @@ All notable changes to `aether-context` are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-09-03
+
+First release published to a package registry: PyPI as `aether-context`, npm as `aether-context`.
+
+### Added
+- **`aether-context setup`** — the guided first run, in three steps: size the pool, check for a
+  local model, then verify the engine with a real encode/retrieve round trip. The verification
+  runs against the mock model in a throwaway directory, so it passes with no daemon, no network
+  and no model pulled, and leaves the pool you just configured empty. `--pool N --yes` makes the
+  whole command non-interactive, so it is safe in a Dockerfile or a CI step.
+- **npm launcher** (`packages/npm-cli`, published as `aether-context`). `npx aether-context`
+  finds a Python 3.10+ interpreter, builds a private virtualenv under the OS cache directory,
+  installs the matching PyPI release into it, and forwards every argument through. Nothing is
+  written to global `site-packages` and nothing needs `sudo`. Zero npm dependencies.
+- `aether_context.ui` — the CLI's presentation seam (stdlib only; the core stays numpy-only).
+  Color is emitted only to a real tty and obeys `NO_COLOR`/`FORCE_COLOR`/`TERM=dumb`; VT100 mode
+  is enabled explicitly on Windows and styling is dropped if that fails. Box-drawing and glyphs
+  degrade to ASCII — prose included — when the stream's encoding cannot represent them, so a
+  `cp1252` console gets readable text instead of `?` characters or a `UnicodeEncodeError`.
+- `publish (npm)` workflow, and a preflight that refuses to publish a launcher whose pinned
+  release is not yet on PyPI.
+
+### Changed
+- **The distribution now ships `aether_context` only.** `aether_agent/` stays in the repo and in
+  the test suite, but is no longer packaged, and the `aether` / `aether-smoke` console scripts
+  are gone from this distribution. PyPI's `aether-agent` already owns that import path and the
+  `aether` command; pip does not detect file conflicts across distributions, so shipping a second
+  copy would have silently overwritten the other package's files wherever both were installed.
+  Install the terminal from its own package: `pip install aether-agent` or
+  `npm install -g aether-agents`.
+- The version is declared once, in `aether_context.__version__`, and read dynamically by the
+  build. A release-parity test pins the npm launcher's version to it.
+- `init`, `doctor` and `status` render through the new presentation seam. The `status` column
+  layout and the doctor's `[ok]`/`[warn]`/`[fail]`/`[skip]` bracket text are unchanged — both are
+  scraped by scripts — and the slice meter is appended after the counts rather than replacing them.
+- `publish (pypi)` builds an sdist and a wheel, asserts the wheel contains no `aether_agent`
+  files, and runs `twine check` before uploading. Its environment is now `pypi-production`,
+  matching the sibling `aether-agent` and `agent-browser` repos.
+- README: corrected the install instructions, and the claim that this package ships the `aether`
+  command.
+
 ## [0.2.0] — 2026-08-13
 
 ### Added

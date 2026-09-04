@@ -9,6 +9,11 @@ contains engine logic; it wires argparse to :mod:`aether_context.config`, the Ol
 
 Commands
 --------
+``aether-context setup [--pool N] [--model M] [--dir D] [--yes]``
+    The guided first run: size the pool, check the local model, and verify the engine end to
+    end in a throwaway directory. Same non-tty discipline as ``init`` — with ``--pool``/``--yes``
+    it is a single non-interactive command, so it is safe in a Dockerfile or a CI step.
+
 ``aether-context init [--pool N] [--dir D]``
     Initialize / re-initialize the pool config. **Non-tty safe** (build plan §12 CRITICAL):
     the interactive slider only runs when stdin is a real tty; otherwise the size comes from
@@ -55,6 +60,7 @@ from aether_context.config import (
 )
 from aether_context.errors import AetherContextError, PoolBudgetError
 from aether_context.session import Session
+from aether_context.ui import Console
 
 #: Environment variable read for the pool size when no ``--pool`` flag is given (non-tty).
 _ENV_POOL_GB = "AETHER_POOL_GB"
@@ -68,6 +74,18 @@ _DEFAULT_OLLAMA_HOST = "http://localhost:11434"
 _INDEX_MB_PER_GB = 29
 #: Short timeout (s) for the doctor's reachability probe — fail fast, stay offline-friendly.
 _PROBE_TIMEOUT = 2.0
+#: Suggested first model for `setup` — small enough to pull on a laptop, good enough to be useful.
+_SUGGESTED_MODEL = "qwen2.5"
+
+
+def _ui(stream: Any = None) -> Console:
+    """A :class:`Console` bound to the *current* ``sys.stdout`` (or ``stream``).
+
+    Built per call rather than once at import because the stream is swapped underneath us —
+    by pytest's ``capsys``, by a shell pipe, by a redirect — and the color/unicode decision has
+    to describe where the text is actually going.
+    """
+    return Console(stream if stream is not None else sys.stdout)
 
 
 # ---------------------------------------------------------------------------
@@ -99,6 +117,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     subparsers = parser.add_subparsers(dest="command")
+
+    p_setup = subparsers.add_parser(
+        "setup", help="guided first run: size the pool, check the model, verify the engine."
+    )
+    p_setup.add_argument("--pool", type=int, default=None, metavar="N", help="pool size in GB (>=5).")
+    p_setup.add_argument("--dir", type=str, default=None, metavar="D", help="pool directory.")
+    p_setup.add_argument(
+        "--model", type=str, default=None, metavar="M",
+        help=f"local model to check for (default: {_SUGGESTED_MODEL}).",
+    )
+    p_setup.add_argument(
+        "--yes", action="store_true",
+        help="take the defaults without prompting (for scripts, Dockerfiles, CI).",
+    )
+    p_setup.add_argument("--host", type=str, default=None, metavar="URL", help="Ollama host.")
 
     p_init = subparsers.add_parser(
         "init", help="initialize the pool (interactive slider on a tty; else --pool/env/5GB)."
@@ -198,6 +231,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
+        if args.command == "setup":
+            return _cmd_setup(args)
         if args.command == "init":
             return _cmd_init(args)
         if args.command == "doctor":
@@ -215,13 +250,124 @@ def main(argv: Sequence[str] | None = None) -> int:
         # no subcommand: a top-level --pool is a resize; otherwise show help.
         if args.pool is not None:
             return _cmd_resize(args)
+        ui = _ui()
+        ui.banner("Unlimited Context", f"aether-context {__version__}")
+        ui.line()
+        ui.line("  New here? One command sets everything up:")
+        ui.command("aether-context setup")
+        ui.line()
         parser.print_help()
         return 0
     except AetherContextError as exc:
         # typed, hinted failure: render it cleanly (never a traceback to the user).
-        print(f"error: {exc.message}", file=sys.stderr)
-        print(f"  fix: {exc.hint}", file=sys.stderr)
+        err = _ui(sys.stderr)
+        err.line(f"{err.glyph('fail')} {err.style('error:', 'bold', 'red')} {exc.message}")
+        err.line(f"  {err.style('fix:', 'dim')} {err.style(exc.hint, 'bold')}")
         return 1
+
+
+# ---------------------------------------------------------------------------
+# setup — the guided first run.
+# ---------------------------------------------------------------------------
+def _cmd_setup(args: argparse.Namespace) -> int:
+    """Walk a new install through pool sizing, the model check, and an end-to-end verify.
+
+    Three steps, in the order things actually go wrong:
+
+    1. **Pool** — the one number the user has to choose. Same resolution order as ``init``
+       (flag → tty slider → ``$AETHER_POOL_GB`` → floor), so ``--pool``/``--yes`` makes this
+       whole command non-interactive and it never blocks on a pipe.
+    2. **Model** — reachability of the local daemon, reported but *not* fatal: the engine runs
+       offline against the mock model, and saying otherwise would be a lie that sends people
+       hunting for a daemon they do not need yet.
+    3. **Verify** — a real encode/retrieve round trip. Run against a throwaway directory, not
+       the pool just configured, so a successful setup leaves a genuinely empty pool behind.
+
+    Returns 0 when the pool is configured and the engine verified; 1 if either failed. A
+    missing local model is a warning and does not change the exit code.
+    """
+    ui = _ui()
+    pool_dir = _resolve_dir(args.dir)
+
+    ui.banner("Unlimited Context", f"aether-context {__version__}")
+    ui.line()
+    ui.note("Virtual memory for an LLM's attention — local-first, numpy-only core.")
+    ui.note(f"Pool directory: {pool_dir}")
+
+    # --- 1. pool ---------------------------------------------------------------------
+    ui.step(1, 3, "Pool size")
+    ui.note("The pool is local DISK reserved for context reach. Resize any time.")
+    pool_gb = _resolve_pool_gb(getattr(args, "pool", None), pool_dir, assume_yes=args.yes)
+    _check_disk_for_pool(pool_gb, pool_dir)
+    cfg = _write_config(pool_dir, pool_gb)
+    reach = reach_tokens(cfg.pool_gb)
+    ui.check("ok", f"pool configured at {cfg.dir}")
+    ui.field("size:", f"{cfg.pool_gb} GB")
+    ui.field("reach:", f"~{reach / 1e9:.2f}B tokens")
+    ui.field("index:", f"{cfg.index}   dim {cfg.dim}   slice {cfg.slice_tokens} tok")
+    free = free_disk_bytes(pool_dir)
+    if free is not None:
+        # Just the number: a pool is typically a low single-digit percentage of a modern disk,
+        # so a meter here would sit at zero bars and read as broken rather than as reassuring.
+        ui.field("disk:", f"{free / BYTES_PER_GB:.1f} GB free")
+
+    # --- 2. model --------------------------------------------------------------------
+    ui.step(2, 3, "Local model")
+    host = _resolve_host(args.host)
+    model = args.model or _SUGGESTED_MODEL
+    reachable = _probe_ollama(host)
+    if not reachable:
+        ui.check(
+            "warn", f"no Ollama daemon at {host}",
+            "install from https://ollama.com, then `ollama serve`",
+        )
+        ui.note("Not a blocker — everything below runs offline against the mock model.")
+    elif _model_is_pulled(host, model):
+        ui.check("ok", f"model '{model}' is pulled and ready at {host}")
+    else:
+        ui.check("warn", f"model '{model}' is not pulled", f"ollama pull {model}")
+
+    # --- 3. verify -------------------------------------------------------------------
+    ui.step(3, 3, "Verify the engine")
+    ok = _verify_engine(ui)
+
+    # --- next steps ------------------------------------------------------------------
+    ui.heading("You're ready")
+    if reachable:
+        ui.command(f"aether-context chat --model ollama/{model}", "talk to your local model")
+    else:
+        ui.command("aether-context chat --model mock", "works offline, right now")
+    ui.command("aether-context run \"summarize this repo\"", "one-shot task")
+    ui.command("aether-context status", "pool, reach, hit rate")
+    ui.command("aether-context doctor", "diagnose anything that breaks")
+    ui.line()
+    return 0 if ok else 1
+
+
+def _verify_engine(ui: Console) -> bool:
+    """Prove the install works: one real run through a Session in a throwaway pool.
+
+    Deliberately uses the mock model and a temporary directory — this has to pass with no
+    daemon, no network and no model pulled, and it must not leave slices in the pool the user
+    just sized. A failure here is the one thing in ``setup`` that is genuinely broken, so it
+    reports the exception message rather than a cheerful guess.
+    """
+    import tempfile
+
+    with tempfile.TemporaryDirectory(prefix="aether-verify-") as tmp:
+        session = None
+        try:
+            session = Session(model=_DEFAULT_MODEL, pool_gb=POOL_GB_FLOOR, pool_dir=Path(tmp))
+            session.run("verify the aether-context install")
+            used = int(session.status_dict()["slices_used"])
+        except Exception as exc:  # noqa: BLE001 - report any breakage, never traceback at the user
+            ui.check("fail", f"engine check failed: {exc}", "aether-context doctor")
+            return False
+        finally:
+            if session is not None:
+                session.close()
+    ui.check("ok", f"engine round trip passed ({used} slice(s) encoded and retrieved)")
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -238,25 +384,28 @@ def _cmd_init(args: argparse.Namespace) -> int:
     _check_disk_for_pool(pool_gb, pool_dir)  # reject a pool that won't fit on disk
     cfg = _write_config(pool_dir, pool_gb)  # raises PoolBudgetError if < floor
     reach = reach_tokens(cfg.pool_gb)
-    print(f"initialized pool at {cfg.dir}")
-    print(f"  pool size: {cfg.pool_gb} GB  (reach ~= {reach / 1e9:.2f}B tokens)")
-    print(f"  index: {cfg.index}   dim: {cfg.dim}   slice: {cfg.slice_tokens} tok")
+    ui = _ui()
+    ui.check("ok", f"initialized pool at {cfg.dir}")
+    ui.field("pool size:", f"{cfg.pool_gb} GB  (reach ~= {reach / 1e9:.2f}B tokens)")
+    ui.field("index:", f"{cfg.index}   dim: {cfg.dim}   slice: {cfg.slice_tokens} tok")
     free = free_disk_bytes(pool_dir)
     if free is not None:
-        print(f"  disk: {free / BYTES_PER_GB:.1f} GB free at {pool_dir}")
+        ui.field("disk:", f"{free / BYTES_PER_GB:.1f} GB free at {pool_dir}")
+    ui.line()
+    ui.note("Next: `aether-context setup` to check your model and verify the engine.")
     return 0
 
 
-def _resolve_pool_gb(flag: int | None, pool_dir: Path) -> int:
+def _resolve_pool_gb(flag: int | None, pool_dir: Path, *, assume_yes: bool = False) -> int:
     """Resolve the pool size without ever blocking on a non-tty stdin.
 
-    ``flag`` (``--pool``) wins. Else, only if stdin is an interactive tty do we run the slider
-    (which shows free disk and rejects a size that won't fit). Else ``$AETHER_POOL_GB`` if set
-    and numeric. Else the 5 GB default.
+    ``flag`` (``--pool``) wins. Else, only if stdin is an interactive tty — and the caller did
+    not pass ``--yes`` — do we run the slider (which shows free disk and rejects a size that
+    won't fit). Else ``$AETHER_POOL_GB`` if set and numeric. Else the 5 GB default.
     """
     if flag is not None:
         return int(flag)
-    if sys.stdin is not None and sys.stdin.isatty():
+    if not assume_yes and sys.stdin is not None and sys.stdin.isatty():
         return _prompt_pool_gb(pool_dir)
     env = os.environ.get(_ENV_POOL_GB)
     if env is not None and env.strip().isdigit():
@@ -272,30 +421,34 @@ def _prompt_pool_gb(pool_dir: Path) -> int:
     but also when a pick exceeds free disk). Empty input takes the 5 GB default; EOF falls back
     to the default.
     """
+    ui = _ui()
     free = free_disk_bytes(pool_dir)
     free_gb = (free / BYTES_PER_GB) if free is not None else None
-    print("Choose a pool size — this is the local DISK reserved for context reach:")
+    ui.line()
+    ui.line("  Choose a pool size — the local DISK reserved for context reach:")
     if free_gb is not None:
-        print(f"  ({free_gb:.1f} GB free at {pool_dir})")
+        ui.note(f"{free_gb:.1f} GB free at {pool_dir}")
     for gb in (5, 10, 15, 20):
-        warn = "" if (free_gb is None or gb <= free_gb) else "   (won't fit — not enough free disk)"
-        print(f"  {gb:>2} GB  ->  reach ~= {reach_tokens(gb) / 1e9:.2f}B tokens{warn}")
+        fits = free_gb is None or gb <= free_gb
+        reach = f"reach ~= {reach_tokens(gb) / 1e9:.2f}B tokens"
+        label = f"  {ui.glyph('ok' if fits else 'fail')} {gb:>2} GB  {ui.style(reach, 'dim')}"
+        ui.line(label if fits else f"{label} {ui.style(chr(40) + 'not enough free disk)', 'dim')}")
     for _attempt in range(3):
         try:
-            raw = input(f"pool GB [default {POOL_GB_FLOOR}]: ").strip()
+            raw = input(f"  pool GB [{POOL_GB_FLOOR}]: ").strip()
         except EOFError:
             return POOL_GB_FLOOR
         if not raw:
             return POOL_GB_FLOOR
         if not raw.isdigit():
-            print("  enter a whole number of GB (e.g. 5, 10, 20).")
+            ui.note("enter a whole number of GB (e.g. 5, 10, 20).")
             continue
         value = int(raw)
         if value < POOL_GB_FLOOR:
-            print(f"  {value} GB is below the {POOL_GB_FLOOR} GB floor; pick at least {POOL_GB_FLOOR}.")
+            ui.note(f"{value} GB is below the {POOL_GB_FLOOR} GB floor; pick at least {POOL_GB_FLOOR}.")
             continue
         if free_gb is not None and value > free_gb:
-            print(f"  {value} GB won't fit — only {free_gb:.1f} GB free at {pool_dir}. Pick a smaller size.")
+            ui.note(f"{value} GB won't fit — only {free_gb:.1f} GB free at {pool_dir}. Pick smaller.")
             continue
         return value
     return POOL_GB_FLOOR
@@ -430,14 +583,17 @@ def _cmd_status(args: argparse.Namespace) -> int:
     slices, capacity = _pool_counts(cfg)
     reach = reach_tokens(cfg.pool_gb)
     resident_mb = cfg.pool_gb * _INDEX_MB_PER_GB
-    print("aether-context status")
-    print(f"  pool:        {cfg.pool_gb} GB  (reach ~= {reach / 1e9:.2f}B tokens)")
-    print(f"  slices:      {slices} / {capacity}")
-    print(f"  reach:       {reach:,} tokens")
-    print("  hit rate:    N/A (no live session)")
-    print(f"  resident RAM ~= {resident_mb} MB (estimate)")
-    print(f"  pool-mode:   {cfg.mode}")
-    print(f"  index:       {cfg.index}")
+    ui = _ui()
+    ui.heading("aether-context status")
+    fill = (slices / capacity) if capacity else 0.0
+    ui.field("pool:", f"{cfg.pool_gb} GB  (reach ~= {reach / 1e9:.2f}B tokens)")
+    ui.field("slices:", f"{slices} / {capacity}  {ui.bar(fill, slots=16)}")
+    ui.field("reach:", f"{reach:,} tokens")
+    ui.field("hit rate:", "N/A (no live session)")
+    ui.field("resident:", f"~{resident_mb} MB RAM (estimate)")
+    ui.field("pool-mode:", cfg.mode)
+    ui.field("index:", cfg.index)
+    ui.line()
     return 0
 
 
@@ -779,18 +935,22 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     host = _resolve_host(args.host)
     model = args.model
     pool_dir = _resolve_dir(args.dir)
-    print("aether-context doctor")
-    print(f"  ollama host: {host}")
+    ui = _ui()
+    ui.heading("aether-context doctor")
+    ui.note(f"ollama host: {host}")
 
     ok = True
     reachable = _probe_ollama(host)
-    ok = _report_ollama(reachable, host) and ok
-    ok = _report_model(reachable, host, model) and ok
-    ok = _report_disk_vs_pool(pool_dir) and ok
-    ok = _report_ram_vs_index(pool_dir) and ok
+    ok = _report_ollama(ui, reachable, host) and ok
+    ok = _report_model(ui, reachable, host, model) and ok
+    ok = _report_disk_vs_pool(ui, pool_dir) and ok
+    ok = _report_ram_vs_index(ui, pool_dir) and ok
 
-    print("")
-    print("  all good." if ok else "  some checks need attention (see fixes above).")
+    ui.line()
+    if ok:
+        ui.line(f"  {ui.glyph('ok')} {ui.style('all good.', 'bold', 'green')}")
+    else:
+        ui.line(f"  {ui.glyph('warn')} some checks need attention (see fixes above).")
     return 0 if ok else 1
 
 
@@ -814,35 +974,38 @@ def _probe_ollama(host: str) -> bool:
         return False
 
 
-def _report_ollama(reachable: bool, host: str) -> bool:
+def _report_ollama(ui: Console, reachable: bool, host: str) -> bool:
     """Print the Ollama reachability check + its fix command. Returns True iff reachable."""
     if reachable:
-        print(f"  [ok]   ollama daemon reachable at {host}")
+        ui.check("ok", f"ollama daemon reachable at {host}")
         return True
-    print(f"  [fail] ollama daemon not reachable at {host}")
-    print("         fix: start it with `ollama serve`")
+    ui.check("fail", f"ollama daemon not reachable at {host}", "ollama serve")
     return False
 
 
-def _report_model(reachable: bool, host: str, model: str | None) -> bool:
+def _report_model(ui: Console, reachable: bool, host: str, model: str | None) -> bool:
     """Check whether ``model`` is pulled (only meaningful if the daemon is up).
 
     Always prints the exact ``ollama pull <model>`` fix command when a model was named, so the
     user sees the remedy even fully offline.
     """
     if model is None:
-        print("  [skip] no --model given; pass --model qwen2.5 to check a specific model")
+        ui.check("skip", "no --model given; pass --model qwen2.5 to check a specific model")
         return True
     if not reachable:
-        print(f"  [fail] cannot check model '{model}' (daemon down)")
-        print(f"         fix: start ollama then `ollama pull {model}`")
+        ui.check(
+            "fail", f"cannot check model '{model}' (daemon down)",
+            f"start ollama then `ollama pull {model}`",
+        )
         return False
     pulled = _model_is_pulled(host, model)
     if pulled:
-        print(f"  [ok]   model '{model}' is pulled")
+        ui.check("ok", f"model '{model}' is pulled")
         return True
-    print(f"  [fail] model '{model}' is not pulled")
-    print(f"         fix: `ollama pull {model}`  (or Session(model='ollama/{model}', pull=True))")
+    ui.check(
+        "fail", f"model '{model}' is not pulled",
+        f"ollama pull {model}  (or Session(model='ollama/{model}', pull=True))",
+    )
     return False
 
 
@@ -860,24 +1023,26 @@ def _model_is_pulled(host: str, model: str) -> bool:
     return any(n == model or n.split(":", 1)[0] == base for n in names)
 
 
-def _report_disk_vs_pool(pool_dir: Path) -> bool:
+def _report_disk_vs_pool(ui: Console, pool_dir: Path) -> bool:
     """Check free disk against the configured pool size (the pool reserves that much disk)."""
     cfg = PoolConfig.load(pool_dir)
     free = free_disk_bytes(pool_dir)
     if free is None:
-        print(f"  [ok]   {cfg.pool_gb} GB pool — free disk unknown (could not probe)")
+        ui.check("ok", f"{cfg.pool_gb} GB pool — free disk unknown (could not probe)")
         return True
     free_gb = free / BYTES_PER_GB
     if free >= cfg.pool_gb * BYTES_PER_GB:
-        print(f"  [ok]   {cfg.pool_gb} GB pool fits ({free_gb:.1f} GB free at {pool_dir})")
+        ui.check("ok", f"{cfg.pool_gb} GB pool fits ({free_gb:.1f} GB free at {pool_dir})")
         return True
     fits = max(POOL_GB_FLOOR, int(free // BYTES_PER_GB))
-    print(f"  [warn] {cfg.pool_gb} GB pool vs only {free_gb:.1f} GB free at {pool_dir}")
-    print(f"         fix: free up disk, or `aether-context --pool {fits}`")
+    ui.check(
+        "warn", f"{cfg.pool_gb} GB pool vs only {free_gb:.1f} GB free at {pool_dir}",
+        f"free up disk, or `aether-context --pool {fits}`",
+    )
     return False
 
 
-def _report_ram_vs_index(pool_dir: Path) -> bool:
+def _report_ram_vs_index(ui: Console, pool_dir: Path) -> bool:
     """Estimate the index RAM for the configured pool and compare to free system RAM.
 
     Reads the persisted ``PoolConfig`` (or defaults), computes the index RAM from the pool
@@ -889,16 +1054,17 @@ def _report_ram_vs_index(pool_dir: Path) -> bool:
     index_mb = index_bytes / (1024 * 1024)
     free_bytes = _free_ram_bytes()
     if free_bytes is None:
-        print(f"  [ok]   index RAM estimate ~= {index_mb:.0f} MB "
-              f"(free RAM unknown; could not probe)")
+        ui.check("ok", f"index RAM estimate ~= {index_mb:.0f} MB (free RAM unknown; not probed)")
         return True
     free_mb = free_bytes / (1024 * 1024)
     # comfortable = index fits in well under half of free RAM.
     if index_bytes * 2 < free_bytes:
-        print(f"  [ok]   index RAM ~= {index_mb:.0f} MB fits in {free_mb:.0f} MB free")
+        ui.check("ok", f"index RAM ~= {index_mb:.0f} MB fits in {free_mb:.0f} MB free")
         return True
-    print(f"  [warn] index RAM ~= {index_mb:.0f} MB vs only {free_mb:.0f} MB free")
-    print("         fix: use a smaller --pool (a paged 'tiered' index is not built yet)")
+    ui.check(
+        "warn", f"index RAM ~= {index_mb:.0f} MB vs only {free_mb:.0f} MB free",
+        "use a smaller --pool (a paged 'tiered' index is not built yet)",
+    )
     return False
 
 

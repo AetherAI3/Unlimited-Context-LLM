@@ -47,3 +47,7 @@ pool_on_chain/
 # throwaway live-run wrapper (handles local TLS proxy; reads key from env)
 _run_eval_live.py
 runs/
+
+# Node (npm launcher)
+node_modules/
+*.tgz

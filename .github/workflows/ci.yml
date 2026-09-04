@@ -34,6 +34,27 @@ jobs:
       - name: Bench smoke (hermetic mock model)
         run: python bench/drift_vs_window.py --model mock --quick
 
+  npm-launcher:
+    name: npm launcher
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/npm-cli
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      # The launcher ships as plain CommonJS with no build step, so `node --check` is the whole
+      # compile stage: a syntax error here would otherwise only surface on a user's first run.
+      - name: Syntax check
+        run: node --check bin/aether-context.js
+      # Proves `files` and `bin` agree with what is on disk before the tarball ever reaches npm.
+      - name: Pack and list the tarball
+        run: |
+          npm pack --silent
+          tar -tzf aether-context-*.tgz
+
   numpy-matrix:
     name: numpy ${{ matrix.numpy }}
     runs-on: ubuntu-latest
