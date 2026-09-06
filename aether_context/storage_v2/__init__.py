@@ -26,8 +26,19 @@ CREATE TABLE IF NOT EXISTS cycles (
  key_ref TEXT, key_version TEXT, retention_class TEXT NOT NULL DEFAULT 'ephemeral',
  hold_reason TEXT, cleanup_state TEXT NOT NULL DEFAULT 'NONE',
  seal_digest TEXT, checkpoint_manifest_checksum TEXT, checkpoint_object_ref_digest TEXT,
+ checkpoint_durability_mode TEXT NOT NULL DEFAULT 'unregistered',
+ checkpoint_durability_legacy INTEGER NOT NULL DEFAULT 0,
+ checkpoint_durability_command_digest TEXT, checkpoint_durability_receipt TEXT,
  cleanup_remote_receipt TEXT, cleanup_operation_key TEXT, cleanup_request_digest TEXT,
- deletion_receipt TEXT,
+ deletion_receipt TEXT, reservation_release_digest TEXT, reservation_release_receipt TEXT,
+ reservation_abort_digest TEXT, reservation_abort_receipt TEXT,
+ reservation_expiry_digest TEXT, reservation_expiry_receipt TEXT,
+ hydrate_command_digest TEXT, hydrate_request_digest TEXT, hydrate_receipt TEXT,
+ reservation_revival_from_revision INTEGER, reservation_revival_kind TEXT,
+ reservation_revival_command_digest TEXT, reservation_revival_receipt_digest TEXT,
+ reservation_revival_no_dispatch_receipt_digest TEXT,
+ reservation_binding_receipt_digest TEXT, reservation_binding_revision INTEGER,
+ reservation_protocol_version INTEGER NOT NULL DEFAULT 1,
  UNIQUE(owner,project,request_key));
 CREATE TABLE IF NOT EXISTS segments (
  cycle TEXT NOT NULL REFERENCES cycles(id), seq INTEGER NOT NULL,
@@ -68,10 +79,31 @@ _CYCLE_COLUMNS = {
     "seal_digest": "TEXT",
     "checkpoint_manifest_checksum": "TEXT",
     "checkpoint_object_ref_digest": "TEXT",
+    "checkpoint_durability_mode": "TEXT NOT NULL DEFAULT 'unregistered'",
+    "checkpoint_durability_legacy": "INTEGER NOT NULL DEFAULT 0",
+    "checkpoint_durability_command_digest": "TEXT",
+    "checkpoint_durability_receipt": "TEXT",
     "cleanup_remote_receipt": "TEXT",
     "cleanup_operation_key": "TEXT",
     "cleanup_request_digest": "TEXT",
     "deletion_receipt": "TEXT",
+    "reservation_release_digest": "TEXT",
+    "reservation_release_receipt": "TEXT",
+    "reservation_abort_digest": "TEXT",
+    "reservation_abort_receipt": "TEXT",
+    "reservation_expiry_digest": "TEXT",
+    "reservation_expiry_receipt": "TEXT",
+    "hydrate_command_digest": "TEXT",
+    "hydrate_request_digest": "TEXT",
+    "hydrate_receipt": "TEXT",
+    "reservation_revival_from_revision": "INTEGER",
+    "reservation_revival_kind": "TEXT",
+    "reservation_revival_command_digest": "TEXT",
+    "reservation_revival_receipt_digest": "TEXT",
+    "reservation_revival_no_dispatch_receipt_digest": "TEXT",
+    "reservation_binding_receipt_digest": "TEXT",
+    "reservation_binding_revision": "INTEGER",
+    "reservation_protocol_version": "INTEGER NOT NULL DEFAULT 1",
 }
 
 
@@ -84,19 +116,71 @@ class SegmentStoreV2:
         with self.connection() as db:
             db.execute("PRAGMA journal_mode=WAL")
             db.executescript(SCHEMA)
-            columns = {row[1] for row in db.execute("PRAGMA table_info(cycles)")}
-            if "snapshot" not in columns:
-                db.execute("ALTER TABLE cycles ADD COLUMN snapshot BLOB")
-                columns.add("snapshot")
-            # SQLite has no transactional ALTER COLUMN operation. Additive,
-            # constant-default columns keep databases created by 0.3.1 readable.
-            for name, declaration in _CYCLE_COLUMNS.items():
-                if name not in columns:
-                    db.execute(f"ALTER TABLE cycles ADD COLUMN {name} {declaration}")
+            # DDL is transactional in SQLite. The durability columns and the
+            # semantic legacy backfill must commit together: after a power loss,
+            # a pre-V2 row is either wholly old or wholly classified as legacy.
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                self._migrate_cycles(db)
+                db.execute("COMMIT")
+            except BaseException:
+                db.execute("ROLLBACK")
+                raise
             if db.execute("PRAGMA quick_check").fetchone()[0] != "ok":
                 raise ContextFault("context_storage_corrupt")
         if os.name != "nt":
             os.chmod(self.path, 0o600)
+
+    @staticmethod
+    def _migrate_cycles(db: sqlite3.Connection) -> None:
+        columns = {row[1] for row in db.execute("PRAGMA table_info(cycles)")}
+        if "snapshot" not in columns:
+            db.execute("ALTER TABLE cycles ADD COLUMN snapshot BLOB")
+            columns.add("snapshot")
+        legacy_durability = "checkpoint_durability_mode" not in columns
+        if legacy_durability:
+            db.execute(
+                "ALTER TABLE cycles ADD COLUMN checkpoint_durability_mode "
+                "TEXT NOT NULL DEFAULT 'unregistered'"
+            )
+            columns.add("checkpoint_durability_mode")
+        if "checkpoint_durability_legacy" not in columns:
+            db.execute(
+                "ALTER TABLE cycles ADD COLUMN checkpoint_durability_legacy "
+                "INTEGER NOT NULL DEFAULT 0"
+            )
+            columns.add("checkpoint_durability_legacy")
+        if legacy_durability:
+            # Rows present before this contract may already reference remote
+            # packs, so only these pre-migration rows receive the legacy marker.
+            db.execute(
+                "UPDATE cycles SET checkpoint_durability_mode='remote_registered',"
+                "checkpoint_durability_legacy=1"
+            )
+        # Additive, constant-default columns keep databases created by 0.3.1
+        # readable by the new daemon.
+        for name, declaration in _CYCLE_COLUMNS.items():
+            if name not in columns:
+                db.execute(f"ALTER TABLE cycles ADD COLUMN {name} {declaration}")
+                columns.add(name)
+        # An old daemon inserting after migration omits the protocol column and
+        # therefore enters the explicit V1 drain path. V1 keeps its historical
+        # remote durability semantics; V2/V3 stay unregistered until a signed
+        # registration is persisted.
+        db.execute("DROP TRIGGER IF EXISTS cycles_unregistered_old_writer")
+        db.execute("DROP TRIGGER IF EXISTS cycles_protocol_durability_default")
+        db.execute(
+            "CREATE TRIGGER cycles_protocol_durability_default "
+            "AFTER INSERT ON cycles WHEN "
+            "NEW.checkpoint_durability_command_digest IS NULL AND "
+            "NEW.checkpoint_durability_receipt IS NULL "
+            "BEGIN UPDATE cycles SET checkpoint_durability_mode="
+            "CASE WHEN NEW.reservation_protocol_version=1 "
+            "THEN 'remote_registered' ELSE 'unregistered' END,"
+            "checkpoint_durability_legacy="
+            "CASE WHEN NEW.reservation_protocol_version=1 THEN 1 ELSE 0 END "
+            "WHERE id=NEW.id; END"
+        )
 
     @contextmanager
     def connection(self):

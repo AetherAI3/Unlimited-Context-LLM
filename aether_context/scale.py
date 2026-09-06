@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
+import importlib.metadata
+import platform
+import sqlite3
+import sys
+import sysconfig
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -13,6 +19,10 @@ from .contracts import (
     ExecutorStabilityReceiptV1,
     HostedScaleReceiptV1,
     RuntimeBuildManifestV1,
+    RuntimeBuildManifestV2,
+    RuntimeBuildManifestV3,
+    RuntimeEnvironmentV1,
+    RuntimeEnvironmentV2,
     canonical,
     digest,
 )
@@ -21,18 +31,47 @@ from .policy import namespace_matches, visible_values
 
 MAX_HOSTED_PROCESS_BYTES = 536_870_912
 MIN_RECALL_BASIS_POINTS = 8000
+HOSTED_RUNTIME_DISTRIBUTIONS = (
+    "annotated-types",
+    "cffi",
+    "cryptography",
+    "numpy",
+    "pydantic",
+    "pydantic_core",
+    "pycparser",
+    "typing-inspection",
+    "typing_extensions",
+)
 
 
-def runtime_package_tree_digest(root: str | Path | None = None) -> str:
-    """Hash every shipped runtime source/schema byte under the imported package."""
+def runtime_package_tree_digest(
+    root: str | Path | None = None, *, require_source_only: bool = False
+) -> str:
+    """Hash shipped source/schema bytes and reject executable shadow artifacts.
+
+    A qualified hosted deployment is source-only: bytecode generation is disabled,
+    no cache directory exists, and every regular package file is an expected wheel
+    payload.  This closes Python's extension/bytecode precedence paths rather than
+    claiming a source digest for bytes the interpreter may not execute.
+    """
 
     package_root = Path(root) if root is not None else Path(__file__).resolve().parent
     package_root = package_root.resolve(strict=True)
+    if require_source_only and not sys.dont_write_bytecode:
+        raise ContextFault("context_runtime_bytecode_enabled")
     entries: list[dict[str, str]] = []
     for path in sorted(package_root.rglob("*")):
         if path.is_symlink():
             raise ContextFault("context_runtime_build_invalid")
-        if not path.is_file() or path.suffix not in {".py", ".json", ".typed"}:
+        if path.is_dir():
+            if require_source_only and path.name == "__pycache__":
+                raise ContextFault("context_runtime_import_artifact")
+            continue
+        if not path.is_file():
+            continue
+        if path.suffix not in {".py", ".json", ".typed"}:
+            if require_source_only:
+                raise ContextFault("context_runtime_import_artifact")
             continue
         entries.append(
             {
@@ -43,6 +82,77 @@ def runtime_package_tree_digest(root: str | Path | None = None) -> str:
     if not entries:
         raise ContextFault("context_runtime_build_invalid")
     return hashlib.sha256(canonical(entries)).hexdigest()
+
+
+def runtime_environment_identity(
+    root: str | Path | None = None,
+    *,
+    distributions: tuple[str, ...] = HOSTED_RUNTIME_DISTRIBUTIONS,
+) -> RuntimeEnvironmentV2:
+    """Measure the interpreter, hosted dependencies, and actual import root."""
+
+    package_root = Path(root) if root is not None else Path(__file__).resolve().parent
+    package_root = package_root.resolve(strict=True)
+    try:
+        executable = Path(sys.executable).resolve(strict=True)
+        executable_digest = hashlib.sha256(executable.read_bytes()).hexdigest()
+        versions = {
+            name: importlib.metadata.version(name)
+            for name in distributions
+        }
+        artifacts = {
+            name: _distribution_artifact_digest(name)
+            for name in distributions
+        }
+    except (OSError, importlib.metadata.PackageNotFoundError) as exc:
+        raise ContextFault("context_runtime_environment_unavailable") from exc
+    abi = sysconfig.get_config_var("SOABI") or getattr(
+        sys.implementation, "cache_tag", None
+    )
+    if not isinstance(abi, str) or not abi:
+        raise ContextFault("context_runtime_environment_unavailable")
+    return RuntimeEnvironmentV2(
+        python_implementation=sys.implementation.name,
+        python_version=platform.python_version(),
+        python_abi=abi,
+        python_executable_digest=executable_digest,
+        dependency_import_closure=sorted(distributions),
+        dependency_versions=versions,
+        dependency_artifact_digests=artifacts,
+        sqlite_version=sqlite3.sqlite_version,
+        package_import_root_digest=digest(str(package_root.parent)),
+    )
+
+
+def _distribution_artifact_digest(name: str) -> str:
+    """Hash and RECORD-verify every installed file owned by one dependency."""
+
+    distribution = importlib.metadata.distribution(name)
+    files = distribution.files
+    if not files:
+        raise ContextFault("context_runtime_environment_unavailable")
+    entries: list[dict[str, str]] = []
+    for entry in sorted(files, key=lambda item: str(item)):
+        path = Path(str(distribution.locate_file(entry)))
+        if path.is_symlink() or not path.is_file():
+            raise ContextFault("context_runtime_environment_unavailable")
+        sha256 = hashlib.sha256()
+        recorded = entry.hash
+        recorded_hash = hashlib.new(recorded.mode) if recorded is not None else None
+        try:
+            with path.open("rb") as stream:
+                while chunk := stream.read(1_048_576):
+                    sha256.update(chunk)
+                    if recorded_hash is not None:
+                        recorded_hash.update(chunk)
+        except OSError as exc:
+            raise ContextFault("context_runtime_environment_unavailable") from exc
+        if recorded is not None and recorded_hash is not None:
+            observed = base64.urlsafe_b64encode(recorded_hash.digest()).rstrip(b"=").decode()
+            if observed != recorded.value:
+                raise ContextFault("context_runtime_dependency_artifact_mismatch")
+        entries.append({"path": str(entry).replace("\\", "/"), "sha256": sha256.hexdigest()})
+    return digest(entries)
 
 
 def profile_benchmark_digest(profile: ContextProfileV1) -> str:
@@ -72,6 +182,16 @@ class BuildQualification:
     recall_dataset_digest: str | None
     data_plane_case_generator_digest: str | None
     manifest_digest: str | None
+    locked_environment_digest: str | None
+    python_implementation: str | None
+    python_version: str | None
+    python_abi: str | None
+    python_executable_digest: str | None
+    dependency_versions: dict[str, str]
+    dependency_artifact_digests: dict[str, str]
+    sqlite_version: str | None
+    package_import_root_digest: str | None
+    bytecode_policy: str | None
 
 
 def qualify_runtime_build(
@@ -80,15 +200,43 @@ def qualify_runtime_build(
     *,
     expected_version: str,
     package_tree_digest: str,
+    runtime_environment: RuntimeEnvironmentV1 | RuntimeEnvironmentV2 | None = None,
 ) -> BuildQualification:
     """Verify signed build identity against the bytes of this imported package."""
 
     if envelope is None or not keys:
         return BuildQualification(
-            False, ("runtime_build_manifest_missing",), None, None, None, None
+            valid=False,
+            failures=("runtime_build_manifest_missing",),
+            source_revision=None,
+            recall_dataset_digest=None,
+            data_plane_case_generator_digest=None,
+            manifest_digest=None,
+            locked_environment_digest=None,
+            python_implementation=None,
+            python_version=None,
+            python_abi=None,
+            python_executable_digest=None,
+            dependency_versions={},
+            dependency_artifact_digests={},
+            sqlite_version=None,
+            package_import_root_digest=None,
+            bytecode_policy=None,
         )
     try:
-        manifest = RuntimeBuildManifestV1.model_validate(verify(envelope, keys))
+        payload = verify(envelope, keys)
+        if payload.get("schema_version") == "ContextRuntimeBuildManifestV3":
+            manifest: RuntimeBuildManifestV1 | RuntimeBuildManifestV2 | RuntimeBuildManifestV3 = (
+                RuntimeBuildManifestV3.model_validate(payload)
+            )
+        elif payload.get("schema_version") == "ContextRuntimeBuildManifestV2":
+            manifest = RuntimeBuildManifestV2.model_validate(payload)
+        else:
+            manifest = RuntimeBuildManifestV1.model_validate(payload)
+        if isinstance(manifest, (RuntimeBuildManifestV2, RuntimeBuildManifestV3)) and (
+            payload != manifest.model_dump(mode="json")
+        ):
+            raise ValueError("runtime build manifest is not exact")
     except (ValueError, TypeError) as exc:
         raise ContextFault("context_runtime_build_manifest_invalid") from exc
     failures: list[str] = []
@@ -96,13 +244,46 @@ def qualify_runtime_build(
         failures.append("runtime_version_mismatch")
     if manifest.package_tree_digest != package_tree_digest:
         failures.append("runtime_package_tree_mismatch")
+    locked_environment_digest: str | None = None
+    environment: RuntimeEnvironmentV1 | RuntimeEnvironmentV2 | None = None
+    if isinstance(manifest, RuntimeBuildManifestV3):
+        environment = manifest.runtime_environment
+        locked_environment_digest = manifest.locked_environment_digest
+        if runtime_environment is None:
+            failures.append("runtime_environment_unavailable")
+        elif runtime_environment != environment:
+            failures.append("runtime_environment_mismatch")
+        elif digest(runtime_environment) != locked_environment_digest:
+            failures.append("runtime_environment_digest_mismatch")
+    elif isinstance(manifest, RuntimeBuildManifestV2):
+        environment = manifest.runtime_environment
+        locked_environment_digest = manifest.locked_environment_digest
+        failures.append("runtime_environment_contract_legacy")
+    else:
+        failures.append("runtime_environment_unbound")
     return BuildQualification(
-        not failures,
-        tuple(failures),
-        manifest.source_revision,
-        manifest.recall_dataset_digest,
-        manifest.data_plane_case_generator_digest,
-        digest(envelope),
+        valid=not failures,
+        failures=tuple(failures),
+        source_revision=manifest.source_revision,
+        recall_dataset_digest=manifest.recall_dataset_digest,
+        data_plane_case_generator_digest=manifest.data_plane_case_generator_digest,
+        manifest_digest=digest(envelope),
+        locked_environment_digest=locked_environment_digest,
+        python_implementation=(environment.python_implementation if environment else None),
+        python_version=(environment.python_version if environment else None),
+        python_abi=(environment.python_abi if environment else None),
+        python_executable_digest=(
+            environment.python_executable_digest if environment else None
+        ),
+        dependency_versions=(dict(environment.dependency_versions) if environment else {}),
+        dependency_artifact_digests=(
+            dict(environment.dependency_artifact_digests) if environment else {}
+        ),
+        sqlite_version=(environment.sqlite_version if environment else None),
+        package_import_root_digest=(
+            environment.package_import_root_digest if environment else None
+        ),
+        bytecode_policy=(environment.bytecode_policy if environment else None),
     )
 
 
@@ -138,6 +319,7 @@ def qualify_scale_receipt(
         and receipt.storage_version == profile.storage_version
         and receipt.configured_max_records == profile.max_records
         and receipt.configured_max_indexed_bytes == profile.max_indexed_bytes
+        and receipt.target_concurrency == profile.max_concurrent_cycles
     )
     if not exact:
         raise ContextFault("context_benchmark_profile_mismatch")
@@ -294,5 +476,6 @@ __all__ = [
     "qualify_runtime_build",
     "qualify_scale_receipt",
     "run_namespace_isolation",
+    "runtime_environment_identity",
     "runtime_package_tree_digest",
 ]
