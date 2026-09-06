@@ -21,7 +21,7 @@ from .contracts import (
     canonical,
     digest,
 )
-from .crypto import ContextFault, EnvelopeCipher, ReceiptSigner, verify
+from .crypto import ContextFault, EnvelopeCipher, ReceiptSigner, verify, require_disjoint_keys
 from .policy import NOTICE, filter_text, token_bound, visible, words, writable
 from .storage_v2 import SegmentStoreV2
 
@@ -45,6 +45,7 @@ class ContextEngine:
             raise ContextFault("context_index_version_mismatch")
         if not authority_keys or not proof_keys:
             raise ContextFault("context_verification_keys_required")
+        require_disjoint_keys(authority_keys, proof_keys, {signer.key_id: signer.key.public_key()})
         self.profile, self.cipher, self.signer = profile, cipher, signer
         self.authority_keys, self.proof_keys, self.clock = authority_keys, proof_keys, clock
         self.store = SegmentStoreV2(path, profile.resident_cache_bytes)

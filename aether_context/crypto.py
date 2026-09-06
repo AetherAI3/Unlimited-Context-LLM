@@ -13,7 +13,7 @@ from cryptography.exceptions import InvalidSignature, InvalidTag
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives import hashes, serialization
 
 from .contracts import SignedV1, canonical
 
@@ -35,6 +35,19 @@ class ReceiptSigner:
             "key_id": self.key_id,
             "signature": base64.b64encode(raw).decode("ascii"),
         }
+
+
+def require_disjoint_keys(*groups: dict[str, Ed25519PublicKey]) -> None:
+    """Distinct key IDs do not create independent authority when keys repeat."""
+    seen: set[bytes] = set()
+    for group in groups:
+        current = {
+            key.public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+            for key in group.values()
+        }
+        if current & seen:
+            raise ContextFault("context_verification_key_overlap")
+        seen |= current
 
 
 def verify(envelope: dict, keys: dict[str, Ed25519PublicKey]) -> dict:

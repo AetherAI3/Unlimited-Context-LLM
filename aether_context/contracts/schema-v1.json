@@ -855,6 +855,11 @@
         "title": "Proof Receipt",
         "type": "string"
       },
+      "memory_candidate_digest": {
+        "pattern": "^[0-9a-f]{64}$",
+        "title": "Memory Candidate Digest",
+        "type": "string"
+      },
       "promotion_set_root": {
         "pattern": "^[0-9a-f]{64}$",
         "title": "Promotion Set Root",
@@ -899,6 +904,7 @@
       "ci_receipt",
       "nano_receipt",
       "proof_receipt",
+      "memory_candidate_digest",
       "promotion_set_root",
       "expires_at"
     ],

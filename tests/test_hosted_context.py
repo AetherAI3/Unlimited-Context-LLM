@@ -17,7 +17,13 @@ from aether_context.contracts import (
     canonical,
     digest,
 )
-from aether_context.crypto import ContextFault, EnvelopeCipher, ReceiptSigner, verify
+from aether_context.crypto import (
+    ContextFault,
+    EnvelopeCipher,
+    ReceiptSigner,
+    verify,
+    require_disjoint_keys,
+)
 from aether_context.engine import ContextEngine
 
 
@@ -145,6 +151,9 @@ def test_closed_canonical_contracts():
         )
     with pytest.raises(ValueError):
         ContextProfileV1(name="hosted-v1", index_version=sqlite3.sqlite_version)
+    key = Ed25519PrivateKey.generate().public_key()
+    with pytest.raises(ContextFault, match="verification_key_overlap"):
+        require_disjoint_keys({"gateway": key}, {"different-key-id": key})
 
 
 def test_pre_turn_retrieval_is_exact_lane_and_project(hosted):
@@ -295,6 +304,7 @@ def test_seal_requires_independent_exact_proof_and_stops_writes(hosted):
         "pr_head_sha": "b" * 40,
         "pr_url": "https://github.com/org/repo/pull/1",
         "ci_receipt": digest("ci"),
+        "memory_candidate_digest": digest("normalized-memory-commit-request"),
         "nano_receipt": digest("nano"),
         "proof_receipt": digest("proof"),
         "promotion_set_root": digest([]),

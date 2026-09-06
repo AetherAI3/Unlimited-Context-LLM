@@ -5,6 +5,8 @@ import json
 import os
 import socket
 import stat
+from pathlib import Path
+from tempfile import TemporaryDirectory
 import pytest
 from aether_context.service import ContextService
 from aether_context.crypto import ContextFault
@@ -14,7 +16,8 @@ from test_hosted_context import hosted  # noqa: F401
 @pytest.mark.skipif(os.name == "nt", reason="production daemon uses Unix-domain sockets")
 def test_live_socket_ownership_crash_rebind_and_safe_errors(hosted, tmp_path):  # noqa: F811
     service = ContextService(hosted[0])
-    path = tmp_path / "context.sock"
+    socket_root = TemporaryDirectory(prefix="ctx-", dir="/tmp")
+    path = Path(socket_root.name) / "context.sock"
 
     async def exercise():
         # A stale socket left by SIGKILL may be replaced; a live one may not.
@@ -56,4 +59,7 @@ def test_live_socket_ownership_crash_rebind_and_safe_errors(hosted, tmp_path):  
                 await serving
         assert not path.exists()
 
-    asyncio.run(exercise())
+    try:
+        asyncio.run(exercise())
+    finally:
+        socket_root.cleanup()

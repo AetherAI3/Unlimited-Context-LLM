@@ -195,6 +195,7 @@ class ClosureProofV1(Closed):
     ci_receipt: Digest
     nano_receipt: Digest
     proof_receipt: Digest
+    memory_candidate_digest: Digest
     promotion_set_root: Digest
     accepted_record_ids: list[Ident] = Field(default_factory=list, max_length=1000)
     rejected_record_ids: list[Ident] = Field(default_factory=list, max_length=1000)
