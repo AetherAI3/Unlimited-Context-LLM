@@ -13,6 +13,7 @@ That is not a hypothetical: the sibling `aether-agent` launcher shipped pinned t
 npm counterpart had moved past, and installed an older agent than the documented route did.
 These tests are the cheap detector.
 """
+
 from __future__ import annotations
 
 import json
@@ -98,8 +99,14 @@ def test_the_build_configuration_declares_only_aether_context() -> None:
     config = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
 
     # Assert
-    assert config["tool"]["setuptools"]["packages"] == ["aether_context"]
-    assert config["project"]["scripts"] == {"aether-context": "aether_context.cli:main"}
+    assert config["tool"]["setuptools"]["packages"]["find"]["include"] == [
+        "aether_context",
+        "aether_context.*",
+    ]
+    assert config["project"]["scripts"] == {
+        "aether-context": "aether_context.cli:main",
+        "aether-contextd": "aether_context.service:main",
+    }
 
 
 @pytest.mark.skipif(DIST is None, reason="aether-context is not installed in this environment")
@@ -110,7 +117,10 @@ def test_the_distribution_declares_only_its_own_console_script() -> None:
     installed = {entry.name: entry.value for entry in DIST.entry_points}
 
     # Assert
-    assert installed == {"aether-context": "aether_context.cli:main"}
+    assert installed == {
+        "aether-context": "aether_context.cli:main",
+        "aether-contextd": "aether_context.service:main",
+    }
 
 
 # --- the launcher's own contract ---------------------------------------------
@@ -138,7 +148,9 @@ def test_launcher_pins_the_matching_pypi_release() -> None:
 def test_launcher_minimum_python_matches_requires_python() -> None:
     """A launcher that accepts an interpreter the package rejects fails after the install."""
     # Arrange
-    floor = re.search(r'requires-python\s*=\s*">=(\d+)\.(\d+)', PYPROJECT.read_text(encoding="utf-8"))
+    floor = re.search(
+        r'requires-python\s*=\s*">=(\d+)\.(\d+)', PYPROJECT.read_text(encoding="utf-8")
+    )
     assert floor is not None
     expected = [int(floor.group(1)), int(floor.group(2))]
 

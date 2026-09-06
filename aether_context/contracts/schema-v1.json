@@ -1,0 +1,908 @@
+{
+  "NamespaceV1": {
+    "additionalProperties": false,
+    "properties": {
+      "owner_id": {
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+        "title": "Owner Id",
+        "type": "string"
+      },
+      "project_id": {
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+        "title": "Project Id",
+        "type": "string"
+      },
+      "objective_id": {
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+        "title": "Objective Id",
+        "type": "string"
+      },
+      "context_cycle_id": {
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+        "title": "Context Cycle Id",
+        "type": "string"
+      }
+    },
+    "required": [
+      "owner_id",
+      "project_id",
+      "objective_id",
+      "context_cycle_id"
+    ],
+    "title": "NamespaceV1",
+    "type": "object"
+  },
+  "ContextRequestV1": {
+    "additionalProperties": false,
+    "properties": {
+      "schema_version": {
+        "const": "ContextRequestV1",
+        "default": "ContextRequestV1",
+        "title": "Schema Version",
+        "type": "string"
+      },
+      "mode": {
+        "default": "required",
+        "enum": [
+          "required",
+          "preferred",
+          "disabled"
+        ],
+        "title": "Mode",
+        "type": "string"
+      },
+      "pool_gb": {
+        "default": 1,
+        "maximum": 32,
+        "minimum": 1,
+        "title": "Pool Gb",
+        "type": "integer"
+      },
+      "captain_mode": {
+        "default": "durable_handoff",
+        "enum": [
+          "durable_handoff",
+          "interactive_checkpoint",
+          "interactive_required"
+        ],
+        "title": "Captain Mode",
+        "type": "string"
+      },
+      "retention_class": {
+        "default": "ephemeral",
+        "enum": [
+          "ephemeral",
+          "audit"
+        ],
+        "title": "Retention Class",
+        "type": "string"
+      },
+      "resume_context_cycle_id": {
+        "anyOf": [
+          {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Resume Context Cycle Id"
+      },
+      "promotion_mode": {
+        "default": "verified_only",
+        "enum": [
+          "verified_only",
+          "disabled"
+        ],
+        "title": "Promotion Mode",
+        "type": "string"
+      }
+    },
+    "title": "ContextRequestV1",
+    "type": "object"
+  },
+  "ContextProfileV1": {
+    "additionalProperties": false,
+    "properties": {
+      "schema_version": {
+        "const": "ContextProfileV1",
+        "default": "ContextProfileV1",
+        "title": "Schema Version",
+        "type": "string"
+      },
+      "name": {
+        "default": "bounded-canary/v1",
+        "enum": [
+          "bounded-canary/v1",
+          "hosted-v1"
+        ],
+        "title": "Name",
+        "type": "string"
+      },
+      "index_implementation": {
+        "const": "sqlite-hmac-inverted/v1",
+        "default": "sqlite-hmac-inverted/v1",
+        "title": "Index Implementation",
+        "type": "string"
+      },
+      "index_version": {
+        "maxLength": 40,
+        "minLength": 3,
+        "title": "Index Version",
+        "type": "string"
+      },
+      "embedding_version": {
+        "const": "none-lexical/v1",
+        "default": "none-lexical/v1",
+        "title": "Embedding Version",
+        "type": "string"
+      },
+      "storage_version": {
+        "const": "sqlite-wal-aes256gcm/v2",
+        "default": "sqlite-wal-aes256gcm/v2",
+        "title": "Storage Version",
+        "type": "string"
+      },
+      "max_records": {
+        "default": 10000,
+        "maximum": 1000000,
+        "minimum": 1,
+        "title": "Max Records",
+        "type": "integer"
+      },
+      "max_indexed_bytes": {
+        "default": 64000000,
+        "maximum": 32000000000,
+        "minimum": 1024,
+        "title": "Max Indexed Bytes",
+        "type": "integer"
+      },
+      "max_record_bytes": {
+        "default": 32768,
+        "maximum": 262144,
+        "minimum": 256,
+        "title": "Max Record Bytes",
+        "type": "integer"
+      },
+      "max_capsule_tokens": {
+        "default": 4096,
+        "maximum": 65536,
+        "minimum": 128,
+        "title": "Max Capsule Tokens",
+        "type": "integer"
+      },
+      "max_candidates": {
+        "default": 256,
+        "maximum": 4096,
+        "minimum": 1,
+        "title": "Max Candidates",
+        "type": "integer"
+      },
+      "resident_cache_bytes": {
+        "default": 8388608,
+        "maximum": 268435456,
+        "minimum": 1048576,
+        "title": "Resident Cache Bytes",
+        "type": "integer"
+      },
+      "disk_free_floor": {
+        "default": 268435456,
+        "minimum": 0,
+        "title": "Disk Free Floor",
+        "type": "integer"
+      },
+      "retention_seconds": {
+        "default": 86400,
+        "maximum": 604800,
+        "minimum": 60,
+        "title": "Retention Seconds",
+        "type": "integer"
+      },
+      "max_checkpoint_bytes": {
+        "default": 64000000,
+        "maximum": 128000000,
+        "minimum": 1024,
+        "title": "Max Checkpoint Bytes",
+        "type": "integer"
+      },
+      "max_concurrent_cycles": {
+        "default": 4,
+        "maximum": 64,
+        "minimum": 1,
+        "title": "Max Concurrent Cycles",
+        "type": "integer"
+      },
+      "max_snapshot_bytes": {
+        "default": 8000000,
+        "maximum": 16000000,
+        "minimum": 1024,
+        "title": "Max Snapshot Bytes",
+        "type": "integer"
+      },
+      "max_operations_per_cycle": {
+        "default": 20000,
+        "maximum": 2000000,
+        "minimum": 16,
+        "title": "Max Operations Per Cycle",
+        "type": "integer"
+      },
+      "max_calls_per_minute": {
+        "default": 600,
+        "maximum": 6000,
+        "minimum": 10,
+        "title": "Max Calls Per Minute",
+        "type": "integer"
+      },
+      "search_slo_ms": {
+        "default": 500,
+        "maximum": 10000,
+        "minimum": 1,
+        "title": "Search Slo Ms",
+        "type": "integer"
+      },
+      "rebuild_slo_seconds": {
+        "default": 300,
+        "maximum": 86400,
+        "minimum": 1,
+        "title": "Rebuild Slo Seconds",
+        "type": "integer"
+      },
+      "benchmark_receipt": {
+        "anyOf": [
+          {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Benchmark Receipt"
+      }
+    },
+    "required": [
+      "index_version"
+    ],
+    "title": "ContextProfileV1",
+    "type": "object"
+  },
+  "ContextBindingV1": {
+    "$defs": {
+      "NamespaceV1": {
+        "additionalProperties": false,
+        "properties": {
+          "owner_id": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+            "title": "Owner Id",
+            "type": "string"
+          },
+          "project_id": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+            "title": "Project Id",
+            "type": "string"
+          },
+          "objective_id": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+            "title": "Objective Id",
+            "type": "string"
+          },
+          "context_cycle_id": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+            "title": "Context Cycle Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "owner_id",
+          "project_id",
+          "objective_id",
+          "context_cycle_id"
+        ],
+        "title": "NamespaceV1",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "properties": {
+      "schema_version": {
+        "const": "ContextBindingV1",
+        "default": "ContextBindingV1",
+        "title": "Schema Version",
+        "type": "string"
+      },
+      "namespace": {
+        "$ref": "#/$defs/NamespaceV1"
+      },
+      "context_bucket_id": {
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+        "title": "Context Bucket Id",
+        "type": "string"
+      },
+      "repository_id": {
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+        "title": "Repository Id",
+        "type": "string"
+      },
+      "repo_main_sha": {
+        "pattern": "^[0-9a-f]{40}$",
+        "title": "Repo Main Sha",
+        "type": "string"
+      },
+      "project_graph_id": {
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+        "title": "Project Graph Id",
+        "type": "string"
+      },
+      "graph_revision": {
+        "minimum": 1,
+        "title": "Graph Revision",
+        "type": "integer"
+      },
+      "graph_checksum": {
+        "pattern": "^[0-9a-f]{64}$",
+        "title": "Graph Checksum",
+        "type": "string"
+      },
+      "plan_digest": {
+        "pattern": "^[0-9a-f]{64}$",
+        "title": "Plan Digest",
+        "type": "string"
+      },
+      "execution_profile_digest": {
+        "pattern": "^[0-9a-f]{64}$",
+        "title": "Execution Profile Digest",
+        "type": "string"
+      },
+      "shared_ir_digest": {
+        "pattern": "^[0-9a-f]{64}$",
+        "title": "Shared Ir Digest",
+        "type": "string"
+      },
+      "authorization_receipt_ref": {
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+        "title": "Authorization Receipt Ref",
+        "type": "string"
+      },
+      "authorization_digest": {
+        "pattern": "^[0-9a-f]{64}$",
+        "title": "Authorization Digest",
+        "type": "string"
+      },
+      "policy_digest": {
+        "pattern": "^[0-9a-f]{64}$",
+        "title": "Policy Digest",
+        "type": "string"
+      },
+      "redaction_digest": {
+        "pattern": "^[0-9a-f]{64}$",
+        "title": "Redaction Digest",
+        "type": "string"
+      },
+      "profile_digest": {
+        "pattern": "^[0-9a-f]{64}$",
+        "title": "Profile Digest",
+        "type": "string"
+      },
+      "captain_binding_id": {
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+        "title": "Captain Binding Id",
+        "type": "string"
+      },
+      "created_at": {
+        "minimum": 0,
+        "title": "Created At",
+        "type": "integer"
+      },
+      "expires_at": {
+        "minimum": 0,
+        "title": "Expires At",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "namespace",
+      "context_bucket_id",
+      "repository_id",
+      "repo_main_sha",
+      "project_graph_id",
+      "graph_revision",
+      "graph_checksum",
+      "plan_digest",
+      "execution_profile_digest",
+      "shared_ir_digest",
+      "authorization_receipt_ref",
+      "authorization_digest",
+      "policy_digest",
+      "redaction_digest",
+      "profile_digest",
+      "captain_binding_id",
+      "created_at",
+      "expires_at"
+    ],
+    "title": "ContextBindingV1",
+    "type": "object"
+  },
+  "CapabilityV1": {
+    "$defs": {
+      "NamespaceV1": {
+        "additionalProperties": false,
+        "properties": {
+          "owner_id": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+            "title": "Owner Id",
+            "type": "string"
+          },
+          "project_id": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+            "title": "Project Id",
+            "type": "string"
+          },
+          "objective_id": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+            "title": "Objective Id",
+            "type": "string"
+          },
+          "context_cycle_id": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+            "title": "Context Cycle Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "owner_id",
+          "project_id",
+          "objective_id",
+          "context_cycle_id"
+        ],
+        "title": "NamespaceV1",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "properties": {
+      "schema_version": {
+        "const": "ContextCapabilityV1",
+        "default": "ContextCapabilityV1",
+        "title": "Schema Version",
+        "type": "string"
+      },
+      "namespace": {
+        "$ref": "#/$defs/NamespaceV1"
+      },
+      "principal_id": {
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+        "title": "Principal Id",
+        "type": "string"
+      },
+      "lane_id": {
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+        "title": "Lane Id",
+        "type": "string"
+      },
+      "task_id": {
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+        "title": "Task Id",
+        "type": "string"
+      },
+      "role": {
+        "enum": [
+          "worker",
+          "reviewer",
+          "coordinator",
+          "verifier",
+          "captain",
+          "durability"
+        ],
+        "title": "Role",
+        "type": "string"
+      },
+      "operations": {
+        "items": {
+          "enum": [
+            "append",
+            "retrieve",
+            "checkpoint",
+            "seal",
+            "status",
+            "hydrate",
+            "expire"
+          ],
+          "type": "string"
+        },
+        "maxItems": 7,
+        "minItems": 1,
+        "title": "Operations",
+        "type": "array"
+      },
+      "source_class": {
+        "enum": [
+          "user_intent",
+          "project_memory_verified",
+          "repository_verified",
+          "tool_observation",
+          "ci_verified",
+          "worker_summary",
+          "model_note",
+          "legacy_untrusted"
+        ],
+        "title": "Source Class",
+        "type": "string"
+      },
+      "binding_digest": {
+        "pattern": "^[0-9a-f]{64}$",
+        "title": "Binding Digest",
+        "type": "string"
+      },
+      "policy_digest": {
+        "pattern": "^[0-9a-f]{64}$",
+        "title": "Policy Digest",
+        "type": "string"
+      },
+      "profile_digest": {
+        "pattern": "^[0-9a-f]{64}$",
+        "title": "Profile Digest",
+        "type": "string"
+      },
+      "fence": {
+        "minimum": 1,
+        "title": "Fence",
+        "type": "integer"
+      },
+      "expires_at": {
+        "minimum": 0,
+        "title": "Expires At",
+        "type": "integer"
+      },
+      "max_bytes": {
+        "maximum": 262144,
+        "minimum": 1,
+        "title": "Max Bytes",
+        "type": "integer"
+      },
+      "max_tokens": {
+        "maximum": 65536,
+        "minimum": 1,
+        "title": "Max Tokens",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "namespace",
+      "principal_id",
+      "lane_id",
+      "task_id",
+      "role",
+      "operations",
+      "source_class",
+      "binding_digest",
+      "policy_digest",
+      "profile_digest",
+      "fence",
+      "expires_at",
+      "max_bytes",
+      "max_tokens"
+    ],
+    "title": "CapabilityV1",
+    "type": "object"
+  },
+  "SignedV1": {
+    "additionalProperties": false,
+    "properties": {
+      "payload": {
+        "additionalProperties": true,
+        "title": "Payload",
+        "type": "object"
+      },
+      "key_id": {
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+        "title": "Key Id",
+        "type": "string"
+      },
+      "signature": {
+        "maxLength": 128,
+        "minLength": 64,
+        "title": "Signature",
+        "type": "string"
+      }
+    },
+    "required": [
+      "payload",
+      "key_id",
+      "signature"
+    ],
+    "title": "SignedV1",
+    "type": "object"
+  },
+  "AppendRequestV1": {
+    "additionalProperties": false,
+    "properties": {
+      "idempotency_key": {
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+        "title": "Idempotency Key",
+        "type": "string"
+      },
+      "text": {
+        "maxLength": 262144,
+        "minLength": 1,
+        "title": "Text",
+        "type": "string"
+      },
+      "plane": {
+        "default": "P3",
+        "enum": [
+          "P2",
+          "P3",
+          "P4"
+        ],
+        "title": "Plane",
+        "type": "string"
+      },
+      "content_type": {
+        "default": "summary",
+        "enum": [
+          "summary",
+          "decision",
+          "artifact_ref",
+          "tool_evidence",
+          "candidate_fact"
+        ],
+        "title": "Content Type",
+        "type": "string"
+      },
+      "action_ref": {
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+        "title": "Action Ref",
+        "type": "string"
+      },
+      "evidence_refs": {
+        "items": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "maxItems": 32,
+        "title": "Evidence Refs",
+        "type": "array"
+      },
+      "supersedes": {
+        "anyOf": [
+          {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Supersedes"
+      }
+    },
+    "required": [
+      "idempotency_key",
+      "text",
+      "action_ref"
+    ],
+    "title": "AppendRequestV1",
+    "type": "object"
+  },
+  "RetrieveRequestV1": {
+    "additionalProperties": false,
+    "properties": {
+      "turn_id": {
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+        "title": "Turn Id",
+        "type": "string"
+      },
+      "query": {
+        "maxLength": 8192,
+        "title": "Query",
+        "type": "string"
+      },
+      "native_window": {
+        "maximum": 10000000,
+        "minimum": 256,
+        "title": "Native Window",
+        "type": "integer"
+      },
+      "remaining_prompt_budget": {
+        "maximum": 10000000,
+        "minimum": 0,
+        "title": "Remaining Prompt Budget",
+        "type": "integer"
+      },
+      "used_prompt_tokens": {
+        "default": 0,
+        "maximum": 10000000,
+        "minimum": 0,
+        "title": "Used Prompt Tokens",
+        "type": "integer"
+      },
+      "event_cursor": {
+        "anyOf": [
+          {
+            "minimum": 0,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Event Cursor"
+      }
+    },
+    "required": [
+      "turn_id",
+      "query",
+      "native_window",
+      "remaining_prompt_budget"
+    ],
+    "title": "RetrieveRequestV1",
+    "type": "object"
+  },
+  "ClosureProofV1": {
+    "$defs": {
+      "NamespaceV1": {
+        "additionalProperties": false,
+        "properties": {
+          "owner_id": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+            "title": "Owner Id",
+            "type": "string"
+          },
+          "project_id": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+            "title": "Project Id",
+            "type": "string"
+          },
+          "objective_id": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+            "title": "Objective Id",
+            "type": "string"
+          },
+          "context_cycle_id": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+            "title": "Context Cycle Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "owner_id",
+          "project_id",
+          "objective_id",
+          "context_cycle_id"
+        ],
+        "title": "NamespaceV1",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "properties": {
+      "schema_version": {
+        "const": "ContextClosureProofV1",
+        "default": "ContextClosureProofV1",
+        "title": "Schema Version",
+        "type": "string"
+      },
+      "namespace": {
+        "$ref": "#/$defs/NamespaceV1"
+      },
+      "binding_digest": {
+        "pattern": "^[0-9a-f]{64}$",
+        "title": "Binding Digest",
+        "type": "string"
+      },
+      "final_root": {
+        "pattern": "^[0-9a-f]{64}$",
+        "title": "Final Root",
+        "type": "string"
+      },
+      "final_cursor": {
+        "minimum": 0,
+        "title": "Final Cursor",
+        "type": "integer"
+      },
+      "execution_dag_digest": {
+        "pattern": "^[0-9a-f]{64}$",
+        "title": "Execution Dag Digest",
+        "type": "string"
+      },
+      "plan_ir_digest": {
+        "pattern": "^[0-9a-f]{64}$",
+        "title": "Plan Ir Digest",
+        "type": "string"
+      },
+      "shared_ir_digest": {
+        "pattern": "^[0-9a-f]{64}$",
+        "title": "Shared Ir Digest",
+        "type": "string"
+      },
+      "repo_main_sha": {
+        "pattern": "^[0-9a-f]{40}$",
+        "title": "Repo Main Sha",
+        "type": "string"
+      },
+      "git_head_sha": {
+        "pattern": "^[0-9a-f]{40}$",
+        "title": "Git Head Sha",
+        "type": "string"
+      },
+      "pr_head_sha": {
+        "pattern": "^[0-9a-f]{40}$",
+        "title": "Pr Head Sha",
+        "type": "string"
+      },
+      "pr_url": {
+        "pattern": "^https://[^/?#]+/[^/?#]+/[^/?#]+/pull/[1-9][0-9]*$",
+        "title": "Pr Url",
+        "type": "string"
+      },
+      "ci_receipt": {
+        "pattern": "^[0-9a-f]{64}$",
+        "title": "Ci Receipt",
+        "type": "string"
+      },
+      "nano_receipt": {
+        "pattern": "^[0-9a-f]{64}$",
+        "title": "Nano Receipt",
+        "type": "string"
+      },
+      "proof_receipt": {
+        "pattern": "^[0-9a-f]{64}$",
+        "title": "Proof Receipt",
+        "type": "string"
+      },
+      "promotion_set_root": {
+        "pattern": "^[0-9a-f]{64}$",
+        "title": "Promotion Set Root",
+        "type": "string"
+      },
+      "accepted_record_ids": {
+        "items": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+          "type": "string"
+        },
+        "maxItems": 1000,
+        "title": "Accepted Record Ids",
+        "type": "array"
+      },
+      "rejected_record_ids": {
+        "items": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+          "type": "string"
+        },
+        "maxItems": 1000,
+        "title": "Rejected Record Ids",
+        "type": "array"
+      },
+      "expires_at": {
+        "minimum": 0,
+        "title": "Expires At",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "namespace",
+      "binding_digest",
+      "final_root",
+      "final_cursor",
+      "execution_dag_digest",
+      "plan_ir_digest",
+      "shared_ir_digest",
+      "repo_main_sha",
+      "git_head_sha",
+      "pr_head_sha",
+      "pr_url",
+      "ci_receipt",
+      "nano_receipt",
+      "proof_receipt",
+      "promotion_set_root",
+      "expires_at"
+    ],
+    "title": "ClosureProofV1",
+    "type": "object"
+  }
+}
