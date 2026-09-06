@@ -119,6 +119,7 @@ class ContextBindingV1(Closed):
     redaction_digest: Digest
     profile_digest: Digest
     captain_binding_id: Ident
+    retention_class: Literal["ephemeral", "audit"] = "ephemeral"
     created_at: int = Field(ge=0)
     expires_at: int = Field(ge=0)
 
@@ -131,8 +132,17 @@ class CapabilityV1(Closed):
     task_id: Ident
     role: Literal["worker", "reviewer", "coordinator", "verifier", "captain", "durability"]
     operations: list[
-        Literal["append", "retrieve", "checkpoint", "seal", "status", "hydrate", "expire"]
-    ] = Field(min_length=1, max_length=7)
+        Literal[
+            "append",
+            "retrieve",
+            "checkpoint",
+            "seal",
+            "status",
+            "hydrate",
+            "expire",
+            "retention",
+        ]
+    ] = Field(min_length=1, max_length=8)
     source_class: Literal[
         "user_intent",
         "project_memory_verified",
@@ -158,6 +168,80 @@ class SignedV1(Closed):
     signature: str = Field(min_length=64, max_length=128)
 
 
+class PromotionCandidateV1(Closed):
+    record_id: Ident
+    content_digest: Digest
+    evidence_refs: list[Digest] = Field(min_length=1, max_length=32)
+
+
+class ContextCheckpointReceiptV1(Closed):
+    schema_version: Literal["ContextCheckpointReceiptV1"] = "ContextCheckpointReceiptV1"
+    namespace: NamespaceV1
+    checkpoint_number: int = Field(ge=1)
+    cursor: int = Field(ge=0)
+    segment_chain_root: Digest
+    manifest_checksum: Digest
+    durability: Literal["local"]
+    bytes: int = Field(ge=1)
+    records: int = Field(ge=0)
+    policy_digest: Digest
+    key_ref: Ident | None = None
+    key_provider: str | None = Field(default=None, min_length=1, max_length=100)
+    key_version: Ident | None = None
+
+    @model_validator(mode="after")
+    def key_reference_pair(self) -> "ContextCheckpointReceiptV1":
+        if len({item is None for item in (self.key_ref, self.key_provider, self.key_version)}) != 1:
+            raise ValueError("checkpoint key reference, provider and version must be paired")
+        return self
+
+
+class ContextHydrateReceiptV1(Closed):
+    """Host-replacement evidence bound to one exact checkpoint replay."""
+
+    schema_version: Literal["ContextHydrateReceiptV1"] = "ContextHydrateReceiptV1"
+    operation: Literal["hydrate"] = "hydrate"
+    namespace: NamespaceV1
+    context_cycle_id: Ident
+    manifest_checksum: Digest
+    checkpoint_number: int = Field(ge=1)
+    cursor: int = Field(ge=0)
+    root: Digest
+    key_ref: Ident | None = None
+    key_provider: str | None = Field(default=None, min_length=1, max_length=100)
+    key_version: Ident | None = None
+    replay_digest: Digest
+    fence: int = Field(ge=1)
+
+    @model_validator(mode="after")
+    def key_reference_pair(self) -> "ContextHydrateReceiptV1":
+        if len({item is None for item in (self.key_ref, self.key_provider, self.key_version)}) != 1:
+            raise ValueError("hydrate key reference, provider and version must be paired")
+        if self.context_cycle_id != self.namespace.context_cycle_id:
+            raise ValueError("hydrate cycle does not match namespace")
+        return self
+
+
+class ContextFreezeReceiptV1(Closed):
+    schema_version: Literal["ContextFreezeReceiptV1"] = "ContextFreezeReceiptV1"
+    context_cycle_id: Ident
+    cursor: int = Field(ge=0)
+    root: Digest
+    binding_digest: Digest
+    promotion_candidates: list[PromotionCandidateV1] = Field(
+        default_factory=list, max_length=1000
+    )
+    promotion_candidates_root: Digest
+
+    @model_validator(mode="after")
+    def candidate_root(self) -> "ContextFreezeReceiptV1":
+        if digest([item.model_dump() for item in self.promotion_candidates]) != (
+            self.promotion_candidates_root
+        ):
+            raise ValueError("promotion candidate root mismatch")
+        return self
+
+
 class AppendRequestV1(Closed):
     idempotency_key: Ident
     text: str = Field(min_length=1, max_length=262144)
@@ -177,6 +261,243 @@ class RetrieveRequestV1(Closed):
     remaining_prompt_budget: int = Field(ge=0, le=10000000)
     used_prompt_tokens: int = Field(default=0, ge=0, le=10000000)
     event_cursor: int | None = Field(default=None, ge=0)
+
+
+class RemoteDeletionReceiptV1(Closed):
+    """Independent object-store evidence for the last committed checkpoint."""
+
+    schema_version: Literal["ContextRemoteDeletionReceiptV1"] = (
+        "ContextRemoteDeletionReceiptV1"
+    )
+    namespace: NamespaceV1
+    manifest_checksum: Digest
+    object_ref_digest: Digest
+    deleted: Literal[True]
+    issued_at: int = Field(ge=0)
+    expires_at: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def short_lived(self) -> "RemoteDeletionReceiptV1":
+        if self.expires_at <= self.issued_at or self.expires_at - self.issued_at > 900:
+            raise ValueError("remote deletion evidence must be short-lived")
+        return self
+
+
+class RetentionCommandV1(Closed):
+    """Short-lived authority for an idempotent hold, release, or expiry."""
+
+    schema_version: Literal["ContextRetentionCommandV1"] = "ContextRetentionCommandV1"
+    operation: Literal["hold", "release", "expire"]
+    namespace: NamespaceV1
+    idempotency_key: Ident
+    expected_revision: int = Field(ge=1)
+    reason_code: Literal[
+        "audit_hold",
+        "legal_hold",
+        "incident_hold",
+        "hold_released",
+        "policy_expiry",
+        "operator_expiry",
+    ]
+    remote_deletion_receipt: SignedV1 | None = None
+    checkpoint_object_ref_digest: Digest | None = None
+    issued_at: int = Field(ge=0)
+    expires_at: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def operation_reason(self) -> "RetentionCommandV1":
+        allowed = {
+            "hold": {"audit_hold", "legal_hold", "incident_hold"},
+            "release": {"hold_released"},
+            "expire": {"policy_expiry", "operator_expiry"},
+        }
+        if self.reason_code not in allowed[self.operation]:
+            raise ValueError("retention reason does not match operation")
+        if self.operation == "expire":
+            if (self.remote_deletion_receipt is None) != (
+                self.checkpoint_object_ref_digest is None
+            ):
+                raise ValueError("remote deletion receipt and object reference must be paired")
+        elif (
+            self.remote_deletion_receipt is not None
+            or self.checkpoint_object_ref_digest is not None
+        ):
+            raise ValueError("remote deletion evidence applies only to expiry")
+        if self.expires_at <= self.issued_at or self.expires_at - self.issued_at > 900:
+            raise ValueError("retention authority must be short-lived")
+        return self
+
+
+class ManagedKeyProviderReceiptV1(Closed):
+    """Independent qualification for a shared managed key provider."""
+
+    schema_version: Literal["ContextManagedKeyProviderReceiptV1"] = (
+        "ContextManagedKeyProviderReceiptV1"
+    )
+    provider: str = Field(min_length=1, max_length=100)
+    key_version: Ident
+    shared_hydrate_supported: Literal[True]
+    verified_destruction_supported: Literal[True]
+    issued_at: int = Field(ge=0)
+    expires_at: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def bounded_qualification(self) -> "ManagedKeyProviderReceiptV1":
+        if self.expires_at <= self.issued_at or self.expires_at - self.issued_at > 604800:
+            raise ValueError("managed key qualification may be valid for at most seven days")
+        return self
+
+
+class KeyDestructionReceiptV1(Closed):
+    """Independent managed-KMS evidence that an exact cycle key was destroyed."""
+
+    schema_version: Literal["ContextKeyDestructionReceiptV1"] = (
+        "ContextKeyDestructionReceiptV1"
+    )
+    provider: str = Field(min_length=1, max_length=100)
+    key_ref: Ident
+    namespace_digest: Digest
+    key_version: Ident
+    destroyed: Literal[True]
+    destroyed_at: int = Field(ge=0)
+    issued_at: int = Field(ge=0)
+    expires_at: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def short_lived(self) -> "KeyDestructionReceiptV1":
+        if not self.destroyed_at <= self.issued_at < self.expires_at:
+            raise ValueError("managed key destruction time ordering is invalid")
+        if self.expires_at - self.issued_at > 900:
+            raise ValueError("managed key destruction evidence must be short-lived")
+        return self
+
+
+class RuntimeBuildManifestV1(Closed):
+    """Signed build identity for the exact installed runtime package bytes."""
+
+    schema_version: Literal["ContextRuntimeBuildManifestV1"] = (
+        "ContextRuntimeBuildManifestV1"
+    )
+    distribution: Literal["aether-context"] = "aether-context"
+    version: str = Field(min_length=1, max_length=40)
+    source_revision: Sha
+    package_tree_digest: Digest
+    wheel_digest: Digest
+    recall_dataset_digest: Digest
+    built_at: int = Field(ge=0)
+
+
+class ExecutorStabilityReceiptV1(Closed):
+    """Independent CI/executor observation bound to one measured build."""
+
+    schema_version: Literal["ContextExecutorStabilityReceiptV1"] = (
+        "ContextExecutorStabilityReceiptV1"
+    )
+    source_revision: Sha
+    profile_benchmark_digest: Digest
+    target_concurrency: int = Field(ge=1)
+    ci_receipt_digest: Digest
+    executor_stable: Literal[True]
+    started_at: int = Field(ge=0)
+    finished_at: int = Field(ge=0)
+    issued_at: int = Field(ge=0)
+    expires_at: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def ordered_observation(self) -> "ExecutorStabilityReceiptV1":
+        if not self.started_at <= self.finished_at <= self.issued_at < self.expires_at:
+            raise ValueError("executor observation ordering is invalid")
+        if self.expires_at - self.issued_at > 604800:
+            raise ValueError("executor evidence may be valid for at most seven days")
+        return self
+
+
+class DataPlaneIsolationReceiptV1(Closed):
+    """Independent randomized isolation evidence from the hosted request boundary."""
+
+    schema_version: Literal["ContextDataPlaneIsolationReceiptV1"] = (
+        "ContextDataPlaneIsolationReceiptV1"
+    )
+    source_revision: Sha
+    profile_benchmark_digest: Digest
+    boundary: Literal["hosted-data-plane/v1"] = "hosted-data-plane/v1"
+    case_generator_digest: Digest
+    cases: int = Field(ge=1_000_000)
+    unauthorized_records: int = Field(ge=0)
+    result_digest: Digest
+    started_at: int = Field(ge=0)
+    finished_at: int = Field(ge=0)
+    issued_at: int = Field(ge=0)
+    expires_at: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def ordered_observation(self) -> "DataPlaneIsolationReceiptV1":
+        if not self.started_at <= self.finished_at <= self.issued_at < self.expires_at:
+            raise ValueError("data-plane isolation observation ordering is invalid")
+        if self.expires_at - self.issued_at > 604800:
+            raise ValueError("data-plane isolation evidence may be valid for at most seven days")
+        return self
+
+
+class HostedScaleReceiptV1(Closed):
+    """Independent, measured evidence for one exact hosted profile."""
+
+    schema_version: Literal["HostedScaleReceiptV1"] = "HostedScaleReceiptV1"
+    profile_benchmark_digest: Digest
+    source_revision: Sha
+    source_tree_clean: Literal[True]
+    index_implementation: str = Field(min_length=1, max_length=100)
+    index_version: str = Field(min_length=1, max_length=100)
+    embedding_version: str = Field(min_length=1, max_length=100)
+    storage_version: str = Field(min_length=1, max_length=100)
+    configured_max_records: int = Field(ge=1)
+    configured_max_indexed_bytes: int = Field(ge=1024)
+    indexed_records: int = Field(ge=1)
+    indexed_bytes: int = Field(ge=1)
+    reachable_tokens: int = Field(ge=1)
+    resident_peak_bytes: int = Field(ge=1)
+    retrieval_samples: int = Field(ge=20)
+    target_concurrency: int = Field(ge=1)
+    retrieval_p50_ms: int = Field(ge=0)
+    retrieval_p95_ms: int = Field(ge=0)
+    retrieval_p99_ms: int = Field(ge=0)
+    checkpoint_ms: int = Field(ge=0)
+    checkpoint_receipt_digest: Digest
+    hydrate_ms: int = Field(ge=0)
+    hydrate_receipt_digest: Digest
+    rebuild_ms: int = Field(ge=0)
+    rebuild_receipt_digest: Digest
+    recall_dataset_name: str = Field(min_length=1, max_length=100)
+    recall_dataset_digest: Digest
+    recall_basis_points: int = Field(ge=0, le=10000)
+    isolation_cases: int = Field(ge=1_000_000)
+    unauthorized_records: int = Field(ge=0)
+    isolation_result_digest: Digest
+    isolation_evidence_class: Literal["predicate", "data_plane"]
+    data_plane_isolation_receipt: SignedV1 | None = None
+    executor_stable: bool
+    executor_stability_receipt: SignedV1 | None = None
+    started_at: int = Field(ge=0)
+    finished_at: int = Field(ge=0)
+    issued_at: int = Field(ge=0)
+    expires_at: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def ordered_measurements(self) -> "HostedScaleReceiptV1":
+        if not (
+            self.retrieval_p50_ms <= self.retrieval_p95_ms <= self.retrieval_p99_ms
+            and self.started_at <= self.finished_at <= self.issued_at < self.expires_at
+        ):
+            raise ValueError("scale measurement ordering is invalid")
+        if self.expires_at - self.issued_at > 604800:
+            raise ValueError("scale evidence may be valid for at most seven days")
+        if self.executor_stable != (self.executor_stability_receipt is not None):
+            raise ValueError("executor stability claim requires independent evidence")
+        if (self.isolation_evidence_class == "data_plane") != (
+            self.data_plane_isolation_receipt is not None
+        ):
+            raise ValueError("data-plane isolation claim requires independent evidence")
+        return self
 
 
 class ClosureProofV1(Closed):

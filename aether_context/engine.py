@@ -16,13 +16,19 @@ from .contracts import (
     CapabilityV1,
     ClosureProofV1,
     ContextBindingV1,
+    ContextCheckpointReceiptV1,
+    ContextFreezeReceiptV1,
+    ContextHydrateReceiptV1,
     ContextProfileV1,
+    ManagedKeyProviderReceiptV1,
+    PromotionCandidateV1,
     RetrieveRequestV1,
     canonical,
     digest,
 )
 from .crypto import ContextFault, EnvelopeCipher, ReceiptSigner, verify, require_disjoint_keys
-from .policy import NOTICE, filter_text, token_bound, visible, words, writable
+from .policy import NOTICE, filter_text, namespace_matches, token_bound, visible, words, writable
+from .scale import qualify_runtime_build, qualify_scale_receipt, runtime_package_tree_digest
 from .storage_v2 import SegmentStoreV2
 
 ZERO = "0" * 64
@@ -40,16 +46,72 @@ class ContextEngine:
         proof_keys: dict,
         *,
         clock: Callable[[], float] = time.time,
+        cycle_keys: Any = None,
+        benchmark_receipt: dict | None = None,
+        benchmark_keys: dict | None = None,
+        remote_deletion_keys: dict | None = None,
+        executor_stability_keys: dict | None = None,
+        managed_key_provider_receipt: dict | None = None,
+        key_provider_keys: dict | None = None,
+        key_destruction_keys: dict | None = None,
+        runtime_build_manifest: dict | None = None,
+        runtime_build_keys: dict | None = None,
+        data_plane_isolation_keys: dict | None = None,
     ):
         if profile.index_version != sqlite3.sqlite_version:
             raise ContextFault("context_index_version_mismatch")
         if not authority_keys or not proof_keys:
             raise ContextFault("context_verification_keys_required")
-        require_disjoint_keys(authority_keys, proof_keys, {signer.key_id: signer.key.public_key()})
+        key_groups = [authority_keys, proof_keys, {signer.key_id: signer.key.public_key()}]
+        if benchmark_keys:
+            key_groups.append(benchmark_keys)
+        if remote_deletion_keys:
+            key_groups.append(remote_deletion_keys)
+        if executor_stability_keys:
+            key_groups.append(executor_stability_keys)
+        if key_provider_keys:
+            key_groups.append(key_provider_keys)
+        if key_destruction_keys:
+            key_groups.append(key_destruction_keys)
+        if runtime_build_keys:
+            key_groups.append(runtime_build_keys)
+        if data_plane_isolation_keys:
+            key_groups.append(data_plane_isolation_keys)
+        require_disjoint_keys(*key_groups)
         self.profile, self.cipher, self.signer = profile, cipher, signer
         self.authority_keys, self.proof_keys, self.clock = authority_keys, proof_keys, clock
+        self.cycle_keys = cycle_keys
+        self.remote_deletion_keys = remote_deletion_keys or {}
+        self.key_destruction_keys = key_destruction_keys or {}
+        self.managed_key_provider_receipt = managed_key_provider_receipt
+        self.key_provider_keys = key_provider_keys or {}
+        self._benchmark_receipt = benchmark_receipt
+        self._benchmark_keys = benchmark_keys or {}
+        self._executor_stability_keys = executor_stability_keys or {}
+        self._data_plane_isolation_keys = data_plane_isolation_keys or {}
         self.store = SegmentStoreV2(path, profile.resident_cache_bytes)
+        from . import __version__
+
+        self._runtime_package_tree_digest = runtime_package_tree_digest()
+        self.build_qualification = qualify_runtime_build(
+            runtime_build_manifest,
+            runtime_build_keys or {},
+            expected_version=__version__,
+            package_tree_digest=self._runtime_package_tree_digest,
+        )
+        self.scale_qualification = self._qualify_scale()
+        from .retention import RetentionManager
+
+        self.retention_manager = RetentionManager(self)
         self._audit_startup()
+
+    def _cipher(self, cycle, namespace: dict) -> EnvelopeCipher:
+        key_ref = cycle["key_ref"]
+        if key_ref is None:
+            return self.cipher
+        if self.cycle_keys is None:
+            raise ContextFault("context_key_provider_required")
+        return self.cycle_keys.cipher(key_ref, namespace)
 
     def _audit_startup(self):
         # A bounded canary verifies its complete encrypted chain and derived
@@ -62,12 +124,14 @@ class ContextEngine:
                 if cycle["profile"] != digest(self.profile):
                     raise ContextFault("context_profile_mismatch")
                 try:
-                    binding = ContextBindingV1.model_validate_json(cycle["binding"])
-                    if digest(binding) != cycle["binding_digest"]:
+                    binding_payload = json.loads(cycle["binding"])
+                    binding = ContextBindingV1.model_validate(binding_payload)
+                    if digest(binding_payload) != cycle["binding_digest"]:
                         raise ContextFault("context_integrity_failure")
                     ns = binding.namespace.model_dump()
+                    cipher = self._cipher(cycle, ns)
                     self._snapshot(cycle, ns)
-                    authority = self.cipher.decrypt(
+                    authority = cipher.decrypt(
                         cycle["authority"], ns, self.profile.max_record_bytes
                     )
                     if digest(authority) != binding.authorization_digest:
@@ -83,7 +147,7 @@ class ContextEngine:
                             or record["previous"] != previous
                         ):
                             raise ContextFault("context_chain_corrupt")
-                        value = self._record(record, ns)
+                        value = self._record(record, ns, cipher)
                         postings = {
                             row[0]
                             for row in db.execute(
@@ -92,7 +156,7 @@ class ContextEngine:
                             )
                         }
                         if postings != {
-                            self.cipher.token(ns, word) for word in words(value["text"])
+                            cipher.token(ns, word) for word in words(value["text"])
                         }:
                             raise ContextFault("context_integrity_failure")
                         previous = record["root"]
@@ -130,25 +194,114 @@ class ContextEngine:
                         self._event(db, cycle, "context.quarantined", reason=exc.code)
             raise
 
+    def _qualify_scale(self):
+        return qualify_scale_receipt(
+            self.profile,
+            self._benchmark_receipt,
+            self._benchmark_keys,
+            now=self.now(),
+            expected_source_revision=self.build_qualification.source_revision,
+            expected_recall_dataset_digest=(
+                self.build_qualification.recall_dataset_digest
+            ),
+            executor_stability_keys=self._executor_stability_keys,
+            data_plane_isolation_keys=self._data_plane_isolation_keys,
+        )
+
+    def _managed_key_qualification(
+        self, *, expected_key_version: str | None = None
+    ) -> tuple[bool, tuple[str, ...], str | None]:
+        failures: list[str] = []
+        envelope = self.managed_key_provider_receipt
+        if self.cycle_keys is None:
+            failures.append("cycle_key_provider_missing")
+        if envelope is None or not self.key_provider_keys:
+            failures.append("managed_key_provider_receipt_missing")
+            return False, tuple(failures), None
+        try:
+            receipt = ManagedKeyProviderReceiptV1.model_validate(
+                verify(envelope, self.key_provider_keys)
+            )
+        except (ContextFault, ValueError, TypeError):
+            failures.append("managed_key_provider_receipt_invalid")
+            return False, tuple(failures), digest(envelope)
+        configured_key_version = (
+            expected_key_version
+            if expected_key_version is not None
+            else getattr(self.cycle_keys, "key_version", None)
+        )
+        if self.cycle_keys is not None and (
+            receipt.provider != getattr(self.cycle_keys, "provider", None)
+            or receipt.key_version != configured_key_version
+        ):
+            failures.append("managed_key_provider_mismatch")
+        if receipt.provider == "file-wrapped-dek/v1":
+            failures.append("file_key_provider_canary_only")
+        if not receipt.issued_at <= self.now() < receipt.expires_at:
+            failures.append("managed_key_provider_receipt_expired")
+        if not self.remote_deletion_keys:
+            failures.append("remote_deletion_keys_missing")
+        if not self.key_destruction_keys:
+            failures.append("key_destruction_keys_missing")
+        return not failures, tuple(failures), digest(envelope)
+
     def health(self) -> dict:
+        # Time-bounded benchmark and provider evidence is rechecked on every
+        # health/admission call, so a once-valid startup cache cannot outlive it.
+        self.scale_qualification = self._qualify_scale()
         free = shutil.disk_usage(self.store.path.parent).free
         with self.store.connection() as db:
             db.execute("SELECT count(*) FROM cycles").fetchone()
+        benchmark_ready = self.scale_qualification.valid
+        managed_keys_ready, managed_key_failures, managed_key_receipt_digest = (
+            self._managed_key_qualification()
+        )
+        profile_ready = self.profile.name != "hosted-v1" or (
+            benchmark_ready and managed_keys_ready and self.build_qualification.valid
+        )
         return {
             "schema_version": "ContextHealthV1",
-            "ready": free >= self.profile.disk_free_floor,
+            "ready": free >= self.profile.disk_free_floor and profile_ready,
             "profile_digest": digest(self.profile),
             "index_implementation": self.profile.index_implementation,
             "index_version": sqlite3.sqlite_version,
             "disk_free_bytes": free,
             "resident_cache_limit_bytes": self.profile.resident_cache_bytes,
-            "estimated_reachable_tokens": None,
-            "reach_claim_enabled": False,
+            "resident_process_limit_bytes": 536_870_912,
+            "resident_process_observed_peak_bytes": (
+                self.scale_qualification.resident_peak_bytes
+            ),
+            "configured_max_records": self.profile.max_records,
+            "configured_max_indexed_bytes": self.profile.max_indexed_bytes,
+            "configured_reachable_tokens_upper_bound": (
+                self.profile.max_indexed_bytes // 4
+            ),
+            "measured_indexed_records": self.scale_qualification.indexed_records,
+            "measured_indexed_bytes": self.scale_qualification.indexed_bytes,
+            "estimated_reachable_tokens": self.scale_qualification.reachable_tokens,
+            "reach_claim_enabled": benchmark_ready and profile_ready,
+            "benchmark_failures": list(self.scale_qualification.failures),
+            "benchmark_source_revision": self.scale_qualification.source_revision,
+            "benchmark_receipt_digest": self.scale_qualification.receipt_digest,
+            "benchmark_recall_dataset_digest": (
+                self.scale_qualification.recall_dataset_digest
+            ),
+            "runtime_build_ready": self.build_qualification.valid,
+            "runtime_build_failures": list(self.build_qualification.failures),
+            "runtime_build_manifest_digest": self.build_qualification.manifest_digest,
+            "runtime_source_revision": self.build_qualification.source_revision,
+            "cycle_key_provider": getattr(self.cycle_keys, "provider", None),
+            "managed_cycle_keys_ready": managed_keys_ready,
+            "managed_cycle_key_failures": list(managed_key_failures),
+            "managed_key_provider_receipt_digest": managed_key_receipt_digest,
         }
 
     def _space(self) -> None:
-        if not self.health()["ready"]:
+        health = self.health()
+        if health["disk_free_bytes"] < self.profile.disk_free_floor:
             raise ContextFault("context_disk_watermark")
+        if not health["ready"]:
+            raise ContextFault("context_hosted_gate_unready")
 
     def _cycle(self, db, cycle: str):
         row = db.execute("SELECT * FROM cycles WHERE id=?", (cycle,)).fetchone()
@@ -243,7 +396,9 @@ class ContextEngine:
             )
 
     def bind(self, signed_binding: dict, authority: dict, project_snapshot: dict) -> dict:
-        binding = ContextBindingV1.model_validate(verify(signed_binding, self.authority_keys))
+        binding_payload = verify(signed_binding, self.authority_keys)
+        binding = ContextBindingV1.model_validate(binding_payload)
+        binding_digest = digest(binding_payload)
         # Authority comes from the same authenticated control plane; its exact
         # digest is already committed by the authorization receipt.
         if digest(authority) != binding.authorization_digest:
@@ -270,23 +425,38 @@ class ContextEngine:
             if row["owner"] != ns["owner_id"] or row["project"] != ns["project_id"]:
                 raise ContextFault("context_namespace_denied")
             if row["binding"]:
-                if row["binding_digest"] != digest(binding):
+                if row["binding_digest"] != binding_digest:
                     raise ContextFault("context_binding_conflict")
             else:
                 if row["state"] != "RESERVED" or row["expires"] <= self.now():
                     raise ContextFault("context_state_conflict")
+                key_ref = self.cycle_keys.ensure(ns) if self.cycle_keys is not None else None
+                key_version = (
+                    getattr(self.cycle_keys, "key_version", None)
+                    if key_ref is not None
+                    else None
+                )
+                cipher = (
+                    self.cycle_keys.cipher(key_ref, ns) if key_ref is not None else self.cipher
+                )
                 db.execute(
-                    "UPDATE cycles SET binding=?,binding_digest=?,authority=?,snapshot=?,state='BOUND',expires=?,revision=revision+1 WHERE id=?",
+                    "UPDATE cycles SET binding=?,binding_digest=?,authority=?,snapshot=?,"
+                    "state='BOUND',expires=?,key_ref=?,key_version=?,retention_class=?,"
+                    "revision=revision+1 "
+                    "WHERE id=?",
                     (
-                        canonical(binding).decode(),
-                        digest(binding),
-                        self.cipher.encrypt(authority, ns),
-                        self.cipher.encrypt(project_snapshot, {"namespace": ns, "plane": "P1"}),
+                        canonical(binding_payload).decode(),
+                        binding_digest,
+                        cipher.encrypt(authority, ns),
+                        cipher.encrypt(project_snapshot, {"namespace": ns, "plane": "P1"}),
                         binding.expires_at,
+                        key_ref,
+                        key_version,
+                        binding.retention_class,
                         cycle,
                     ),
                 )
-                self._event(db, cycle, "context.bound", binding_digest=digest(binding))
+                self._event(db, cycle, "context.bound", binding_digest=binding_digest)
                 db.execute(
                     "UPDATE cycles SET state='HYDRATING',revision=revision+1 WHERE id=?", (cycle,)
                 )
@@ -299,7 +469,7 @@ class ContextEngine:
                 {
                     "schema_version": "ContextBindingReceiptV1",
                     "context_cycle_id": cycle,
-                    "binding_digest": digest(binding),
+                    "binding_digest": binding_digest,
                 }
             )
 
@@ -311,12 +481,15 @@ class ContextEngine:
         binding = json.loads(row["binding"])
         if digest(binding) != row["binding_digest"]:
             raise ContextFault("context_integrity_failure")
-        if cap.namespace.model_dump() != binding["namespace"]:
+        if not namespace_matches(binding["namespace"], cap.namespace.model_dump()):
             raise ContextFault("context_namespace_denied")
         if (
             operation not in cap.operations
             or cap.expires_at <= self.now()
-            or (operation not in {"expire", "status"} and cap.expires_at > binding["expires_at"])
+            or (
+                operation not in {"expire", "retention", "status"}
+                and cap.expires_at > binding["expires_at"]
+            )
         ):
             raise ContextFault("context_capability_denied")
         if (
@@ -330,14 +503,25 @@ class ContextEngine:
         ).fetchone()
         if cap.fence != row["fence"] or (lane and cap.fence != lane["fence"]):
             raise ContextFault("context_stale_fence")
-        if row["state"] in {"EXPIRED", "ABORTED", "QUARANTINED"} and operation != "status":
+        if row["state"] in {"EXPIRED", "ABORTED", "QUARANTINED"} and operation not in {
+            "status",
+            "retention",
+        }:
             raise ContextFault("context_terminal")
         return cap, row
 
     def _operation_aad(self, cycle: str, operation: str, key: str) -> dict:
         return {"cycle": cycle, "operation": operation, "key": key}
 
-    def _replay(self, db, cycle: str, operation: str, key: str, request_digest: str):
+    def _replay(
+        self,
+        db,
+        cycle: str,
+        operation: str,
+        key: str,
+        request_digest: str,
+        cipher: EnvelopeCipher,
+    ):
         row = db.execute(
             "SELECT * FROM operations WHERE cycle=? AND operation=? AND key=?",
             (cycle, operation, key),
@@ -346,14 +530,21 @@ class ContextEngine:
             return None
         if row["request_digest"] != request_digest:
             raise ContextFault("context_idempotency_conflict")
-        return self.cipher.decrypt(
+        return cipher.decrypt(
             row["result"],
             self._operation_aad(cycle, operation, key),
             self.profile.max_checkpoint_bytes * (2 if operation == "checkpoint" else 1),
         )
 
     def _remember(
-        self, db, cycle: str, operation: str, key: str, request_digest: str, result: dict
+        self,
+        db,
+        cycle: str,
+        operation: str,
+        key: str,
+        request_digest: str,
+        result: dict,
+        cipher: EnvelopeCipher,
     ):
         limit = self.profile.max_operations_per_cycle + (
             4 if operation in {"checkpoint", "seal"} else 0
@@ -363,7 +554,7 @@ class ContextEngine:
             >= limit
         ):
             raise ContextFault("context_operation_quota")
-        blob = self.cipher.encrypt(result, self._operation_aad(cycle, operation, key))
+        blob = cipher.encrypt(result, self._operation_aad(cycle, operation, key))
         db.execute(
             "INSERT INTO operations VALUES(?,?,?,?,?)",
             (cycle, operation, key, request_digest, blob),
@@ -386,12 +577,74 @@ class ContextEngine:
     def _snapshot(self, cycle, ns):
         if not cycle["snapshot"]:
             raise ContextFault("context_snapshot_required")
-        value = self.cipher.decrypt(
+        value = self._cipher(cycle, ns).decrypt(
             cycle["snapshot"], {"namespace": ns, "plane": "P1"}, self.profile.max_snapshot_bytes
         )
         if digest(value) != json.loads(cycle["binding"])["graph_checksum"]:
             raise ContextFault("context_integrity_failure")
         return value
+
+    def rebuild_index(self, capability: dict, idempotency_key: str) -> dict:
+        """Atomically rebuild one cycle's derived postings from its verified chain."""
+
+        with self._transaction(capability) as db:
+            cap, cycle = self._authorize(db, capability, "checkpoint")
+            if cap.role != "durability" or cycle["state"] not in {"ACTIVE", "SEALING"}:
+                raise ContextFault("context_rebuild_denied")
+            namespace = cap.namespace.model_dump()
+            cipher = self._cipher(cycle, namespace)
+            request_digest = digest({"key": idempotency_key})
+            replay = self._replay(
+                db, cycle["id"], "rebuild", idempotency_key, request_digest, cipher
+            )
+            if replay is not None:
+                return replay
+            db.execute("DELETE FROM postings WHERE cycle=?", (cycle["id"],))
+            previous, count = ZERO, 0
+            for row in db.execute(
+                "SELECT * FROM segments WHERE cycle=? ORDER BY seq", (cycle["id"],)
+            ):
+                count += 1
+                if row["seq"] != count or row["previous"] != previous:
+                    raise ContextFault("context_chain_corrupt")
+                value = self._record(row, namespace, cipher)
+                for word in words(value["text"]):
+                    db.execute(
+                        "INSERT INTO postings VALUES(?,?,?)",
+                        (cycle["id"], cipher.token(namespace, word), count),
+                    )
+                previous = row["root"]
+            if count != cycle["cursor"] or previous != cycle["root"]:
+                raise ContextFault("context_chain_corrupt")
+            db.execute(
+                "UPDATE cycles SET revision=revision+1 WHERE id=?", (cycle["id"],)
+            )
+            self._event(
+                db,
+                cycle["id"],
+                "context.index_rebuilt",
+                records=count,
+                root=previous,
+            )
+            result = self.signer.sign(
+                {
+                    "schema_version": "ContextIndexRebuildReceiptV1",
+                    "context_cycle_id": cycle["id"],
+                    "records": count,
+                    "root": previous,
+                    "index_implementation": self.profile.index_implementation,
+                    "index_version": self.profile.index_version,
+                }
+            )
+            return self._remember(
+                db,
+                cycle["id"],
+                "rebuild",
+                idempotency_key,
+                request_digest,
+                result,
+                cipher,
+            )
 
     def append(self, capability: dict, request: AppendRequestV1) -> dict:
         text = filter_text(request.text)
@@ -400,6 +653,8 @@ class ContextEngine:
         with self._transaction(capability) as db:
             cap, cycle = self._authorize(db, capability, "append")
             writable(cap, request.plane)
+            ns = cap.namespace.model_dump()
+            cipher = self._cipher(cycle, ns)
             req_digest = digest(
                 {
                     "request": request.model_dump(),
@@ -410,7 +665,9 @@ class ContextEngine:
                     "action": request.action_ref,
                 }
             )
-            replay = self._replay(db, cycle["id"], "append", request.idempotency_key, req_digest)
+            replay = self._replay(
+                db, cycle["id"], "append", request.idempotency_key, req_digest, cipher
+            )
             if replay:
                 return replay
             if cycle["state"] != "ACTIVE" or cycle["expires"] <= self.now():
@@ -424,7 +681,6 @@ class ContextEngine:
                 raise ContextFault("context_write_quota")
             if request.plane in {"P2", "P4"} and not request.evidence_refs:
                 raise ContextFault("context_evidence_required")
-            ns = cap.namespace.model_dump()
             seq = cycle["cursor"] + 1
             record_id = (
                 "rec_" + digest({"namespace": ns, "sequence": seq, "request": req_digest})[:40]
@@ -463,7 +719,7 @@ class ContextEngine:
                 "promotion_state": "candidate" if request.plane == "P4" else "none",
             }
             root = digest(metadata)
-            encrypted = self.cipher.encrypt(
+            encrypted = cipher.encrypt(
                 {"text": text}, {"namespace": ns, "record_id": record_id, "metadata_digest": root}
             )
             if request.supersedes:
@@ -494,7 +750,7 @@ class ContextEngine:
             for word in words(text):
                 db.execute(
                     "INSERT INTO postings VALUES(?,?,?)",
-                    (cycle["id"], self.cipher.token(ns, word), seq),
+                    (cycle["id"], cipher.token(ns, word), seq),
                 )
             db.execute(
                 "UPDATE cycles SET cursor=?,root=?,bytes=bytes+?,revision=revision+1 WHERE id=?",
@@ -519,10 +775,10 @@ class ContextEngine:
                 }
             )
             return self._remember(
-                db, cycle["id"], "append", request.idempotency_key, req_digest, result
+                db, cycle["id"], "append", request.idempotency_key, req_digest, result, cipher
             )
 
-    def _record(self, row, namespace: dict) -> dict:
+    def _record(self, row, namespace: dict, cipher: EnvelopeCipher) -> dict:
         metadata = json.loads(row["metadata"])
         if (
             metadata["namespace"] != namespace
@@ -537,7 +793,7 @@ class ContextEngine:
             or metadata["content_digest"] != row["digest"]
         ):
             raise ContextFault("context_integrity_failure")
-        body = self.cipher.decrypt(
+        body = cipher.decrypt(
             row["payload"],
             {"namespace": namespace, "record_id": row["id"], "metadata_digest": row["root"]},
             self.profile.max_record_bytes * 2,
@@ -551,6 +807,8 @@ class ContextEngine:
         filter_text(request.query)
         with self._transaction(capability) as db:
             cap, cycle = self._authorize(db, capability, "retrieve")
+            ns = cap.namespace.model_dump()
+            cipher = self._cipher(cycle, ns)
             req_digest = digest(
                 {
                     "request": request.model_dump(),
@@ -560,7 +818,9 @@ class ContextEngine:
                     "role": cap.role,
                 }
             )
-            replay = self._replay(db, cycle["id"], "retrieve", request.turn_id, req_digest)
+            replay = self._replay(
+                db, cycle["id"], "retrieve", request.turn_id, req_digest, cipher
+            )
             if replay:
                 return replay
             if cycle["state"] != "ACTIVE" or cycle["expires"] <= self.now():
@@ -577,8 +837,7 @@ class ContextEngine:
             )
             if budget < token_bound(NOTICE) + 32:
                 raise ContextFault("context_prompt_budget")
-            ns = cap.namespace.model_dump()
-            terms = [self.cipher.token(ns, word) for word in words(request.query)[:32]]
+            terms = [cipher.token(ns, word) for word in words(request.query)[:32]]
             rows = []
             if terms:
                 # Exact namespace AND lane/plane eligibility precede ranking and LIMIT.
@@ -630,7 +889,7 @@ class ContextEngine:
             for row in rows:
                 if not visible(cap, row["plane"], row["lane"]):
                     raise ContextFault("context_namespace_denied")
-                entry = self._record(row, ns)
+                entry = self._record(row, ns, cipher)
                 considered += row["tokens"]
                 candidate = {
                     "notice": NOTICE,
@@ -674,7 +933,9 @@ class ContextEngine:
                 capsule_digest=payload["capsule_digest"],
                 injected_tokens=payload["injected_tokens"],
             )
-            return self._remember(db, cycle["id"], "retrieve", request.turn_id, req_digest, result)
+            return self._remember(
+                db, cycle["id"], "retrieve", request.turn_id, req_digest, result, cipher
+            )
 
     def checkpoint(self, capability: dict, idempotency_key: str) -> dict:
         self._space()
@@ -682,14 +943,20 @@ class ContextEngine:
             cap, cycle = self._authorize(db, capability, "checkpoint")
             if cap.role not in {"coordinator", "verifier", "durability"}:
                 raise ContextFault("context_role_denied")
+            ns = cap.namespace.model_dump()
+            cipher = self._cipher(cycle, ns)
             replay = self._replay(
-                db, cycle["id"], "checkpoint", idempotency_key, digest({"key": idempotency_key})
+                db,
+                cycle["id"],
+                "checkpoint",
+                idempotency_key,
+                digest({"key": idempotency_key}),
+                cipher,
             )
             if replay:
                 return replay
             if cycle["state"] not in {"ACTIVE", "SEALING"}:
                 raise ContextFault("context_not_active")
-            ns = cap.namespace.model_dump()
             records: list[dict] = []
             previous = ZERO
             for row in db.execute(
@@ -697,7 +964,7 @@ class ContextEngine:
             ):
                 if row["previous"] != previous or row["seq"] != len(records) + 1:
                     raise ContextFault("context_chain_corrupt")
-                entry = self._record(row, ns)
+                entry = self._record(row, ns, cipher)
                 records.append(
                     {
                         **entry,
@@ -712,7 +979,7 @@ class ContextEngine:
             snapshot = {
                 "schema_version": "ContextCheckpointPackV1",
                 "binding": json.loads(cycle["binding"]),
-                "authority": self.cipher.decrypt(
+                "authority": cipher.decrypt(
                     cycle["authority"], ns, self.profile.max_record_bytes
                 ),
                 "project_snapshot": self._snapshot(cycle, ns),
@@ -723,6 +990,14 @@ class ContextEngine:
                 "request_digest": cycle["request_digest"],
                 "fence": cycle["fence"],
                 "checkpoint": cycle["checkpoint"] + 1,
+                "key_ref": cycle["key_ref"],
+                "key_provider": (
+                    getattr(self.cycle_keys, "provider", None)
+                    if cycle["key_ref"] is not None
+                    else None
+                ),
+                "key_version": cycle["key_version"],
+                "retention_class": cycle["retention_class"],
             }
             snapshot["state"] = cycle["state"]
             # Replays survive host replacement too, including immutable capsules.
@@ -737,27 +1012,34 @@ class ContextEngine:
             ]
             if len(canonical(snapshot)) > self.profile.max_checkpoint_bytes:
                 raise ContextFault("context_checkpoint_quota")
-            pack = self.cipher.encrypt(snapshot, {"namespace": ns, "domain": "checkpoint/v1"})
+            pack = cipher.encrypt(snapshot, {"namespace": ns, "domain": "checkpoint/v1"})
             checksum = hashlib.sha256(pack).hexdigest()
             number = cycle["checkpoint"] + 1
             receipt = self.signer.sign(
-                {
-                    "schema_version": "ContextCheckpointReceiptV1",
-                    "namespace": ns,
-                    "checkpoint_number": number,
-                    "cursor": cycle["cursor"],
-                    "segment_chain_root": previous,
-                    "manifest_checksum": checksum,
-                    "durability": "local",
-                    "bytes": len(pack),
-                    "records": len(records),
-                    "policy_digest": cap.policy_digest,
-                }
+                ContextCheckpointReceiptV1(
+                    namespace=cap.namespace,
+                    checkpoint_number=number,
+                    cursor=cycle["cursor"],
+                    segment_chain_root=previous,
+                    manifest_checksum=checksum,
+                    durability="local",
+                    bytes=len(pack),
+                    records=len(records),
+                    policy_digest=cap.policy_digest,
+                    key_ref=cycle["key_ref"],
+                    key_provider=(
+                        getattr(self.cycle_keys, "provider", None)
+                        if cycle["key_ref"] is not None
+                        else None
+                    ),
+                    key_version=cycle["key_version"],
+                ).model_dump()
             )
             result = {"receipt": receipt, "pack": base64.b64encode(pack).decode()}
             db.execute(
-                "UPDATE cycles SET checkpoint=?,revision=revision+1 WHERE id=?",
-                (number, cycle["id"]),
+                "UPDATE cycles SET checkpoint=?,checkpoint_manifest_checksum=?,"
+                "revision=revision+1 WHERE id=?",
+                (number, checksum, cycle["id"]),
             )
             self._event(
                 db,
@@ -773,33 +1055,65 @@ class ContextEngine:
                 idempotency_key,
                 digest({"key": idempotency_key}),
                 result,
+                cipher,
             )
 
     def hydrate(self, signed_grant: dict, receipt: dict, pack: bytes, receipt_keys: dict) -> dict:
         """Host replacement needs a fresh fence and the exact cloud-selected root."""
         grant = verify(signed_grant, self.authority_keys)
-        if (
-            set(grant) != {"operation", "namespace", "manifest_checksum", "fence", "expires_at"}
-            or grant["operation"] != "hydrate"
-        ):
+        legacy_grant = {"operation", "namespace", "manifest_checksum", "fence", "expires_at"}
+        keyed_grant = legacy_grant | {"key_ref", "key_provider", "key_version"}
+        if frozenset(grant) not in {frozenset(legacy_grant), frozenset(keyed_grant)} or grant[
+            "operation"
+        ] != "hydrate":
             raise ContextFault("context_hydrate_grant_invalid")
         if grant["expires_at"] <= self.now():
             raise ContextFault("context_capability_denied")
-        claim = verify(receipt, receipt_keys)
+        try:
+            claim = ContextCheckpointReceiptV1.model_validate(
+                verify(receipt, receipt_keys)
+            ).model_dump()
+        except (ValueError, TypeError) as exc:
+            raise ContextFault("context_checkpoint_receipt_invalid") from exc
         checksum = hashlib.sha256(pack).hexdigest()
         if (
-            checksum != grant["manifest_checksum"]
+            claim.get("schema_version") != "ContextCheckpointReceiptV1"
+            or checksum != grant["manifest_checksum"]
             or checksum != claim["manifest_checksum"]
             or claim["namespace"] != grant["namespace"]
             or len(pack) > self.profile.max_checkpoint_bytes
         ):
             raise ContextFault("context_integrity_failure")
-        snapshot = self.cipher.decrypt(
+        key_ref = claim.get("key_ref")
+        key_provider = claim.get("key_provider")
+        key_version = claim.get("key_version")
+        if key_ref is None:
+            if (
+                set(grant) != legacy_grant
+                or key_provider is not None
+                or key_version is not None
+            ):
+                raise ContextFault("context_hydrate_grant_invalid")
+            cipher = self.cipher
+        else:
+            if (
+                set(grant) != keyed_grant
+                or grant["key_ref"] != key_ref
+                or grant["key_provider"] != key_provider
+                or grant["key_version"] != key_version
+                or self.cycle_keys is None
+                or key_provider != getattr(self.cycle_keys, "provider", None)
+                or key_version != getattr(self.cycle_keys, "key_version", None)
+            ):
+                raise ContextFault("context_hydrate_grant_invalid")
+            cipher = self.cycle_keys.cipher(key_ref, grant["namespace"])
+        snapshot = cipher.decrypt(
             pack,
             {"namespace": grant["namespace"], "domain": "checkpoint/v1"},
             self.profile.max_checkpoint_bytes,
         )
-        binding = ContextBindingV1.model_validate(snapshot["binding"])
+        binding_payload = snapshot["binding"]
+        binding = ContextBindingV1.model_validate(binding_payload)
         if (
             binding.namespace.model_dump() != grant["namespace"]
             or binding.profile_digest != digest(self.profile)
@@ -807,6 +1121,10 @@ class ContextEngine:
             or binding.expires_at <= self.now()
             or snapshot["root"] != claim["segment_chain_root"]
             or snapshot["cursor"] != claim["cursor"]
+            or snapshot["checkpoint"] != claim["checkpoint_number"]
+            or snapshot.get("key_ref") != key_ref
+            or snapshot.get("key_provider") != key_provider
+            or snapshot.get("key_version") != key_version
         ):
             raise ContextFault("context_hydrate_grant_invalid")
         if (
@@ -832,23 +1150,41 @@ class ContextEngine:
         if previous != snapshot["root"]:
             raise ContextFault("context_chain_corrupt")
         ns, cycle = grant["namespace"], binding.namespace.context_cycle_id
+        hydrate_payload = ContextHydrateReceiptV1(
+            namespace=binding.namespace,
+            context_cycle_id=cycle,
+            manifest_checksum=checksum,
+            checkpoint_number=claim["checkpoint_number"],
+            cursor=claim["cursor"],
+            root=previous,
+            key_ref=key_ref,
+            key_provider=key_provider,
+            key_version=key_version,
+            replay_digest=digest(snapshot["operations"]),
+            fence=grant["fence"],
+        ).model_dump()
         import base64
 
         with self.store.transaction() as db:
             existing = db.execute("SELECT * FROM cycles WHERE id=?", (cycle,)).fetchone()
             if existing:
-                if existing["root"] == previous and existing["fence"] == grant["fence"]:
-                    return self.signer.sign(
-                        {
-                            "operation": "hydrate",
-                            "context_cycle_id": cycle,
-                            "root": previous,
-                            "fence": grant["fence"],
-                        }
-                    )
+                if (
+                    existing["root"] == previous
+                    and existing["fence"] == grant["fence"]
+                    and existing["checkpoint_manifest_checksum"] == checksum
+                    and existing["checkpoint"] == claim["checkpoint_number"]
+                    and existing["cursor"] == claim["cursor"]
+                    and existing["key_ref"] == key_ref
+                    and existing["key_version"] == key_version
+                    and existing["binding_digest"] == digest(binding_payload)
+                ):
+                    return self.signer.sign(hydrate_payload)
                 raise ContextFault("context_hydrate_conflict")
             db.execute(
-                "INSERT INTO cycles(id,owner,project,request_key,request_digest,profile,state,fence,binding,binding_digest,authority,snapshot,cursor,root,bytes,expires,checkpoint) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO cycles(id,owner,project,request_key,request_digest,profile,state,fence,"
+                "binding,binding_digest,authority,snapshot,cursor,root,bytes,expires,checkpoint,"
+                "key_ref,key_version,retention_class,checkpoint_manifest_checksum) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     cycle,
                     ns["owner_id"],
@@ -858,10 +1194,10 @@ class ContextEngine:
                     digest(self.profile),
                     snapshot["state"],
                     grant["fence"],
-                    canonical(binding).decode(),
-                    digest(binding),
-                    self.cipher.encrypt(snapshot["authority"], ns),
-                    self.cipher.encrypt(
+                    canonical(binding_payload).decode(),
+                    digest(binding_payload),
+                    cipher.encrypt(snapshot["authority"], ns),
+                    cipher.encrypt(
                         snapshot["project_snapshot"], {"namespace": ns, "plane": "P1"}
                     ),
                     snapshot["cursor"],
@@ -869,11 +1205,15 @@ class ContextEngine:
                     sum(len(x["text"].encode()) for x in records),
                     binding.expires_at,
                     snapshot["checkpoint"],
+                    key_ref,
+                    key_version,
+                    snapshot.get("retention_class", binding.retention_class),
+                    checksum,
                 ),
             )
             for record in records:
                 m = record["metadata"]
-                blob = self.cipher.encrypt(
+                blob = cipher.encrypt(
                     {"text": record["text"]},
                     {
                         "namespace": ns,
@@ -903,7 +1243,7 @@ class ContextEngine:
                 for word in words(record["text"]):
                     db.execute(
                         "INSERT INTO postings VALUES(?,?,?)",
-                        (cycle, self.cipher.token(ns, word), m["sequence"]),
+                        (cycle, cipher.token(ns, word), m["sequence"]),
                     )
             for op in snapshot["operations"]:
                 if op["cycle"] != cycle:
@@ -919,34 +1259,60 @@ class ContextEngine:
                     ),
                 )
             self._event(db, cycle, "context.recovered", root=previous, fence=grant["fence"])
-            return self.signer.sign(
-                {
-                    "operation": "hydrate",
-                    "context_cycle_id": cycle,
-                    "root": previous,
-                    "fence": grant["fence"],
-                }
-            )
+            return self.signer.sign(hydrate_payload)
+
+    def _promotion_entry(self, row, namespace: dict, cipher: EnvelopeCipher) -> dict | None:
+        metadata = self._record(row, namespace, cipher)["metadata"]
+        if not metadata["evidence_refs"] or metadata["source_class"] in {
+            "model_note",
+            "legacy_untrusted",
+        }:
+            return None
+        return {
+            "record_id": row["id"],
+            "content_digest": metadata["content_digest"],
+            "evidence_refs": metadata["evidence_refs"],
+        }
+
+    def _promotion_candidates(self, db, cycle, namespace, cipher) -> list[dict]:
+        values = []
+        for row in db.execute(
+            "SELECT * FROM segments WHERE cycle=? AND plane='P4' AND superseded=0 "
+            "AND quarantined=0 AND expires>? ORDER BY id",
+            (cycle["id"], self.now()),
+        ):
+            entry = self._promotion_entry(row, namespace, cipher)
+            if entry is not None:
+                values.append(entry)
+        return values
 
     def freeze(self, capability: dict) -> dict:
         with self.store.transaction() as db:
             cap, cycle = self._authorize(db, capability, "seal")
             if cap.role != "verifier" or cycle["state"] not in {"ACTIVE", "SEALING"}:
                 raise ContextFault("context_freeze_denied")
+            namespace = cap.namespace.model_dump()
+            cipher = self._cipher(cycle, namespace)
             if cycle["state"] == "ACTIVE":
                 db.execute(
                     "UPDATE cycles SET state='SEALING',revision=revision+1 WHERE id=?",
                     (cycle["id"],),
                 )
                 self._event(db, cycle["id"], "context.sealing")
+            candidates = self._promotion_candidates(db, cycle, namespace, cipher)
+            if len(candidates) > 1000:
+                raise ContextFault("context_promotion_quota")
             return self.signer.sign(
-                {
-                    "schema_version": "ContextFreezeReceiptV1",
-                    "context_cycle_id": cycle["id"],
-                    "cursor": cycle["cursor"],
-                    "root": cycle["root"],
-                    "binding_digest": cycle["binding_digest"],
-                }
+                ContextFreezeReceiptV1(
+                    context_cycle_id=cycle["id"],
+                    cursor=cycle["cursor"],
+                    root=cycle["root"],
+                    binding_digest=cycle["binding_digest"],
+                    promotion_candidates=[
+                        PromotionCandidateV1.model_validate(item) for item in candidates
+                    ],
+                    promotion_candidates_root=digest(candidates),
+                ).model_dump()
             )
 
     def seal(self, capability: dict, signed_proof: dict, checkpoint_receipt: dict) -> dict:
@@ -955,8 +1321,12 @@ class ContextEngine:
             cap, cycle = self._authorize(db, capability, "seal")
             if cap.role != "verifier":
                 raise ContextFault("context_role_denied")
+            ns = cap.namespace.model_dump()
+            cipher = self._cipher(cycle, ns)
             req_digest = digest(proof)
-            replay = self._replay(db, cycle["id"], "seal", "terminal", req_digest)
+            replay = self._replay(
+                db, cycle["id"], "seal", "terminal", req_digest, cipher
+            )
             if replay:
                 return replay
             if cycle["state"] not in {"ACTIVE", "SEALING"} or proof.expires_at <= self.now():
@@ -971,14 +1341,29 @@ class ContextEngine:
                 or proof.plan_ir_digest != binding["shared_ir_digest"]
             ):
                 raise ContextFault("context_proof_mismatch")
-            checkpoint = verify(
-                checkpoint_receipt, {self.signer.key_id: self.signer.key.public_key()}
-            )
+            try:
+                checkpoint = ContextCheckpointReceiptV1.model_validate(
+                    verify(
+                        checkpoint_receipt,
+                        {self.signer.key_id: self.signer.key.public_key()},
+                    )
+                ).model_dump()
+            except (ValueError, TypeError) as exc:
+                raise ContextFault("context_checkpoint_receipt_invalid") from exc
             if (
                 checkpoint.get("schema_version") != "ContextCheckpointReceiptV1"
                 or checkpoint["namespace"] != cap.namespace.model_dump()
                 or checkpoint["cursor"] != cycle["cursor"]
                 or checkpoint["segment_chain_root"] != cycle["root"]
+                or checkpoint["manifest_checksum"] != cycle["checkpoint_manifest_checksum"]
+                or checkpoint.get("key_ref") != cycle["key_ref"]
+                or checkpoint.get("key_provider")
+                != (
+                    getattr(self.cycle_keys, "provider", None)
+                    if cycle["key_ref"] is not None
+                    else None
+                )
+                or checkpoint.get("key_version") != cycle["key_version"]
             ):
                 raise ContextFault("context_checkpoint_stale")
             promoted = []
@@ -989,19 +1374,10 @@ class ContextEngine:
                 ).fetchone()
                 if row is None:
                     raise ContextFault("context_promotion_invalid")
-                meta = self._record(row, cap.namespace.model_dump())["metadata"]
-                if not meta["evidence_refs"] or meta["source_class"] in {
-                    "model_note",
-                    "legacy_untrusted",
-                }:
+                entry = self._promotion_entry(row, ns, cipher)
+                if entry is None:
                     raise ContextFault("context_independent_evidence_required")
-                promoted.append(
-                    {
-                        "record_id": record_id,
-                        "content_digest": meta["content_digest"],
-                        "evidence_refs": meta["evidence_refs"],
-                    }
-                )
+                promoted.append(entry)
             if digest(sorted(promoted, key=lambda x: x["record_id"])) != proof.promotion_set_root:
                 raise ContextFault("context_promotion_root_mismatch")
             db.execute(
@@ -1026,20 +1402,26 @@ class ContextEngine:
                     "graph_checksum": binding["graph_checksum"],
                     "sealed_at": self.now(),
                     "expires_at": expiry,
+                    "retention_class": cycle["retention_class"],
+                    "retention_seconds": self.profile.retention_seconds,
                 }
             )
+            seal_digest = digest(result)
             db.execute(
-                "UPDATE cycles SET state='SEALED',expires=?,revision=revision+1 WHERE id=?",
-                (expiry, cycle["id"]),
+                "UPDATE cycles SET state='SEALED',expires=?,seal_digest=?,"
+                "revision=revision+1 WHERE id=?",
+                (expiry, seal_digest, cycle["id"]),
             )
             self._event(
                 db,
                 cycle["id"],
                 "context.sealed",
-                seal_digest=digest(result),
+                seal_digest=seal_digest,
                 accepted_count=len(promoted),
             )
-            return self._remember(db, cycle["id"], "seal", "terminal", req_digest, result)
+            return self._remember(
+                db, cycle["id"], "seal", "terminal", req_digest, result, cipher
+            )
 
     def control(self, signed_command: dict) -> dict:
         command = verify(signed_command, self.authority_keys)
@@ -1076,10 +1458,20 @@ class ContextEngine:
                     (command["fence"], row["id"]),
                 )
             elif op in transitions and row["state"] in transitions[op][0]:
-                db.execute(
-                    "UPDATE cycles SET state=?,revision=revision+1 WHERE id=?",
-                    (transitions[op][1], row["id"]),
-                )
+                if op == "abort":
+                    db.execute(
+                        "UPDATE cycles SET state=?,expires=?,revision=revision+1 WHERE id=?",
+                        (
+                            transitions[op][1],
+                            self.now() + self.profile.retention_seconds,
+                            row["id"],
+                        ),
+                    )
+                else:
+                    db.execute(
+                        "UPDATE cycles SET state=?,revision=revision+1 WHERE id=?",
+                        (transitions[op][1], row["id"]),
+                    )
             else:
                 raise ContextFault("context_transition_denied")
             self._event(db, row["id"], "context." + op)
@@ -1090,6 +1482,7 @@ class ContextEngine:
     def status(self, capability: dict, after: int = 0) -> dict:
         if type(after) is not int or after < 0:
             raise ContextFault("context_stale_cursor")
+        reach_claim_enabled = self.health()["reach_claim_enabled"]
         with self.store.connection() as db:
             _, row = self._authorize(db, capability, "status")
             events = [
@@ -1110,40 +1503,41 @@ class ContextEngine:
                     "fence": row["fence"],
                     "indexed_bytes": row["bytes"],
                     "records": row["cursor"],
+                    "configured_max_records": self.profile.max_records,
+                    "configured_max_indexed_bytes": self.profile.max_indexed_bytes,
+                    "configured_reachable_tokens_upper_bound": (
+                        self.profile.max_indexed_bytes // 4
+                    ),
                     "checkpoint_number": row["checkpoint"],
                     "expires_at": row["expires"],
-                    "estimated_reachable_tokens": None,
+                    "retention_class": row["retention_class"],
+                    "retention_hold": bool(row["hold"]),
+                    "retention_hold_reason": row["hold_reason"],
+                    "cleanup_state": row["cleanup_state"],
+                    "deletion_receipt": (
+                        json.loads(row["deletion_receipt"])
+                        if row["deletion_receipt"] is not None
+                        else None
+                    ),
+                    "estimated_reachable_tokens": self.scale_qualification.reachable_tokens,
+                    "reach_claim_enabled": reach_claim_enabled,
+                    "benchmark_receipt_digest": self.scale_qualification.receipt_digest,
+                    "benchmark_failures": list(self.scale_qualification.failures),
                     "native_model_window": None,
+                    "retrieved_tokens": None,
+                    "injected_tokens": None,
+                    "resident_process_observed_peak_bytes": (
+                        self.scale_qualification.resident_peak_bytes
+                    ),
                     "events": events,
                 }
             )
 
+    def retention(self, capability: dict, signed_command: dict) -> dict:
+        return self.retention_manager.apply(capability, signed_command)
+
     def expire(self, capability: dict) -> dict:
-        with self.store.transaction() as db:
-            cap, row = self._authorize(db, capability, "expire")
-            if (
-                cap.role != "durability"
-                or row["state"] != "SEALED"
-                or row["hold"]
-                or row["expires"] > self.now()
-            ):
-                raise ContextFault("context_retention_denied")
-            # This is logical deletion. Cryptographic erasure is performed by
-            # the managed per-cycle key provider and separately receipted.
-            db.execute("DELETE FROM postings WHERE cycle=?", (row["id"],))
-            db.execute("DELETE FROM segments WHERE cycle=?", (row["id"],))
-            db.execute("DELETE FROM operations WHERE cycle=? AND operation!='seal'", (row["id"],))
-            db.execute(
-                "UPDATE cycles SET state='EXPIRED',authority=NULL,snapshot=NULL,revision=revision+1 WHERE id=?",
-                (row["id"],),
-            )
-            self._event(db, row["id"], "context.expired", root=row["root"])
-            return self.signer.sign(
-                {
-                    "schema_version": "ContextDeletionReceiptV1",
-                    "context_cycle_id": row["id"],
-                    "root": row["root"],
-                    "logical_deletion": True,
-                    "cryptographic_erasure": False,
-                }
-            )
+        # Kept only as a rolling wire boundary. Every deletion, including an
+        # unkeyed legacy checkpoint, must pass through signed retention CAS and
+        # independently signed remote-object deletion evidence.
+        raise ContextFault("context_signed_retention_required")

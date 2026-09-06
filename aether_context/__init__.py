@@ -24,6 +24,6 @@ Public surface (intentionally tiny):
 from aether_context.local_llm import load_model
 from aether_context.session import Session
 
-__version__ = "0.3.1"
+__version__ = "0.3.2"
 
 __all__ = ["Session", "load_model", "__version__"]

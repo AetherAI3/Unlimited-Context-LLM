@@ -6,6 +6,21 @@ All notable changes to `aether-context` are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+- Hosted V1 now has signed freeze manifests, exact checkpoint/hydrate receipts,
+  revision-bound retention commands, independent remote-object and managed-KMS
+  deletion evidence, and crash-safe durable cleanup receipts.
+- The hosted scale harness measures capacity, retrieval, checkpoint, hydrate,
+  index rebuild and project recall against a clean exact source tree. Its local
+  deterministic million-case namespace predicate run is labeled nonqualifying
+  until an independently measured hosted data-plane receipt exists.
+
+### Changed
+- Hosted readiness revalidates expiring benchmark/provider evidence on every
+  admission and binds the benchmark source and recall dataset to a signed build
+  manifest matching the installed package bytes. The legacy deletion route now
+  fails closed in favor of signed retention, including for legacy checkpoints.
+
 ## [0.3.1] — 2026-09-04
 
 ### Fixed

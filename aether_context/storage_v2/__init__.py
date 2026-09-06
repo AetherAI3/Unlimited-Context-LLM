@@ -23,6 +23,10 @@ CREATE TABLE IF NOT EXISTS cycles (
  cursor INTEGER NOT NULL DEFAULT 0, root TEXT NOT NULL,
  bytes INTEGER NOT NULL DEFAULT 0, expires INTEGER NOT NULL,
  hold INTEGER NOT NULL DEFAULT 0, checkpoint INTEGER NOT NULL DEFAULT 0,
+ key_ref TEXT, key_version TEXT, retention_class TEXT NOT NULL DEFAULT 'ephemeral',
+ hold_reason TEXT, cleanup_state TEXT NOT NULL DEFAULT 'NONE',
+ seal_digest TEXT, checkpoint_manifest_checksum TEXT, checkpoint_object_ref_digest TEXT,
+ cleanup_remote_receipt TEXT, deletion_receipt TEXT,
  UNIQUE(owner,project,request_key));
 CREATE TABLE IF NOT EXISTS segments (
  cycle TEXT NOT NULL REFERENCES cycles(id), seq INTEGER NOT NULL,
@@ -47,8 +51,25 @@ CREATE TABLE IF NOT EXISTS fences (
 CREATE TABLE IF NOT EXISTS call_budgets (
  cycle TEXT NOT NULL, minute INTEGER NOT NULL, calls INTEGER NOT NULL,
  PRIMARY KEY(cycle,minute));
+CREATE TABLE IF NOT EXISTS retention_operations (
+ cycle TEXT NOT NULL, operation TEXT NOT NULL, key TEXT NOT NULL,
+ request_digest TEXT NOT NULL, result TEXT,
+ PRIMARY KEY(cycle,operation,key));
 CREATE INDEX IF NOT EXISTS segment_visibility ON segments(cycle,plane,lane,seq);
 """
+
+_CYCLE_COLUMNS = {
+    "key_ref": "TEXT",
+    "key_version": "TEXT",
+    "retention_class": "TEXT NOT NULL DEFAULT 'ephemeral'",
+    "hold_reason": "TEXT",
+    "cleanup_state": "TEXT NOT NULL DEFAULT 'NONE'",
+    "seal_digest": "TEXT",
+    "checkpoint_manifest_checksum": "TEXT",
+    "checkpoint_object_ref_digest": "TEXT",
+    "cleanup_remote_receipt": "TEXT",
+    "deletion_receipt": "TEXT",
+}
 
 
 class SegmentStoreV2:
@@ -60,8 +81,15 @@ class SegmentStoreV2:
         with self.connection() as db:
             db.execute("PRAGMA journal_mode=WAL")
             db.executescript(SCHEMA)
-            if "snapshot" not in {row[1] for row in db.execute("PRAGMA table_info(cycles)")}:
+            columns = {row[1] for row in db.execute("PRAGMA table_info(cycles)")}
+            if "snapshot" not in columns:
                 db.execute("ALTER TABLE cycles ADD COLUMN snapshot BLOB")
+                columns.add("snapshot")
+            # SQLite has no transactional ALTER COLUMN operation. Additive,
+            # constant-default columns keep databases created by 0.3.1 readable.
+            for name, declaration in _CYCLE_COLUMNS.items():
+                if name not in columns:
+                    db.execute(f"ALTER TABLE cycles ADD COLUMN {name} {declaration}")
             if db.execute("PRAGMA quick_check").fetchone()[0] != "ok":
                 raise ContextFault("context_storage_corrupt")
         if os.name != "nt":

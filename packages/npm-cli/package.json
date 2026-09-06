@@ -1,6 +1,6 @@
 {
   "name": "aether-context",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Unlimited Context — virtual memory for an LLM's attention. Local-first, numpy-only core. npm launcher for the aether-context Python engine.",
   "bin": {
     "aether-context": "bin/aether-context.js"
