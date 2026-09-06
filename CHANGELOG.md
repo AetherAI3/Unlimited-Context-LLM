@@ -7,6 +7,25 @@ All notable changes to `aether-context` are documented here. Format follows
 ## [Unreleased]
 
 ### Added
+- Recovery startup now publishes its signed hydrate receipt through a required,
+  atomic, owner-only `--restore-result` file. Exact retries converge on the same
+  evidence, while conflicting or unsafe result paths fail before serving. The
+  private daemon IPC also accepts the same bounded hydrate inputs with
+  daemon-configured checkpoint trust roots for live Cloud recovery.
+- Gateway can release and revive an exact never-bound reservation after a signed
+  pre-dispatch authorization failure; revision CAS and stored receipts make lost
+  acknowledgements safe. Revisioned V2 reserve/bind commands prevent an original
+  reserve or delayed bind from attaching to a revived attempt.
+- Separate signed abort and no-dispatch expiry paths close dispatched and
+  never-dispatched reservations. V3 reserve/bind receipts carry the exact prior
+  expiry, terminal Cloud fence and revival lineage so stale generations cannot
+  bind or dispatch after same-key revival.
+- A signed per-cycle checkpoint durability registration distinguishes local,
+  ephemeral canary packs from remotely registered packs. Local packs cannot be
+  hydrated and expire without remote evidence; remote packs still require
+  deletion proof before managed-key destruction. New packs preserve the exact
+  registration proof across replacement, and V2 deletion evidence binds the
+  replacement host's reattestation.
 - Hosted V1 now has signed freeze manifests, exact checkpoint/hydrate receipts,
   revision-bound retention commands, independent remote-object and managed-KMS
   deletion evidence, and crash-safe durable cleanup receipts.
@@ -22,6 +41,14 @@ All notable changes to `aether-context` are documented here. Format follows
   hosted data-plane case generator required for scale qualification. The legacy
   deletion route now fails closed in favor of signed retention, including for
   legacy checkpoints.
+- Hosted health now has closed rolling-compatible V1 and extended V2 responses.
+  V2 reports the live package-tree and locked interpreter/dependency environment
+  committed by `ContextRuntimeBuildManifestV2`; source-only qualification rejects
+  bytecode and native import shadows and fails closed on live measurement errors.
+- Health V3 reports the guarded complete deployment-lock import closure, exact
+  protocol capabilities and the measured live IPC pack ceiling. The copy-based
+  daemon path bounds emitted packs at 13 MB and decrypted snapshots at 16 MB,
+  while preserving the original 64 MB V1 profile default for direct use.
 
 ## [0.3.1] — 2026-09-04
 
