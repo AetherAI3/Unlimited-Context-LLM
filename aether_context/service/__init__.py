@@ -38,6 +38,7 @@ class ContextService:
             "control": {"operation", "command"},
             "status": {"operation", "capability", "after"},
             "expire": {"operation", "capability"},
+            "retention": {"operation", "capability", "command"},
             "freeze": {"operation", "capability"},
         }
         if operation not in fields or set(request) != fields[operation]:
@@ -70,6 +71,8 @@ class ContextService:
             return self.engine.control(request["command"])
         if operation == "expire":
             return self.engine.expire(request["capability"])
+        if operation == "retention":
+            return self.engine.retention(request["capability"], request["command"])
         if operation == "freeze":
             return self.engine.freeze(request["capability"])
         return self.engine.status(request["capability"], request["after"])
@@ -159,6 +162,10 @@ def main() -> None:
     parser.add_argument("--restore-pack")
     parser.add_argument("--restore-grant")
     parser.add_argument("--restore-receipt")
+    parser.add_argument("--cycle-key-directory")
+    parser.add_argument("--benchmark-receipt")
+    parser.add_argument("--runtime-build-manifest")
+    parser.add_argument("--managed-key-provider-receipt")
     args = parser.parse_args()
     root = Path(args.credentials)
 
@@ -171,6 +178,44 @@ def main() -> None:
     profile = ContextProfileV1.model_validate_json(Path(args.profile).read_text())
     if profile.index_version != sqlite3.sqlite_version:
         raise SystemExit("context_index_version_mismatch")
+    cycle_keys = None
+    if args.cycle_key_directory:
+        from ..retention import FileCycleKeyProvider
+
+        cycle_keys = FileCycleKeyProvider(
+            args.cycle_key_directory,
+            EnvelopeCipher(
+                (root / "context-cycle-wrapper-key").read_bytes(),
+                domain=b"context-cycle-wrapper/v1",
+            ),
+        )
+    benchmark_receipt = (
+        json.loads(Path(args.benchmark_receipt).read_text()) if args.benchmark_receipt else None
+    )
+    runtime_build_manifest = (
+        json.loads(Path(args.runtime_build_manifest).read_text())
+        if args.runtime_build_manifest
+        else None
+    )
+    managed_key_provider_config = (
+        json.loads(Path(args.managed_key_provider_receipt).read_text())
+        if args.managed_key_provider_receipt
+        else None
+    )
+    if managed_key_provider_config is not None and not isinstance(
+        managed_key_provider_config, (dict, list)
+    ):
+        raise SystemExit("context_key_provider_config_invalid")
+    managed_key_provider_receipt = (
+        managed_key_provider_config
+        if isinstance(managed_key_provider_config, dict)
+        else None
+    )
+    managed_key_provider_receipts = (
+        managed_key_provider_config
+        if isinstance(managed_key_provider_config, list)
+        else None
+    )
     engine = ContextEngine(
         args.database,
         profile,
@@ -181,6 +226,42 @@ def main() -> None:
         ),
         public_keys("context-authority-keys.json"),
         public_keys("context-proof-keys.json"),
+        cycle_keys=cycle_keys,
+        benchmark_receipt=benchmark_receipt,
+        benchmark_keys=(
+            public_keys("context-benchmark-keys.json") if benchmark_receipt is not None else None
+        ),
+        remote_deletion_keys=(
+            public_keys("context-remote-deletion-keys.json") if cycle_keys is not None else None
+        ),
+        executor_stability_keys=(
+            public_keys("context-executor-stability-keys.json")
+            if benchmark_receipt is not None
+            else None
+        ),
+        managed_key_provider_receipt=managed_key_provider_receipt,
+        managed_key_provider_receipts=managed_key_provider_receipts,
+        key_provider_keys=(
+            public_keys("context-key-provider-keys.json")
+            if managed_key_provider_config is not None
+            else None
+        ),
+        key_destruction_keys=(
+            public_keys("context-key-destruction-keys.json")
+            if managed_key_provider_config is not None
+            else None
+        ),
+        runtime_build_manifest=runtime_build_manifest,
+        runtime_build_keys=(
+            public_keys("context-runtime-build-keys.json")
+            if runtime_build_manifest is not None
+            else None
+        ),
+        data_plane_isolation_keys=(
+            public_keys("context-data-plane-isolation-keys.json")
+            if benchmark_receipt is not None
+            else None
+        ),
     )
     restore = (args.restore_pack, args.restore_grant, args.restore_receipt)
     if any(restore):

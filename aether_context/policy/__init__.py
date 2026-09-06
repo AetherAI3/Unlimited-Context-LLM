@@ -40,12 +40,23 @@ def token_bound(text: str) -> int:
     return len(text.encode("utf-8"))
 
 
-def visible(cap: CapabilityV1, plane: str, lane: str) -> bool:
+def namespace_matches(expected: dict, presented: dict) -> bool:
+    """Exact four-dimensional namespace match; partial/global scopes never match."""
+
+    fields = {"owner_id", "project_id", "objective_id", "context_cycle_id"}
+    return set(expected) == fields and set(presented) == fields and expected == presented
+
+
+def visible_values(role: str, capability_lane: str, plane: str, record_lane: str) -> bool:
     if plane == "P4":
-        return cap.role in {"verifier", "coordinator"}
+        return role in {"verifier", "coordinator"}
     if plane == "P2":
-        return cap.role != "durability"
-    return lane == cap.lane_id or cap.role in {"reviewer", "coordinator", "verifier"}
+        return role != "durability"
+    return record_lane == capability_lane or role in {"reviewer", "coordinator", "verifier"}
+
+
+def visible(cap: CapabilityV1, plane: str, lane: str) -> bool:
+    return visible_values(cap.role, cap.lane_id, plane, lane)
 
 
 def writable(cap: CapabilityV1, plane: str) -> None:

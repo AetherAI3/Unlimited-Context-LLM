@@ -391,6 +391,15 @@
         "title": "Captain Binding Id",
         "type": "string"
       },
+      "retention_class": {
+        "default": "ephemeral",
+        "enum": [
+          "ephemeral",
+          "audit"
+        ],
+        "title": "Retention Class",
+        "type": "string"
+      },
       "created_at": {
         "minimum": 0,
         "title": "Created At",
@@ -508,11 +517,12 @@
             "seal",
             "status",
             "hydrate",
-            "expire"
+            "expire",
+            "retention"
           ],
           "type": "string"
         },
-        "maxItems": 7,
+        "maxItems": 8,
         "minItems": 1,
         "title": "Operations",
         "type": "array"
@@ -614,6 +624,410 @@
       "signature"
     ],
     "title": "SignedV1",
+    "type": "object"
+  },
+  "PromotionCandidateV1": {
+    "additionalProperties": false,
+    "properties": {
+      "record_id": {
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+        "title": "Record Id",
+        "type": "string"
+      },
+      "content_digest": {
+        "pattern": "^[0-9a-f]{64}$",
+        "title": "Content Digest",
+        "type": "string"
+      },
+      "evidence_refs": {
+        "items": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "maxItems": 32,
+        "minItems": 1,
+        "title": "Evidence Refs",
+        "type": "array"
+      }
+    },
+    "required": [
+      "record_id",
+      "content_digest",
+      "evidence_refs"
+    ],
+    "title": "PromotionCandidateV1",
+    "type": "object"
+  },
+  "ContextCheckpointReceiptV1": {
+    "$defs": {
+      "NamespaceV1": {
+        "additionalProperties": false,
+        "properties": {
+          "owner_id": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+            "title": "Owner Id",
+            "type": "string"
+          },
+          "project_id": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+            "title": "Project Id",
+            "type": "string"
+          },
+          "objective_id": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+            "title": "Objective Id",
+            "type": "string"
+          },
+          "context_cycle_id": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+            "title": "Context Cycle Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "owner_id",
+          "project_id",
+          "objective_id",
+          "context_cycle_id"
+        ],
+        "title": "NamespaceV1",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "properties": {
+      "schema_version": {
+        "const": "ContextCheckpointReceiptV1",
+        "default": "ContextCheckpointReceiptV1",
+        "title": "Schema Version",
+        "type": "string"
+      },
+      "namespace": {
+        "$ref": "#/$defs/NamespaceV1"
+      },
+      "checkpoint_number": {
+        "minimum": 1,
+        "title": "Checkpoint Number",
+        "type": "integer"
+      },
+      "cursor": {
+        "minimum": 0,
+        "title": "Cursor",
+        "type": "integer"
+      },
+      "segment_chain_root": {
+        "pattern": "^[0-9a-f]{64}$",
+        "title": "Segment Chain Root",
+        "type": "string"
+      },
+      "manifest_checksum": {
+        "pattern": "^[0-9a-f]{64}$",
+        "title": "Manifest Checksum",
+        "type": "string"
+      },
+      "durability": {
+        "const": "local",
+        "title": "Durability",
+        "type": "string"
+      },
+      "bytes": {
+        "minimum": 1,
+        "title": "Bytes",
+        "type": "integer"
+      },
+      "records": {
+        "minimum": 0,
+        "title": "Records",
+        "type": "integer"
+      },
+      "policy_digest": {
+        "pattern": "^[0-9a-f]{64}$",
+        "title": "Policy Digest",
+        "type": "string"
+      },
+      "key_ref": {
+        "anyOf": [
+          {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Key Ref"
+      },
+      "key_provider": {
+        "anyOf": [
+          {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Key Provider"
+      },
+      "key_version": {
+        "anyOf": [
+          {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Key Version"
+      }
+    },
+    "required": [
+      "namespace",
+      "checkpoint_number",
+      "cursor",
+      "segment_chain_root",
+      "manifest_checksum",
+      "durability",
+      "bytes",
+      "records",
+      "policy_digest"
+    ],
+    "title": "ContextCheckpointReceiptV1",
+    "type": "object"
+  },
+  "ContextHydrateReceiptV1": {
+    "$defs": {
+      "NamespaceV1": {
+        "additionalProperties": false,
+        "properties": {
+          "owner_id": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+            "title": "Owner Id",
+            "type": "string"
+          },
+          "project_id": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+            "title": "Project Id",
+            "type": "string"
+          },
+          "objective_id": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+            "title": "Objective Id",
+            "type": "string"
+          },
+          "context_cycle_id": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+            "title": "Context Cycle Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "owner_id",
+          "project_id",
+          "objective_id",
+          "context_cycle_id"
+        ],
+        "title": "NamespaceV1",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "description": "Host-replacement evidence bound to one exact checkpoint replay.",
+    "properties": {
+      "schema_version": {
+        "const": "ContextHydrateReceiptV1",
+        "default": "ContextHydrateReceiptV1",
+        "title": "Schema Version",
+        "type": "string"
+      },
+      "operation": {
+        "const": "hydrate",
+        "default": "hydrate",
+        "title": "Operation",
+        "type": "string"
+      },
+      "namespace": {
+        "$ref": "#/$defs/NamespaceV1"
+      },
+      "context_cycle_id": {
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+        "title": "Context Cycle Id",
+        "type": "string"
+      },
+      "manifest_checksum": {
+        "pattern": "^[0-9a-f]{64}$",
+        "title": "Manifest Checksum",
+        "type": "string"
+      },
+      "checkpoint_number": {
+        "minimum": 1,
+        "title": "Checkpoint Number",
+        "type": "integer"
+      },
+      "cursor": {
+        "minimum": 0,
+        "title": "Cursor",
+        "type": "integer"
+      },
+      "root": {
+        "pattern": "^[0-9a-f]{64}$",
+        "title": "Root",
+        "type": "string"
+      },
+      "key_ref": {
+        "anyOf": [
+          {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Key Ref"
+      },
+      "key_provider": {
+        "anyOf": [
+          {
+            "maxLength": 100,
+            "minLength": 1,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Key Provider"
+      },
+      "key_version": {
+        "anyOf": [
+          {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Key Version"
+      },
+      "replay_digest": {
+        "pattern": "^[0-9a-f]{64}$",
+        "title": "Replay Digest",
+        "type": "string"
+      },
+      "fence": {
+        "minimum": 1,
+        "title": "Fence",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "namespace",
+      "context_cycle_id",
+      "manifest_checksum",
+      "checkpoint_number",
+      "cursor",
+      "root",
+      "replay_digest",
+      "fence"
+    ],
+    "title": "ContextHydrateReceiptV1",
+    "type": "object"
+  },
+  "ContextFreezeReceiptV1": {
+    "$defs": {
+      "PromotionCandidateV1": {
+        "additionalProperties": false,
+        "properties": {
+          "record_id": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+            "title": "Record Id",
+            "type": "string"
+          },
+          "content_digest": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Content Digest",
+            "type": "string"
+          },
+          "evidence_refs": {
+            "items": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "maxItems": 32,
+            "minItems": 1,
+            "title": "Evidence Refs",
+            "type": "array"
+          }
+        },
+        "required": [
+          "record_id",
+          "content_digest",
+          "evidence_refs"
+        ],
+        "title": "PromotionCandidateV1",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "properties": {
+      "schema_version": {
+        "const": "ContextFreezeReceiptV1",
+        "default": "ContextFreezeReceiptV1",
+        "title": "Schema Version",
+        "type": "string"
+      },
+      "context_cycle_id": {
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+        "title": "Context Cycle Id",
+        "type": "string"
+      },
+      "cursor": {
+        "minimum": 0,
+        "title": "Cursor",
+        "type": "integer"
+      },
+      "root": {
+        "pattern": "^[0-9a-f]{64}$",
+        "title": "Root",
+        "type": "string"
+      },
+      "binding_digest": {
+        "pattern": "^[0-9a-f]{64}$",
+        "title": "Binding Digest",
+        "type": "string"
+      },
+      "promotion_candidates": {
+        "items": {
+          "$ref": "#/$defs/PromotionCandidateV1"
+        },
+        "maxItems": 1000,
+        "title": "Promotion Candidates",
+        "type": "array"
+      },
+      "promotion_candidates_root": {
+        "pattern": "^[0-9a-f]{64}$",
+        "title": "Promotion Candidates Root",
+        "type": "string"
+      }
+    },
+    "required": [
+      "context_cycle_id",
+      "cursor",
+      "root",
+      "binding_digest",
+      "promotion_candidates_root"
+    ],
+    "title": "ContextFreezeReceiptV1",
     "type": "object"
   },
   "AppendRequestV1": {
@@ -741,6 +1155,879 @@
       "remaining_prompt_budget"
     ],
     "title": "RetrieveRequestV1",
+    "type": "object"
+  },
+  "RemoteDeletionReceiptV1": {
+    "$defs": {
+      "NamespaceV1": {
+        "additionalProperties": false,
+        "properties": {
+          "owner_id": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+            "title": "Owner Id",
+            "type": "string"
+          },
+          "project_id": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+            "title": "Project Id",
+            "type": "string"
+          },
+          "objective_id": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+            "title": "Objective Id",
+            "type": "string"
+          },
+          "context_cycle_id": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+            "title": "Context Cycle Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "owner_id",
+          "project_id",
+          "objective_id",
+          "context_cycle_id"
+        ],
+        "title": "NamespaceV1",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "description": "Independent object-store evidence for the last committed checkpoint.",
+    "properties": {
+      "schema_version": {
+        "const": "ContextRemoteDeletionReceiptV1",
+        "default": "ContextRemoteDeletionReceiptV1",
+        "title": "Schema Version",
+        "type": "string"
+      },
+      "namespace": {
+        "$ref": "#/$defs/NamespaceV1"
+      },
+      "manifest_checksum": {
+        "pattern": "^[0-9a-f]{64}$",
+        "title": "Manifest Checksum",
+        "type": "string"
+      },
+      "object_ref_digest": {
+        "pattern": "^[0-9a-f]{64}$",
+        "title": "Object Ref Digest",
+        "type": "string"
+      },
+      "deleted": {
+        "const": true,
+        "title": "Deleted",
+        "type": "boolean"
+      },
+      "issued_at": {
+        "minimum": 0,
+        "title": "Issued At",
+        "type": "integer"
+      },
+      "expires_at": {
+        "minimum": 0,
+        "title": "Expires At",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "namespace",
+      "manifest_checksum",
+      "object_ref_digest",
+      "deleted",
+      "issued_at",
+      "expires_at"
+    ],
+    "title": "RemoteDeletionReceiptV1",
+    "type": "object"
+  },
+  "RetentionCommandV1": {
+    "$defs": {
+      "NamespaceV1": {
+        "additionalProperties": false,
+        "properties": {
+          "owner_id": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+            "title": "Owner Id",
+            "type": "string"
+          },
+          "project_id": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+            "title": "Project Id",
+            "type": "string"
+          },
+          "objective_id": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+            "title": "Objective Id",
+            "type": "string"
+          },
+          "context_cycle_id": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+            "title": "Context Cycle Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "owner_id",
+          "project_id",
+          "objective_id",
+          "context_cycle_id"
+        ],
+        "title": "NamespaceV1",
+        "type": "object"
+      },
+      "SignedV1": {
+        "additionalProperties": false,
+        "properties": {
+          "payload": {
+            "additionalProperties": true,
+            "title": "Payload",
+            "type": "object"
+          },
+          "key_id": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+            "title": "Key Id",
+            "type": "string"
+          },
+          "signature": {
+            "maxLength": 128,
+            "minLength": 64,
+            "title": "Signature",
+            "type": "string"
+          }
+        },
+        "required": [
+          "payload",
+          "key_id",
+          "signature"
+        ],
+        "title": "SignedV1",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "description": "Short-lived authority for an idempotent hold, release, or expiry.",
+    "properties": {
+      "schema_version": {
+        "const": "ContextRetentionCommandV1",
+        "default": "ContextRetentionCommandV1",
+        "title": "Schema Version",
+        "type": "string"
+      },
+      "operation": {
+        "enum": [
+          "hold",
+          "release",
+          "expire"
+        ],
+        "title": "Operation",
+        "type": "string"
+      },
+      "namespace": {
+        "$ref": "#/$defs/NamespaceV1"
+      },
+      "idempotency_key": {
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+        "title": "Idempotency Key",
+        "type": "string"
+      },
+      "expected_revision": {
+        "minimum": 1,
+        "title": "Expected Revision",
+        "type": "integer"
+      },
+      "reason_code": {
+        "enum": [
+          "audit_hold",
+          "legal_hold",
+          "incident_hold",
+          "hold_released",
+          "policy_expiry",
+          "operator_expiry"
+        ],
+        "title": "Reason Code",
+        "type": "string"
+      },
+      "remote_deletion_receipt": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/SignedV1"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "checkpoint_object_ref_digest": {
+        "anyOf": [
+          {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Checkpoint Object Ref Digest"
+      },
+      "issued_at": {
+        "minimum": 0,
+        "title": "Issued At",
+        "type": "integer"
+      },
+      "expires_at": {
+        "minimum": 0,
+        "title": "Expires At",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "operation",
+      "namespace",
+      "idempotency_key",
+      "expected_revision",
+      "reason_code",
+      "issued_at",
+      "expires_at"
+    ],
+    "title": "RetentionCommandV1",
+    "type": "object"
+  },
+  "ManagedKeyProviderReceiptV1": {
+    "additionalProperties": false,
+    "description": "Independent qualification for a shared managed key provider.",
+    "properties": {
+      "schema_version": {
+        "const": "ContextManagedKeyProviderReceiptV1",
+        "default": "ContextManagedKeyProviderReceiptV1",
+        "title": "Schema Version",
+        "type": "string"
+      },
+      "provider": {
+        "maxLength": 100,
+        "minLength": 1,
+        "title": "Provider",
+        "type": "string"
+      },
+      "key_version": {
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+        "title": "Key Version",
+        "type": "string"
+      },
+      "shared_hydrate_supported": {
+        "const": true,
+        "title": "Shared Hydrate Supported",
+        "type": "boolean"
+      },
+      "verified_destruction_supported": {
+        "const": true,
+        "title": "Verified Destruction Supported",
+        "type": "boolean"
+      },
+      "issued_at": {
+        "minimum": 0,
+        "title": "Issued At",
+        "type": "integer"
+      },
+      "expires_at": {
+        "minimum": 0,
+        "title": "Expires At",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "provider",
+      "key_version",
+      "shared_hydrate_supported",
+      "verified_destruction_supported",
+      "issued_at",
+      "expires_at"
+    ],
+    "title": "ManagedKeyProviderReceiptV1",
+    "type": "object"
+  },
+  "KeyDestructionReceiptV1": {
+    "additionalProperties": false,
+    "description": "Independent managed-KMS evidence that an exact cycle key was destroyed.",
+    "properties": {
+      "schema_version": {
+        "const": "ContextKeyDestructionReceiptV1",
+        "default": "ContextKeyDestructionReceiptV1",
+        "title": "Schema Version",
+        "type": "string"
+      },
+      "provider": {
+        "maxLength": 100,
+        "minLength": 1,
+        "title": "Provider",
+        "type": "string"
+      },
+      "key_ref": {
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+        "title": "Key Ref",
+        "type": "string"
+      },
+      "namespace_digest": {
+        "pattern": "^[0-9a-f]{64}$",
+        "title": "Namespace Digest",
+        "type": "string"
+      },
+      "key_version": {
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+        "title": "Key Version",
+        "type": "string"
+      },
+      "destroyed": {
+        "const": true,
+        "title": "Destroyed",
+        "type": "boolean"
+      },
+      "destroyed_at": {
+        "minimum": 0,
+        "title": "Destroyed At",
+        "type": "integer"
+      },
+      "issued_at": {
+        "minimum": 0,
+        "title": "Issued At",
+        "type": "integer"
+      },
+      "expires_at": {
+        "minimum": 0,
+        "title": "Expires At",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "provider",
+      "key_ref",
+      "namespace_digest",
+      "key_version",
+      "destroyed",
+      "destroyed_at",
+      "issued_at",
+      "expires_at"
+    ],
+    "title": "KeyDestructionReceiptV1",
+    "type": "object"
+  },
+  "RuntimeBuildManifestV1": {
+    "additionalProperties": false,
+    "description": "Signed build identity for the exact installed runtime package bytes.",
+    "properties": {
+      "schema_version": {
+        "const": "ContextRuntimeBuildManifestV1",
+        "default": "ContextRuntimeBuildManifestV1",
+        "title": "Schema Version",
+        "type": "string"
+      },
+      "distribution": {
+        "const": "aether-context",
+        "default": "aether-context",
+        "title": "Distribution",
+        "type": "string"
+      },
+      "version": {
+        "maxLength": 40,
+        "minLength": 1,
+        "title": "Version",
+        "type": "string"
+      },
+      "source_revision": {
+        "pattern": "^[0-9a-f]{40}$",
+        "title": "Source Revision",
+        "type": "string"
+      },
+      "package_tree_digest": {
+        "pattern": "^[0-9a-f]{64}$",
+        "title": "Package Tree Digest",
+        "type": "string"
+      },
+      "wheel_digest": {
+        "pattern": "^[0-9a-f]{64}$",
+        "title": "Wheel Digest",
+        "type": "string"
+      },
+      "recall_dataset_digest": {
+        "pattern": "^[0-9a-f]{64}$",
+        "title": "Recall Dataset Digest",
+        "type": "string"
+      },
+      "data_plane_case_generator_digest": {
+        "anyOf": [
+          {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Data Plane Case Generator Digest"
+      },
+      "built_at": {
+        "minimum": 0,
+        "title": "Built At",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "version",
+      "source_revision",
+      "package_tree_digest",
+      "wheel_digest",
+      "recall_dataset_digest",
+      "built_at"
+    ],
+    "title": "RuntimeBuildManifestV1",
+    "type": "object"
+  },
+  "ExecutorStabilityReceiptV1": {
+    "additionalProperties": false,
+    "description": "Independent CI/executor observation bound to one measured build.",
+    "properties": {
+      "schema_version": {
+        "const": "ContextExecutorStabilityReceiptV1",
+        "default": "ContextExecutorStabilityReceiptV1",
+        "title": "Schema Version",
+        "type": "string"
+      },
+      "source_revision": {
+        "pattern": "^[0-9a-f]{40}$",
+        "title": "Source Revision",
+        "type": "string"
+      },
+      "profile_benchmark_digest": {
+        "pattern": "^[0-9a-f]{64}$",
+        "title": "Profile Benchmark Digest",
+        "type": "string"
+      },
+      "target_concurrency": {
+        "minimum": 1,
+        "title": "Target Concurrency",
+        "type": "integer"
+      },
+      "ci_receipt_digest": {
+        "pattern": "^[0-9a-f]{64}$",
+        "title": "Ci Receipt Digest",
+        "type": "string"
+      },
+      "executor_stable": {
+        "const": true,
+        "title": "Executor Stable",
+        "type": "boolean"
+      },
+      "started_at": {
+        "minimum": 0,
+        "title": "Started At",
+        "type": "integer"
+      },
+      "finished_at": {
+        "minimum": 0,
+        "title": "Finished At",
+        "type": "integer"
+      },
+      "issued_at": {
+        "minimum": 0,
+        "title": "Issued At",
+        "type": "integer"
+      },
+      "expires_at": {
+        "minimum": 0,
+        "title": "Expires At",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "source_revision",
+      "profile_benchmark_digest",
+      "target_concurrency",
+      "ci_receipt_digest",
+      "executor_stable",
+      "started_at",
+      "finished_at",
+      "issued_at",
+      "expires_at"
+    ],
+    "title": "ExecutorStabilityReceiptV1",
+    "type": "object"
+  },
+  "DataPlaneIsolationReceiptV1": {
+    "additionalProperties": false,
+    "description": "Independent randomized isolation evidence from the hosted request boundary.",
+    "properties": {
+      "schema_version": {
+        "const": "ContextDataPlaneIsolationReceiptV1",
+        "default": "ContextDataPlaneIsolationReceiptV1",
+        "title": "Schema Version",
+        "type": "string"
+      },
+      "source_revision": {
+        "pattern": "^[0-9a-f]{40}$",
+        "title": "Source Revision",
+        "type": "string"
+      },
+      "profile_benchmark_digest": {
+        "pattern": "^[0-9a-f]{64}$",
+        "title": "Profile Benchmark Digest",
+        "type": "string"
+      },
+      "boundary": {
+        "const": "hosted-data-plane/v1",
+        "default": "hosted-data-plane/v1",
+        "title": "Boundary",
+        "type": "string"
+      },
+      "case_generator_digest": {
+        "pattern": "^[0-9a-f]{64}$",
+        "title": "Case Generator Digest",
+        "type": "string"
+      },
+      "cases": {
+        "minimum": 1000000,
+        "title": "Cases",
+        "type": "integer"
+      },
+      "unauthorized_records": {
+        "minimum": 0,
+        "title": "Unauthorized Records",
+        "type": "integer"
+      },
+      "result_digest": {
+        "pattern": "^[0-9a-f]{64}$",
+        "title": "Result Digest",
+        "type": "string"
+      },
+      "started_at": {
+        "minimum": 0,
+        "title": "Started At",
+        "type": "integer"
+      },
+      "finished_at": {
+        "minimum": 0,
+        "title": "Finished At",
+        "type": "integer"
+      },
+      "issued_at": {
+        "minimum": 0,
+        "title": "Issued At",
+        "type": "integer"
+      },
+      "expires_at": {
+        "minimum": 0,
+        "title": "Expires At",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "source_revision",
+      "profile_benchmark_digest",
+      "case_generator_digest",
+      "cases",
+      "unauthorized_records",
+      "result_digest",
+      "started_at",
+      "finished_at",
+      "issued_at",
+      "expires_at"
+    ],
+    "title": "DataPlaneIsolationReceiptV1",
+    "type": "object"
+  },
+  "HostedScaleReceiptV1": {
+    "$defs": {
+      "SignedV1": {
+        "additionalProperties": false,
+        "properties": {
+          "payload": {
+            "additionalProperties": true,
+            "title": "Payload",
+            "type": "object"
+          },
+          "key_id": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,199}$",
+            "title": "Key Id",
+            "type": "string"
+          },
+          "signature": {
+            "maxLength": 128,
+            "minLength": 64,
+            "title": "Signature",
+            "type": "string"
+          }
+        },
+        "required": [
+          "payload",
+          "key_id",
+          "signature"
+        ],
+        "title": "SignedV1",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "description": "Independent, measured evidence for one exact hosted profile.",
+    "properties": {
+      "schema_version": {
+        "const": "HostedScaleReceiptV1",
+        "default": "HostedScaleReceiptV1",
+        "title": "Schema Version",
+        "type": "string"
+      },
+      "profile_benchmark_digest": {
+        "pattern": "^[0-9a-f]{64}$",
+        "title": "Profile Benchmark Digest",
+        "type": "string"
+      },
+      "source_revision": {
+        "pattern": "^[0-9a-f]{40}$",
+        "title": "Source Revision",
+        "type": "string"
+      },
+      "source_tree_clean": {
+        "const": true,
+        "title": "Source Tree Clean",
+        "type": "boolean"
+      },
+      "index_implementation": {
+        "maxLength": 100,
+        "minLength": 1,
+        "title": "Index Implementation",
+        "type": "string"
+      },
+      "index_version": {
+        "maxLength": 100,
+        "minLength": 1,
+        "title": "Index Version",
+        "type": "string"
+      },
+      "embedding_version": {
+        "maxLength": 100,
+        "minLength": 1,
+        "title": "Embedding Version",
+        "type": "string"
+      },
+      "storage_version": {
+        "maxLength": 100,
+        "minLength": 1,
+        "title": "Storage Version",
+        "type": "string"
+      },
+      "configured_max_records": {
+        "minimum": 1,
+        "title": "Configured Max Records",
+        "type": "integer"
+      },
+      "configured_max_indexed_bytes": {
+        "minimum": 1024,
+        "title": "Configured Max Indexed Bytes",
+        "type": "integer"
+      },
+      "indexed_records": {
+        "minimum": 1,
+        "title": "Indexed Records",
+        "type": "integer"
+      },
+      "indexed_bytes": {
+        "minimum": 1,
+        "title": "Indexed Bytes",
+        "type": "integer"
+      },
+      "reachable_tokens": {
+        "minimum": 1,
+        "title": "Reachable Tokens",
+        "type": "integer"
+      },
+      "resident_peak_bytes": {
+        "minimum": 1,
+        "title": "Resident Peak Bytes",
+        "type": "integer"
+      },
+      "retrieval_samples": {
+        "minimum": 20,
+        "title": "Retrieval Samples",
+        "type": "integer"
+      },
+      "target_concurrency": {
+        "minimum": 1,
+        "title": "Target Concurrency",
+        "type": "integer"
+      },
+      "retrieval_p50_ms": {
+        "minimum": 0,
+        "title": "Retrieval P50 Ms",
+        "type": "integer"
+      },
+      "retrieval_p95_ms": {
+        "minimum": 0,
+        "title": "Retrieval P95 Ms",
+        "type": "integer"
+      },
+      "retrieval_p99_ms": {
+        "minimum": 0,
+        "title": "Retrieval P99 Ms",
+        "type": "integer"
+      },
+      "checkpoint_ms": {
+        "minimum": 0,
+        "title": "Checkpoint Ms",
+        "type": "integer"
+      },
+      "checkpoint_receipt_digest": {
+        "pattern": "^[0-9a-f]{64}$",
+        "title": "Checkpoint Receipt Digest",
+        "type": "string"
+      },
+      "hydrate_ms": {
+        "minimum": 0,
+        "title": "Hydrate Ms",
+        "type": "integer"
+      },
+      "hydrate_receipt_digest": {
+        "pattern": "^[0-9a-f]{64}$",
+        "title": "Hydrate Receipt Digest",
+        "type": "string"
+      },
+      "rebuild_ms": {
+        "minimum": 0,
+        "title": "Rebuild Ms",
+        "type": "integer"
+      },
+      "rebuild_receipt_digest": {
+        "pattern": "^[0-9a-f]{64}$",
+        "title": "Rebuild Receipt Digest",
+        "type": "string"
+      },
+      "recall_dataset_name": {
+        "maxLength": 100,
+        "minLength": 1,
+        "title": "Recall Dataset Name",
+        "type": "string"
+      },
+      "recall_dataset_digest": {
+        "pattern": "^[0-9a-f]{64}$",
+        "title": "Recall Dataset Digest",
+        "type": "string"
+      },
+      "recall_basis_points": {
+        "maximum": 10000,
+        "minimum": 0,
+        "title": "Recall Basis Points",
+        "type": "integer"
+      },
+      "isolation_cases": {
+        "minimum": 1000000,
+        "title": "Isolation Cases",
+        "type": "integer"
+      },
+      "unauthorized_records": {
+        "minimum": 0,
+        "title": "Unauthorized Records",
+        "type": "integer"
+      },
+      "isolation_result_digest": {
+        "pattern": "^[0-9a-f]{64}$",
+        "title": "Isolation Result Digest",
+        "type": "string"
+      },
+      "isolation_evidence_class": {
+        "enum": [
+          "predicate",
+          "data_plane"
+        ],
+        "title": "Isolation Evidence Class",
+        "type": "string"
+      },
+      "data_plane_isolation_receipt": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/SignedV1"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "executor_stable": {
+        "title": "Executor Stable",
+        "type": "boolean"
+      },
+      "executor_stability_receipt": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/SignedV1"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "started_at": {
+        "minimum": 0,
+        "title": "Started At",
+        "type": "integer"
+      },
+      "finished_at": {
+        "minimum": 0,
+        "title": "Finished At",
+        "type": "integer"
+      },
+      "issued_at": {
+        "minimum": 0,
+        "title": "Issued At",
+        "type": "integer"
+      },
+      "expires_at": {
+        "minimum": 0,
+        "title": "Expires At",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "profile_benchmark_digest",
+      "source_revision",
+      "source_tree_clean",
+      "index_implementation",
+      "index_version",
+      "embedding_version",
+      "storage_version",
+      "configured_max_records",
+      "configured_max_indexed_bytes",
+      "indexed_records",
+      "indexed_bytes",
+      "reachable_tokens",
+      "resident_peak_bytes",
+      "retrieval_samples",
+      "target_concurrency",
+      "retrieval_p50_ms",
+      "retrieval_p95_ms",
+      "retrieval_p99_ms",
+      "checkpoint_ms",
+      "checkpoint_receipt_digest",
+      "hydrate_ms",
+      "hydrate_receipt_digest",
+      "rebuild_ms",
+      "rebuild_receipt_digest",
+      "recall_dataset_name",
+      "recall_dataset_digest",
+      "recall_basis_points",
+      "isolation_cases",
+      "unauthorized_records",
+      "isolation_result_digest",
+      "isolation_evidence_class",
+      "executor_stable",
+      "started_at",
+      "finished_at",
+      "issued_at",
+      "expires_at"
+    ],
+    "title": "HostedScaleReceiptV1",
     "type": "object"
   },
   "ClosureProofV1": {
