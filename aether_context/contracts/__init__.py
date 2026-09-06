@@ -384,6 +384,7 @@ class RuntimeBuildManifestV1(Closed):
     package_tree_digest: Digest
     wheel_digest: Digest
     recall_dataset_digest: Digest
+    data_plane_case_generator_digest: Digest | None = None
     built_at: int = Field(ge=0)
 
 

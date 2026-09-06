@@ -70,6 +70,7 @@ class BuildQualification:
     failures: tuple[str, ...]
     source_revision: str | None
     recall_dataset_digest: str | None
+    data_plane_case_generator_digest: str | None
     manifest_digest: str | None
 
 
@@ -83,7 +84,9 @@ def qualify_runtime_build(
     """Verify signed build identity against the bytes of this imported package."""
 
     if envelope is None or not keys:
-        return BuildQualification(False, ("runtime_build_manifest_missing",), None, None, None)
+        return BuildQualification(
+            False, ("runtime_build_manifest_missing",), None, None, None, None
+        )
     try:
         manifest = RuntimeBuildManifestV1.model_validate(verify(envelope, keys))
     except (ValueError, TypeError) as exc:
@@ -98,6 +101,7 @@ def qualify_runtime_build(
         tuple(failures),
         manifest.source_revision,
         manifest.recall_dataset_digest,
+        manifest.data_plane_case_generator_digest,
         digest(envelope),
     )
 
@@ -110,6 +114,7 @@ def qualify_scale_receipt(
     now: int,
     expected_source_revision: str | None = None,
     expected_recall_dataset_digest: str | None = None,
+    expected_data_plane_case_generator_digest: str | None = None,
     executor_stability_keys: dict | None = None,
     data_plane_isolation_keys: dict | None = None,
 ) -> ScaleQualification:
@@ -194,6 +199,13 @@ def qualify_scale_receipt(
             or isolation.result_digest != receipt.isolation_result_digest
         ):
             raise ContextFault("context_data_plane_isolation_receipt_mismatch")
+        if expected_data_plane_case_generator_digest is None:
+            failures.append("data_plane_case_generator_unbound")
+        elif (
+            isolation.case_generator_digest
+            != expected_data_plane_case_generator_digest
+        ):
+            failures.append("data_plane_case_generator_mismatch")
         if not isolation.issued_at <= now < isolation.expires_at:
             failures.append("namespace_data_plane_receipt_expired")
     if not receipt.executor_stable or receipt.executor_stability_receipt is None:

@@ -1556,6 +1556,19 @@
         "title": "Recall Dataset Digest",
         "type": "string"
       },
+      "data_plane_case_generator_digest": {
+        "anyOf": [
+          {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Data Plane Case Generator Digest"
+      },
       "built_at": {
         "minimum": 0,
         "title": "Built At",

@@ -82,7 +82,9 @@ Credential names: `context-dek`, `context-cycle-wrapper-key` (32 bytes each),
 `context-runtime-build-keys.json` verifies
 `context-runtime-build-manifest.json`, which binds the source revision, wheel
 digest, approved recall-dataset digest and a digest of every installed runtime
-source/schema byte. An operator environment string cannot qualify a build.
+source/schema byte. It also pins the approved hosted data-plane case-generator
+digest; older manifests without that field remain readable but cannot enable
+reach. An operator environment string cannot qualify a build.
 `context-benchmark-receipt.json` is the signed measured receipt. Build,
 benchmark, executor-stability, deletion, Gateway, verifier and service keys
 must be cryptographically distinct, including when their key IDs differ. The
@@ -157,7 +159,9 @@ memory, latency, recovery and recall thresholds. The local million-case result
 is labeled `predicate` and is deliberately nonqualifying. A separate randomized,
 independently signed million-case receipt measured through the real hosted data
 plane must be embedded and labeled `data_plane` before the isolation gate can
-pass. The profile must then point to the exact signed benchmark envelope. Hosted
+pass. Qualification compares that receipt's case-generator digest to the one
+pinned by the independent signed runtime build manifest. The profile must then
+point to the exact signed benchmark envelope. Hosted
 `reach_claim_enabled` stays false whenever overall hosted readiness is false.
 
 These local measurements and chaos tests do not satisfy Gate 8 or establish a

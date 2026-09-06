@@ -18,8 +18,10 @@ All notable changes to `aether-context` are documented here. Format follows
 ### Changed
 - Hosted readiness revalidates expiring benchmark/provider evidence on every
   admission and binds the benchmark source and recall dataset to a signed build
-  manifest matching the installed package bytes. The legacy deletion route now
-  fails closed in favor of signed retention, including for legacy checkpoints.
+  manifest matching the installed package bytes. The build also pins the exact
+  hosted data-plane case generator required for scale qualification. The legacy
+  deletion route now fails closed in favor of signed retention, including for
+  legacy checkpoints.
 
 ## [0.3.1] — 2026-09-04
 

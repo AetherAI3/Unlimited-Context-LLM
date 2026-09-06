@@ -204,6 +204,9 @@ class ContextEngine:
             expected_recall_dataset_digest=(
                 self.build_qualification.recall_dataset_digest
             ),
+            expected_data_plane_case_generator_digest=(
+                self.build_qualification.data_plane_case_generator_digest
+            ),
             executor_stability_keys=self._executor_stability_keys,
             data_plane_isolation_keys=self._data_plane_isolation_keys,
         )
@@ -290,6 +293,9 @@ class ContextEngine:
             "runtime_build_failures": list(self.build_qualification.failures),
             "runtime_build_manifest_digest": self.build_qualification.manifest_digest,
             "runtime_source_revision": self.build_qualification.source_revision,
+            "runtime_data_plane_case_generator_digest": (
+                self.build_qualification.data_plane_case_generator_digest
+            ),
             "cycle_key_provider": getattr(self.cycle_keys, "provider", None),
             "managed_cycle_keys_ready": managed_keys_ready,
             "managed_cycle_key_failures": list(managed_key_failures),

@@ -857,6 +857,7 @@ def _scale_evidence():
     )
     revision = "d" * 40
     dataset_digest = digest("approved-project-recall-dataset")
+    generator_digest = digest("randomized-data-plane-cases/v1")
     isolation_result_digest = digest("isolation-scale-result")
     isolation = isolation_signer.sign(
         {
@@ -864,7 +865,7 @@ def _scale_evidence():
             "source_revision": revision,
             "profile_benchmark_digest": profile_benchmark_digest(provisional),
             "boundary": "hosted-data-plane/v1",
-            "case_generator_digest": digest("randomized-data-plane-cases/v1"),
+            "case_generator_digest": generator_digest,
             "cases": 1_000_000,
             "unauthorized_records": 0,
             "result_digest": isolation_result_digest,
@@ -954,6 +955,7 @@ def test_scale_receipt_enables_reach_only_for_exact_signed_build():
     keys = {benchmark.key_id: benchmark.key.public_key()}
     stability_keys = {stability.key_id: stability.key.public_key()}
     isolation_keys = {isolation.key_id: isolation.key.public_key()}
+    generator_digest = digest("randomized-data-plane-cases/v1")
     qualified = qualify_scale_receipt(
         profile,
         envelope,
@@ -961,6 +963,7 @@ def test_scale_receipt_enables_reach_only_for_exact_signed_build():
         now=1000,
         expected_source_revision=revision,
         expected_recall_dataset_digest=dataset_digest,
+        expected_data_plane_case_generator_digest=generator_digest,
         executor_stability_keys=stability_keys,
         data_plane_isolation_keys=isolation_keys,
     )
@@ -973,6 +976,7 @@ def test_scale_receipt_enables_reach_only_for_exact_signed_build():
         now=1000,
         expected_source_revision="e" * 40,
         expected_recall_dataset_digest=dataset_digest,
+        expected_data_plane_case_generator_digest=generator_digest,
         executor_stability_keys=stability_keys,
         data_plane_isolation_keys=isolation_keys,
     )
@@ -988,6 +992,7 @@ def test_scale_receipt_enables_reach_only_for_exact_signed_build():
         now=1000,
         expected_source_revision=revision,
         expected_recall_dataset_digest=dataset_digest,
+        expected_data_plane_case_generator_digest=generator_digest,
         executor_stability_keys=stability_keys,
         data_plane_isolation_keys=isolation_keys,
     )
@@ -1006,11 +1011,44 @@ def test_scale_receipt_enables_reach_only_for_exact_signed_build():
         now=1000,
         expected_source_revision=revision,
         expected_recall_dataset_digest=dataset_digest,
+        expected_data_plane_case_generator_digest=generator_digest,
         executor_stability_keys=stability_keys,
         data_plane_isolation_keys=isolation_keys,
     )
     assert predicate_result.valid is False
     assert "namespace_data_plane_unmeasured" in predicate_result.failures
+    changed_generator_receipt = isolation.sign(
+        {
+            **envelope["payload"]["data_plane_isolation_receipt"]["payload"],
+            "case_generator_digest": digest("weak-or-different-generator"),
+        }
+    )
+    changed_generator = benchmark.sign(
+        {
+            **envelope["payload"],
+            "data_plane_isolation_receipt": changed_generator_receipt,
+        }
+    )
+    changed_generator_profile = profile.model_copy(
+        update={"benchmark_receipt": digest(changed_generator)}
+    )
+    changed_generator_result = qualify_scale_receipt(
+        changed_generator_profile,
+        changed_generator,
+        keys,
+        now=1000,
+        expected_source_revision=revision,
+        expected_recall_dataset_digest=dataset_digest,
+        expected_data_plane_case_generator_digest=generator_digest,
+        executor_stability_keys=stability_keys,
+        data_plane_isolation_keys=isolation_keys,
+    )
+    assert changed_generator_result.valid is False
+    assert changed_generator_result.reachable_tokens is None
+    assert (
+        "data_plane_case_generator_mismatch"
+        in changed_generator_result.failures
+    )
 
 
 def test_benchmark_signer_must_be_independent(tmp_path):
@@ -1058,6 +1096,9 @@ def test_hosted_reach_claim_stays_off_when_managed_retention_is_not_ready(tmp_pa
             "package_tree_digest": runtime_package_tree_digest(),
             "wheel_digest": digest("exact-built-wheel"),
             "recall_dataset_digest": dataset_digest,
+            "data_plane_case_generator_digest": digest(
+                "randomized-data-plane-cases/v1"
+            ),
             "built_at": 800,
         }
     )
@@ -1110,6 +1151,33 @@ def test_hosted_reach_claim_stays_off_when_managed_retention_is_not_ready(tmp_pa
     healthy = healthy_engine.health()
     assert healthy["ready"] is True
     assert healthy["reach_claim_enabled"] is True
+    legacy_build_payload = build_manifest["payload"].copy()
+    legacy_build_payload.pop("data_plane_case_generator_digest")
+    legacy_build_common = {
+        **common,
+        "runtime_build_manifest": build.sign(legacy_build_payload),
+    }
+    legacy_build_health = ContextEngine(
+        tmp_path / "legacy-build.sqlite3",
+        profile,
+        EnvelopeCipher(os.urandom(32)),
+        service,
+        {authority.key_id: authority.key.public_key()},
+        {proof.key_id: proof.key.public_key()},
+        clock=lambda: clock[0],
+        cycle_keys=managed,
+        managed_key_provider_receipt=provider_receipt,
+        key_provider_keys={
+            provider_authority.key_id: provider_authority.key.public_key()
+        },
+        **legacy_build_common,
+    ).health()
+    assert legacy_build_health["ready"] is False
+    assert legacy_build_health["reach_claim_enabled"] is False
+    assert (
+        "data_plane_case_generator_unbound"
+        in legacy_build_health["benchmark_failures"]
+    )
     clock[0] = 1200
     expired = healthy_engine.health()
     assert expired["ready"] is False
