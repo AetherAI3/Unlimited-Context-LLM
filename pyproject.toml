@@ -38,11 +38,13 @@ ollama   = []                              # primary path uses stdlib urllib —
 llamacpp = ["llama-cpp-python>=0.2"]
 hf       = ["transformers>=4.40", "torch>=2.2"]
 fast     = ["hnswlib>=0.8"]                # faster ANN; flat numpy index is the fallback
+hosted   = ["pydantic>=2.10,<3", "cryptography>=44,<51"]
 all      = ["aether-context[llamacpp,hf,fast]"]
-dev      = ["pytest>=8", "pytest-cov", "ruff>=0.5", "mypy>=1.10", "pyyaml>=6"]
+dev      = ["pytest>=8", "pytest-cov", "ruff>=0.5", "mypy>=1.10", "pyyaml>=6", "aether-context[hosted]"]
 
 [project.scripts]
 aether-context = "aether_context.cli:main"
+aether-contextd = "aether_context.service:main"
 
 [tool.setuptools.dynamic]
 version = { attr = "aether_context.__version__" }
@@ -53,10 +55,11 @@ version = { attr = "aether_context.__version__" }
 # script; shipping a second copy here would silently overwrite the other package's files on
 # any machine that installed both. The agent stays in-repo (and importable in the test suite,
 # which runs `python -m pytest` from the repo root) but out of the wheel.
-packages = ["aether_context"]
+[tool.setuptools.packages.find]
+include = ["aether_context", "aether_context.*"]
 
 [tool.setuptools.package-data]
-aether_context = ["py.typed"]
+aether_context = ["py.typed", "contracts/schema-v1.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

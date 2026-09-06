@@ -1,0 +1,1048 @@
+{
+  "purpose": "Synthetic interoperability and UI test data; not a release-gate receipt",
+  "keys": {
+    "fixture-only": "ORHKRgQBiuHujH+73ERCYrnPGT69nF1Txc4MrYYumKk="
+  },
+  "vectors": [
+    {
+      "value": {
+        "2": "two",
+        "10": "ten",
+        "unicode": "é 😀"
+      },
+      "canonical": "{\"10\":\"ten\",\"2\":\"two\",\"unicode\":\"é 😀\"}",
+      "digest": "594292f23eee55abfacd4081e863127ebecdcd5b1f4584d64898ab523e2363ca"
+    },
+    {
+      "value": [
+        null,
+        true,
+        false,
+        9007199254740991,
+        -9007199254740991
+      ],
+      "canonical": "[null,true,false,9007199254740991,-9007199254740991]",
+      "digest": "440efa57bb93b02ac9d8777140ee049d1f37a83e4ce8233405dfbe2d0ed7b628"
+    },
+    {
+      "value": {
+        "schema_version": "ProjectMemoryGraphV1",
+        "project_id": "prj_0123456789abcdef",
+        "graph_id": "pgraph_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "source_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "source_tree_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "policy_digest": "0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe",
+        "nodes": [
+          {
+            "id": "node_00",
+            "kind": "repository",
+            "schema_version": 1,
+            "label": "context-project",
+            "summary": "Synthetic contract and UI fixture; no production evidence.",
+            "provenance": {
+              "producer": "fixture-tree-builder",
+              "source": "repository_verified",
+              "evidence_refs": [
+                "b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d"
+              ],
+              "policy_digest": "0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe"
+            },
+            "locator": null,
+            "first_seen_commit": null,
+            "last_seen_commit": null,
+            "confidence_milli": null,
+            "tombstone": false,
+            "visibility": "project",
+            "sensitivity": "internal"
+          },
+          {
+            "id": "node_01",
+            "kind": "directory",
+            "schema_version": 1,
+            "label": "src",
+            "summary": "Synthetic contract and UI fixture; no production evidence.",
+            "provenance": {
+              "producer": "fixture-tree-builder",
+              "source": "repository_verified",
+              "evidence_refs": [
+                "b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d"
+              ],
+              "policy_digest": "0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe"
+            },
+            "locator": null,
+            "first_seen_commit": null,
+            "last_seen_commit": null,
+            "confidence_milli": null,
+            "tombstone": false,
+            "visibility": "project",
+            "sensitivity": "internal"
+          },
+          {
+            "id": "node_02",
+            "kind": "directory",
+            "schema_version": 1,
+            "label": "tests",
+            "summary": "Synthetic contract and UI fixture; no production evidence.",
+            "provenance": {
+              "producer": "fixture-tree-builder",
+              "source": "repository_verified",
+              "evidence_refs": [
+                "b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d"
+              ],
+              "policy_digest": "0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe"
+            },
+            "locator": null,
+            "first_seen_commit": null,
+            "last_seen_commit": null,
+            "confidence_milli": null,
+            "tombstone": false,
+            "visibility": "project",
+            "sensitivity": "internal"
+          },
+          {
+            "id": "node_03",
+            "kind": "file",
+            "schema_version": 1,
+            "label": "src/context.ts",
+            "summary": "Synthetic contract and UI fixture; no production evidence.",
+            "provenance": {
+              "producer": "fixture-tree-builder",
+              "source": "repository_verified",
+              "evidence_refs": [
+                "b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d"
+              ],
+              "policy_digest": "0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe"
+            },
+            "locator": null,
+            "first_seen_commit": null,
+            "last_seen_commit": null,
+            "confidence_milli": null,
+            "tombstone": false,
+            "visibility": "project",
+            "sensitivity": "internal"
+          },
+          {
+            "id": "node_04",
+            "kind": "file",
+            "schema_version": 1,
+            "label": "src/memory.ts",
+            "summary": "Synthetic contract and UI fixture; no production evidence.",
+            "provenance": {
+              "producer": "fixture-tree-builder",
+              "source": "repository_verified",
+              "evidence_refs": [
+                "b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d"
+              ],
+              "policy_digest": "0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe"
+            },
+            "locator": null,
+            "first_seen_commit": null,
+            "last_seen_commit": null,
+            "confidence_milli": null,
+            "tombstone": false,
+            "visibility": "project",
+            "sensitivity": "internal"
+          },
+          {
+            "id": "node_05",
+            "kind": "file",
+            "schema_version": 1,
+            "label": "src/auth.ts",
+            "summary": "Synthetic contract and UI fixture; no production evidence.",
+            "provenance": {
+              "producer": "fixture-tree-builder",
+              "source": "repository_verified",
+              "evidence_refs": [
+                "b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d"
+              ],
+              "policy_digest": "0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe"
+            },
+            "locator": null,
+            "first_seen_commit": null,
+            "last_seen_commit": null,
+            "confidence_milli": null,
+            "tombstone": false,
+            "visibility": "project",
+            "sensitivity": "internal"
+          },
+          {
+            "id": "node_06",
+            "kind": "test",
+            "schema_version": 1,
+            "label": "tests/context.test.ts",
+            "summary": "Synthetic contract and UI fixture; no production evidence.",
+            "provenance": {
+              "producer": "fixture-tree-builder",
+              "source": "repository_verified",
+              "evidence_refs": [
+                "b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d"
+              ],
+              "policy_digest": "0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe"
+            },
+            "locator": null,
+            "first_seen_commit": null,
+            "last_seen_commit": null,
+            "confidence_milli": null,
+            "tombstone": false,
+            "visibility": "project",
+            "sensitivity": "internal"
+          },
+          {
+            "id": "node_07",
+            "kind": "test",
+            "schema_version": 1,
+            "label": "tests/memory.test.ts",
+            "summary": "Synthetic contract and UI fixture; no production evidence.",
+            "provenance": {
+              "producer": "fixture-tree-builder",
+              "source": "repository_verified",
+              "evidence_refs": [
+                "b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d"
+              ],
+              "policy_digest": "0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe"
+            },
+            "locator": null,
+            "first_seen_commit": null,
+            "last_seen_commit": null,
+            "confidence_milli": null,
+            "tombstone": false,
+            "visibility": "project",
+            "sensitivity": "internal"
+          },
+          {
+            "id": "node_08",
+            "kind": "decision",
+            "schema_version": 1,
+            "label": "Keep project knowledge pinned",
+            "summary": "Synthetic contract and UI fixture; no production evidence.",
+            "provenance": {
+              "producer": "fixture-tree-builder",
+              "source": "repository_verified",
+              "evidence_refs": [
+                "b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d"
+              ],
+              "policy_digest": "0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe"
+            },
+            "locator": null,
+            "first_seen_commit": null,
+            "last_seen_commit": null,
+            "confidence_milli": null,
+            "tombstone": false,
+            "visibility": "project",
+            "sensitivity": "internal"
+          },
+          {
+            "id": "node_09",
+            "kind": "invariant",
+            "schema_version": 1,
+            "label": "A lease is required on every turn",
+            "summary": "Synthetic contract and UI fixture; no production evidence.",
+            "provenance": {
+              "producer": "fixture-tree-builder",
+              "source": "repository_verified",
+              "evidence_refs": [
+                "b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d"
+              ],
+              "policy_digest": "0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe"
+            },
+            "locator": null,
+            "first_seen_commit": null,
+            "last_seen_commit": null,
+            "confidence_milli": null,
+            "tombstone": false,
+            "visibility": "project",
+            "sensitivity": "internal"
+          },
+          {
+            "id": "node_10",
+            "kind": "risk",
+            "schema_version": 1,
+            "label": "Concurrent memory edits need reconciliation",
+            "summary": "Synthetic contract and UI fixture; no production evidence.",
+            "provenance": {
+              "producer": "fixture-tree-builder",
+              "source": "repository_verified",
+              "evidence_refs": [
+                "b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d"
+              ],
+              "policy_digest": "0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe"
+            },
+            "locator": null,
+            "first_seen_commit": null,
+            "last_seen_commit": null,
+            "confidence_milli": null,
+            "tombstone": false,
+            "visibility": "project",
+            "sensitivity": "internal"
+          },
+          {
+            "id": "node_11",
+            "kind": "proof",
+            "schema_version": 1,
+            "label": "Checkpoint verified",
+            "summary": "Synthetic contract and UI fixture; no production evidence.",
+            "provenance": {
+              "producer": "fixture-tree-builder",
+              "source": "repository_verified",
+              "evidence_refs": [
+                "b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d"
+              ],
+              "policy_digest": "0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe"
+            },
+            "locator": null,
+            "first_seen_commit": null,
+            "last_seen_commit": null,
+            "confidence_milli": null,
+            "tombstone": false,
+            "visibility": "project",
+            "sensitivity": "internal"
+          }
+        ],
+        "edges": [
+          {
+            "id": "edge_01",
+            "source": "node_00",
+            "target": "node_01",
+            "kind": "contains",
+            "schema_version": 1,
+            "provenance": {
+              "producer": "fixture-tree-builder",
+              "source": "repository_verified",
+              "evidence_refs": [
+                "b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d"
+              ],
+              "policy_digest": "0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe"
+            },
+            "tombstone": false,
+            "visibility": "project",
+            "sensitivity": "internal"
+          },
+          {
+            "id": "edge_02",
+            "source": "node_00",
+            "target": "node_02",
+            "kind": "contains",
+            "schema_version": 1,
+            "provenance": {
+              "producer": "fixture-tree-builder",
+              "source": "repository_verified",
+              "evidence_refs": [
+                "b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d"
+              ],
+              "policy_digest": "0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe"
+            },
+            "tombstone": false,
+            "visibility": "project",
+            "sensitivity": "internal"
+          },
+          {
+            "id": "edge_03",
+            "source": "node_00",
+            "target": "node_03",
+            "kind": "contains",
+            "schema_version": 1,
+            "provenance": {
+              "producer": "fixture-tree-builder",
+              "source": "repository_verified",
+              "evidence_refs": [
+                "b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d"
+              ],
+              "policy_digest": "0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe"
+            },
+            "tombstone": false,
+            "visibility": "project",
+            "sensitivity": "internal"
+          },
+          {
+            "id": "edge_04",
+            "source": "node_02",
+            "target": "node_04",
+            "kind": "contains",
+            "schema_version": 1,
+            "provenance": {
+              "producer": "fixture-tree-builder",
+              "source": "repository_verified",
+              "evidence_refs": [
+                "b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d"
+              ],
+              "policy_digest": "0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe"
+            },
+            "tombstone": false,
+            "visibility": "project",
+            "sensitivity": "internal"
+          },
+          {
+            "id": "edge_05",
+            "source": "node_03",
+            "target": "node_05",
+            "kind": "contains",
+            "schema_version": 1,
+            "provenance": {
+              "producer": "fixture-tree-builder",
+              "source": "repository_verified",
+              "evidence_refs": [
+                "b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d"
+              ],
+              "policy_digest": "0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe"
+            },
+            "tombstone": false,
+            "visibility": "project",
+            "sensitivity": "internal"
+          },
+          {
+            "id": "edge_06",
+            "source": "node_01",
+            "target": "node_06",
+            "kind": "evidenced_by",
+            "schema_version": 1,
+            "provenance": {
+              "producer": "fixture-tree-builder",
+              "source": "repository_verified",
+              "evidence_refs": [
+                "b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d"
+              ],
+              "policy_digest": "0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe"
+            },
+            "tombstone": false,
+            "visibility": "project",
+            "sensitivity": "internal"
+          },
+          {
+            "id": "edge_07",
+            "source": "node_02",
+            "target": "node_07",
+            "kind": "evidenced_by",
+            "schema_version": 1,
+            "provenance": {
+              "producer": "fixture-tree-builder",
+              "source": "repository_verified",
+              "evidence_refs": [
+                "b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d"
+              ],
+              "policy_digest": "0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe"
+            },
+            "tombstone": false,
+            "visibility": "project",
+            "sensitivity": "internal"
+          },
+          {
+            "id": "edge_08",
+            "source": "node_03",
+            "target": "node_08",
+            "kind": "evidenced_by",
+            "schema_version": 1,
+            "provenance": {
+              "producer": "fixture-tree-builder",
+              "source": "repository_verified",
+              "evidence_refs": [
+                "b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d"
+              ],
+              "policy_digest": "0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe"
+            },
+            "tombstone": false,
+            "visibility": "project",
+            "sensitivity": "internal"
+          },
+          {
+            "id": "edge_09",
+            "source": "node_01",
+            "target": "node_09",
+            "kind": "evidenced_by",
+            "schema_version": 1,
+            "provenance": {
+              "producer": "fixture-tree-builder",
+              "source": "repository_verified",
+              "evidence_refs": [
+                "b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d"
+              ],
+              "policy_digest": "0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe"
+            },
+            "tombstone": false,
+            "visibility": "project",
+            "sensitivity": "internal"
+          },
+          {
+            "id": "edge_10",
+            "source": "node_02",
+            "target": "node_10",
+            "kind": "evidenced_by",
+            "schema_version": 1,
+            "provenance": {
+              "producer": "fixture-tree-builder",
+              "source": "repository_verified",
+              "evidence_refs": [
+                "b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d"
+              ],
+              "policy_digest": "0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe"
+            },
+            "tombstone": false,
+            "visibility": "project",
+            "sensitivity": "internal"
+          },
+          {
+            "id": "edge_11",
+            "source": "node_03",
+            "target": "node_11",
+            "kind": "evidenced_by",
+            "schema_version": 1,
+            "provenance": {
+              "producer": "fixture-tree-builder",
+              "source": "repository_verified",
+              "evidence_refs": [
+                "b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d"
+              ],
+              "policy_digest": "0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe"
+            },
+            "tombstone": false,
+            "visibility": "project",
+            "sensitivity": "internal"
+          }
+        ],
+        "partial": false,
+        "truncation_reasons": []
+      },
+      "canonical": "{\"edges\":[{\"id\":\"edge_01\",\"kind\":\"contains\",\"provenance\":{\"evidence_refs\":[\"b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d\"],\"policy_digest\":\"0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe\",\"producer\":\"fixture-tree-builder\",\"source\":\"repository_verified\"},\"schema_version\":1,\"sensitivity\":\"internal\",\"source\":\"node_00\",\"target\":\"node_01\",\"tombstone\":false,\"visibility\":\"project\"},{\"id\":\"edge_02\",\"kind\":\"contains\",\"provenance\":{\"evidence_refs\":[\"b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d\"],\"policy_digest\":\"0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe\",\"producer\":\"fixture-tree-builder\",\"source\":\"repository_verified\"},\"schema_version\":1,\"sensitivity\":\"internal\",\"source\":\"node_00\",\"target\":\"node_02\",\"tombstone\":false,\"visibility\":\"project\"},{\"id\":\"edge_03\",\"kind\":\"contains\",\"provenance\":{\"evidence_refs\":[\"b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d\"],\"policy_digest\":\"0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe\",\"producer\":\"fixture-tree-builder\",\"source\":\"repository_verified\"},\"schema_version\":1,\"sensitivity\":\"internal\",\"source\":\"node_00\",\"target\":\"node_03\",\"tombstone\":false,\"visibility\":\"project\"},{\"id\":\"edge_04\",\"kind\":\"contains\",\"provenance\":{\"evidence_refs\":[\"b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d\"],\"policy_digest\":\"0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe\",\"producer\":\"fixture-tree-builder\",\"source\":\"repository_verified\"},\"schema_version\":1,\"sensitivity\":\"internal\",\"source\":\"node_02\",\"target\":\"node_04\",\"tombstone\":false,\"visibility\":\"project\"},{\"id\":\"edge_05\",\"kind\":\"contains\",\"provenance\":{\"evidence_refs\":[\"b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d\"],\"policy_digest\":\"0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe\",\"producer\":\"fixture-tree-builder\",\"source\":\"repository_verified\"},\"schema_version\":1,\"sensitivity\":\"internal\",\"source\":\"node_03\",\"target\":\"node_05\",\"tombstone\":false,\"visibility\":\"project\"},{\"id\":\"edge_06\",\"kind\":\"evidenced_by\",\"provenance\":{\"evidence_refs\":[\"b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d\"],\"policy_digest\":\"0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe\",\"producer\":\"fixture-tree-builder\",\"source\":\"repository_verified\"},\"schema_version\":1,\"sensitivity\":\"internal\",\"source\":\"node_01\",\"target\":\"node_06\",\"tombstone\":false,\"visibility\":\"project\"},{\"id\":\"edge_07\",\"kind\":\"evidenced_by\",\"provenance\":{\"evidence_refs\":[\"b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d\"],\"policy_digest\":\"0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe\",\"producer\":\"fixture-tree-builder\",\"source\":\"repository_verified\"},\"schema_version\":1,\"sensitivity\":\"internal\",\"source\":\"node_02\",\"target\":\"node_07\",\"tombstone\":false,\"visibility\":\"project\"},{\"id\":\"edge_08\",\"kind\":\"evidenced_by\",\"provenance\":{\"evidence_refs\":[\"b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d\"],\"policy_digest\":\"0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe\",\"producer\":\"fixture-tree-builder\",\"source\":\"repository_verified\"},\"schema_version\":1,\"sensitivity\":\"internal\",\"source\":\"node_03\",\"target\":\"node_08\",\"tombstone\":false,\"visibility\":\"project\"},{\"id\":\"edge_09\",\"kind\":\"evidenced_by\",\"provenance\":{\"evidence_refs\":[\"b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d\"],\"policy_digest\":\"0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe\",\"producer\":\"fixture-tree-builder\",\"source\":\"repository_verified\"},\"schema_version\":1,\"sensitivity\":\"internal\",\"source\":\"node_01\",\"target\":\"node_09\",\"tombstone\":false,\"visibility\":\"project\"},{\"id\":\"edge_10\",\"kind\":\"evidenced_by\",\"provenance\":{\"evidence_refs\":[\"b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d\"],\"policy_digest\":\"0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe\",\"producer\":\"fixture-tree-builder\",\"source\":\"repository_verified\"},\"schema_version\":1,\"sensitivity\":\"internal\",\"source\":\"node_02\",\"target\":\"node_10\",\"tombstone\":false,\"visibility\":\"project\"},{\"id\":\"edge_11\",\"kind\":\"evidenced_by\",\"provenance\":{\"evidence_refs\":[\"b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d\"],\"policy_digest\":\"0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe\",\"producer\":\"fixture-tree-builder\",\"source\":\"repository_verified\"},\"schema_version\":1,\"sensitivity\":\"internal\",\"source\":\"node_03\",\"target\":\"node_11\",\"tombstone\":false,\"visibility\":\"project\"}],\"graph_id\":\"pgraph_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"nodes\":[{\"confidence_milli\":null,\"first_seen_commit\":null,\"id\":\"node_00\",\"kind\":\"repository\",\"label\":\"context-project\",\"last_seen_commit\":null,\"locator\":null,\"provenance\":{\"evidence_refs\":[\"b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d\"],\"policy_digest\":\"0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe\",\"producer\":\"fixture-tree-builder\",\"source\":\"repository_verified\"},\"schema_version\":1,\"sensitivity\":\"internal\",\"summary\":\"Synthetic contract and UI fixture; no production evidence.\",\"tombstone\":false,\"visibility\":\"project\"},{\"confidence_milli\":null,\"first_seen_commit\":null,\"id\":\"node_01\",\"kind\":\"directory\",\"label\":\"src\",\"last_seen_commit\":null,\"locator\":null,\"provenance\":{\"evidence_refs\":[\"b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d\"],\"policy_digest\":\"0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe\",\"producer\":\"fixture-tree-builder\",\"source\":\"repository_verified\"},\"schema_version\":1,\"sensitivity\":\"internal\",\"summary\":\"Synthetic contract and UI fixture; no production evidence.\",\"tombstone\":false,\"visibility\":\"project\"},{\"confidence_milli\":null,\"first_seen_commit\":null,\"id\":\"node_02\",\"kind\":\"directory\",\"label\":\"tests\",\"last_seen_commit\":null,\"locator\":null,\"provenance\":{\"evidence_refs\":[\"b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d\"],\"policy_digest\":\"0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe\",\"producer\":\"fixture-tree-builder\",\"source\":\"repository_verified\"},\"schema_version\":1,\"sensitivity\":\"internal\",\"summary\":\"Synthetic contract and UI fixture; no production evidence.\",\"tombstone\":false,\"visibility\":\"project\"},{\"confidence_milli\":null,\"first_seen_commit\":null,\"id\":\"node_03\",\"kind\":\"file\",\"label\":\"src/context.ts\",\"last_seen_commit\":null,\"locator\":null,\"provenance\":{\"evidence_refs\":[\"b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d\"],\"policy_digest\":\"0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe\",\"producer\":\"fixture-tree-builder\",\"source\":\"repository_verified\"},\"schema_version\":1,\"sensitivity\":\"internal\",\"summary\":\"Synthetic contract and UI fixture; no production evidence.\",\"tombstone\":false,\"visibility\":\"project\"},{\"confidence_milli\":null,\"first_seen_commit\":null,\"id\":\"node_04\",\"kind\":\"file\",\"label\":\"src/memory.ts\",\"last_seen_commit\":null,\"locator\":null,\"provenance\":{\"evidence_refs\":[\"b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d\"],\"policy_digest\":\"0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe\",\"producer\":\"fixture-tree-builder\",\"source\":\"repository_verified\"},\"schema_version\":1,\"sensitivity\":\"internal\",\"summary\":\"Synthetic contract and UI fixture; no production evidence.\",\"tombstone\":false,\"visibility\":\"project\"},{\"confidence_milli\":null,\"first_seen_commit\":null,\"id\":\"node_05\",\"kind\":\"file\",\"label\":\"src/auth.ts\",\"last_seen_commit\":null,\"locator\":null,\"provenance\":{\"evidence_refs\":[\"b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d\"],\"policy_digest\":\"0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe\",\"producer\":\"fixture-tree-builder\",\"source\":\"repository_verified\"},\"schema_version\":1,\"sensitivity\":\"internal\",\"summary\":\"Synthetic contract and UI fixture; no production evidence.\",\"tombstone\":false,\"visibility\":\"project\"},{\"confidence_milli\":null,\"first_seen_commit\":null,\"id\":\"node_06\",\"kind\":\"test\",\"label\":\"tests/context.test.ts\",\"last_seen_commit\":null,\"locator\":null,\"provenance\":{\"evidence_refs\":[\"b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d\"],\"policy_digest\":\"0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe\",\"producer\":\"fixture-tree-builder\",\"source\":\"repository_verified\"},\"schema_version\":1,\"sensitivity\":\"internal\",\"summary\":\"Synthetic contract and UI fixture; no production evidence.\",\"tombstone\":false,\"visibility\":\"project\"},{\"confidence_milli\":null,\"first_seen_commit\":null,\"id\":\"node_07\",\"kind\":\"test\",\"label\":\"tests/memory.test.ts\",\"last_seen_commit\":null,\"locator\":null,\"provenance\":{\"evidence_refs\":[\"b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d\"],\"policy_digest\":\"0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe\",\"producer\":\"fixture-tree-builder\",\"source\":\"repository_verified\"},\"schema_version\":1,\"sensitivity\":\"internal\",\"summary\":\"Synthetic contract and UI fixture; no production evidence.\",\"tombstone\":false,\"visibility\":\"project\"},{\"confidence_milli\":null,\"first_seen_commit\":null,\"id\":\"node_08\",\"kind\":\"decision\",\"label\":\"Keep project knowledge pinned\",\"last_seen_commit\":null,\"locator\":null,\"provenance\":{\"evidence_refs\":[\"b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d\"],\"policy_digest\":\"0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe\",\"producer\":\"fixture-tree-builder\",\"source\":\"repository_verified\"},\"schema_version\":1,\"sensitivity\":\"internal\",\"summary\":\"Synthetic contract and UI fixture; no production evidence.\",\"tombstone\":false,\"visibility\":\"project\"},{\"confidence_milli\":null,\"first_seen_commit\":null,\"id\":\"node_09\",\"kind\":\"invariant\",\"label\":\"A lease is required on every turn\",\"last_seen_commit\":null,\"locator\":null,\"provenance\":{\"evidence_refs\":[\"b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d\"],\"policy_digest\":\"0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe\",\"producer\":\"fixture-tree-builder\",\"source\":\"repository_verified\"},\"schema_version\":1,\"sensitivity\":\"internal\",\"summary\":\"Synthetic contract and UI fixture; no production evidence.\",\"tombstone\":false,\"visibility\":\"project\"},{\"confidence_milli\":null,\"first_seen_commit\":null,\"id\":\"node_10\",\"kind\":\"risk\",\"label\":\"Concurrent memory edits need reconciliation\",\"last_seen_commit\":null,\"locator\":null,\"provenance\":{\"evidence_refs\":[\"b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d\"],\"policy_digest\":\"0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe\",\"producer\":\"fixture-tree-builder\",\"source\":\"repository_verified\"},\"schema_version\":1,\"sensitivity\":\"internal\",\"summary\":\"Synthetic contract and UI fixture; no production evidence.\",\"tombstone\":false,\"visibility\":\"project\"},{\"confidence_milli\":null,\"first_seen_commit\":null,\"id\":\"node_11\",\"kind\":\"proof\",\"label\":\"Checkpoint verified\",\"last_seen_commit\":null,\"locator\":null,\"provenance\":{\"evidence_refs\":[\"b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d\"],\"policy_digest\":\"0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe\",\"producer\":\"fixture-tree-builder\",\"source\":\"repository_verified\"},\"schema_version\":1,\"sensitivity\":\"internal\",\"summary\":\"Synthetic contract and UI fixture; no production evidence.\",\"tombstone\":false,\"visibility\":\"project\"}],\"partial\":false,\"policy_digest\":\"0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe\",\"project_id\":\"prj_0123456789abcdef\",\"schema_version\":\"ProjectMemoryGraphV1\",\"source_sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"source_tree_sha\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"truncation_reasons\":[]}",
+      "digest": "152b89ab7c2750fe41f5fec5fc2623e9bfafb9d979872341289355dbbd63c28b"
+    }
+  ],
+  "pack": {
+    "schema_version": "ProjectMemoryPackV1",
+    "head": {
+      "schema_version": "ProjectMemoryRefV1",
+      "project_id": "prj_0123456789abcdef",
+      "graph_id": "pgraph_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "commit_id": "memc_cccccccccccccccccccccccccccccccccccccccc",
+      "revision": 1,
+      "checksum": "152b89ab7c2750fe41f5fec5fc2623e9bfafb9d979872341289355dbbd63c28b",
+      "manifest_checksum": "6ae72d5baeabca8c820376e5aad1836685729023b57cd56d3d8b6f07dec9c3da",
+      "source_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cas_token": "fcb21adf57973620100fec0fc02c144f7937089e90d4ff61fbba6068a03398ed"
+    },
+    "graph": {
+      "schema_version": "ProjectMemoryGraphV1",
+      "project_id": "prj_0123456789abcdef",
+      "graph_id": "pgraph_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "source_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "source_tree_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "policy_digest": "0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe",
+      "nodes": [
+        {
+          "id": "node_00",
+          "kind": "repository",
+          "schema_version": 1,
+          "label": "context-project",
+          "summary": "Synthetic contract and UI fixture; no production evidence.",
+          "provenance": {
+            "producer": "fixture-tree-builder",
+            "source": "repository_verified",
+            "evidence_refs": [
+              "b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d"
+            ],
+            "policy_digest": "0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe"
+          },
+          "locator": null,
+          "first_seen_commit": null,
+          "last_seen_commit": null,
+          "confidence_milli": null,
+          "tombstone": false,
+          "visibility": "project",
+          "sensitivity": "internal"
+        },
+        {
+          "id": "node_01",
+          "kind": "directory",
+          "schema_version": 1,
+          "label": "src",
+          "summary": "Synthetic contract and UI fixture; no production evidence.",
+          "provenance": {
+            "producer": "fixture-tree-builder",
+            "source": "repository_verified",
+            "evidence_refs": [
+              "b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d"
+            ],
+            "policy_digest": "0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe"
+          },
+          "locator": null,
+          "first_seen_commit": null,
+          "last_seen_commit": null,
+          "confidence_milli": null,
+          "tombstone": false,
+          "visibility": "project",
+          "sensitivity": "internal"
+        },
+        {
+          "id": "node_02",
+          "kind": "directory",
+          "schema_version": 1,
+          "label": "tests",
+          "summary": "Synthetic contract and UI fixture; no production evidence.",
+          "provenance": {
+            "producer": "fixture-tree-builder",
+            "source": "repository_verified",
+            "evidence_refs": [
+              "b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d"
+            ],
+            "policy_digest": "0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe"
+          },
+          "locator": null,
+          "first_seen_commit": null,
+          "last_seen_commit": null,
+          "confidence_milli": null,
+          "tombstone": false,
+          "visibility": "project",
+          "sensitivity": "internal"
+        },
+        {
+          "id": "node_03",
+          "kind": "file",
+          "schema_version": 1,
+          "label": "src/context.ts",
+          "summary": "Synthetic contract and UI fixture; no production evidence.",
+          "provenance": {
+            "producer": "fixture-tree-builder",
+            "source": "repository_verified",
+            "evidence_refs": [
+              "b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d"
+            ],
+            "policy_digest": "0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe"
+          },
+          "locator": null,
+          "first_seen_commit": null,
+          "last_seen_commit": null,
+          "confidence_milli": null,
+          "tombstone": false,
+          "visibility": "project",
+          "sensitivity": "internal"
+        },
+        {
+          "id": "node_04",
+          "kind": "file",
+          "schema_version": 1,
+          "label": "src/memory.ts",
+          "summary": "Synthetic contract and UI fixture; no production evidence.",
+          "provenance": {
+            "producer": "fixture-tree-builder",
+            "source": "repository_verified",
+            "evidence_refs": [
+              "b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d"
+            ],
+            "policy_digest": "0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe"
+          },
+          "locator": null,
+          "first_seen_commit": null,
+          "last_seen_commit": null,
+          "confidence_milli": null,
+          "tombstone": false,
+          "visibility": "project",
+          "sensitivity": "internal"
+        },
+        {
+          "id": "node_05",
+          "kind": "file",
+          "schema_version": 1,
+          "label": "src/auth.ts",
+          "summary": "Synthetic contract and UI fixture; no production evidence.",
+          "provenance": {
+            "producer": "fixture-tree-builder",
+            "source": "repository_verified",
+            "evidence_refs": [
+              "b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d"
+            ],
+            "policy_digest": "0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe"
+          },
+          "locator": null,
+          "first_seen_commit": null,
+          "last_seen_commit": null,
+          "confidence_milli": null,
+          "tombstone": false,
+          "visibility": "project",
+          "sensitivity": "internal"
+        },
+        {
+          "id": "node_06",
+          "kind": "test",
+          "schema_version": 1,
+          "label": "tests/context.test.ts",
+          "summary": "Synthetic contract and UI fixture; no production evidence.",
+          "provenance": {
+            "producer": "fixture-tree-builder",
+            "source": "repository_verified",
+            "evidence_refs": [
+              "b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d"
+            ],
+            "policy_digest": "0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe"
+          },
+          "locator": null,
+          "first_seen_commit": null,
+          "last_seen_commit": null,
+          "confidence_milli": null,
+          "tombstone": false,
+          "visibility": "project",
+          "sensitivity": "internal"
+        },
+        {
+          "id": "node_07",
+          "kind": "test",
+          "schema_version": 1,
+          "label": "tests/memory.test.ts",
+          "summary": "Synthetic contract and UI fixture; no production evidence.",
+          "provenance": {
+            "producer": "fixture-tree-builder",
+            "source": "repository_verified",
+            "evidence_refs": [
+              "b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d"
+            ],
+            "policy_digest": "0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe"
+          },
+          "locator": null,
+          "first_seen_commit": null,
+          "last_seen_commit": null,
+          "confidence_milli": null,
+          "tombstone": false,
+          "visibility": "project",
+          "sensitivity": "internal"
+        },
+        {
+          "id": "node_08",
+          "kind": "decision",
+          "schema_version": 1,
+          "label": "Keep project knowledge pinned",
+          "summary": "Synthetic contract and UI fixture; no production evidence.",
+          "provenance": {
+            "producer": "fixture-tree-builder",
+            "source": "repository_verified",
+            "evidence_refs": [
+              "b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d"
+            ],
+            "policy_digest": "0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe"
+          },
+          "locator": null,
+          "first_seen_commit": null,
+          "last_seen_commit": null,
+          "confidence_milli": null,
+          "tombstone": false,
+          "visibility": "project",
+          "sensitivity": "internal"
+        },
+        {
+          "id": "node_09",
+          "kind": "invariant",
+          "schema_version": 1,
+          "label": "A lease is required on every turn",
+          "summary": "Synthetic contract and UI fixture; no production evidence.",
+          "provenance": {
+            "producer": "fixture-tree-builder",
+            "source": "repository_verified",
+            "evidence_refs": [
+              "b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d"
+            ],
+            "policy_digest": "0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe"
+          },
+          "locator": null,
+          "first_seen_commit": null,
+          "last_seen_commit": null,
+          "confidence_milli": null,
+          "tombstone": false,
+          "visibility": "project",
+          "sensitivity": "internal"
+        },
+        {
+          "id": "node_10",
+          "kind": "risk",
+          "schema_version": 1,
+          "label": "Concurrent memory edits need reconciliation",
+          "summary": "Synthetic contract and UI fixture; no production evidence.",
+          "provenance": {
+            "producer": "fixture-tree-builder",
+            "source": "repository_verified",
+            "evidence_refs": [
+              "b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d"
+            ],
+            "policy_digest": "0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe"
+          },
+          "locator": null,
+          "first_seen_commit": null,
+          "last_seen_commit": null,
+          "confidence_milli": null,
+          "tombstone": false,
+          "visibility": "project",
+          "sensitivity": "internal"
+        },
+        {
+          "id": "node_11",
+          "kind": "proof",
+          "schema_version": 1,
+          "label": "Checkpoint verified",
+          "summary": "Synthetic contract and UI fixture; no production evidence.",
+          "provenance": {
+            "producer": "fixture-tree-builder",
+            "source": "repository_verified",
+            "evidence_refs": [
+              "b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d"
+            ],
+            "policy_digest": "0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe"
+          },
+          "locator": null,
+          "first_seen_commit": null,
+          "last_seen_commit": null,
+          "confidence_milli": null,
+          "tombstone": false,
+          "visibility": "project",
+          "sensitivity": "internal"
+        }
+      ],
+      "edges": [
+        {
+          "id": "edge_01",
+          "source": "node_00",
+          "target": "node_01",
+          "kind": "contains",
+          "schema_version": 1,
+          "provenance": {
+            "producer": "fixture-tree-builder",
+            "source": "repository_verified",
+            "evidence_refs": [
+              "b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d"
+            ],
+            "policy_digest": "0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe"
+          },
+          "tombstone": false,
+          "visibility": "project",
+          "sensitivity": "internal"
+        },
+        {
+          "id": "edge_02",
+          "source": "node_00",
+          "target": "node_02",
+          "kind": "contains",
+          "schema_version": 1,
+          "provenance": {
+            "producer": "fixture-tree-builder",
+            "source": "repository_verified",
+            "evidence_refs": [
+              "b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d"
+            ],
+            "policy_digest": "0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe"
+          },
+          "tombstone": false,
+          "visibility": "project",
+          "sensitivity": "internal"
+        },
+        {
+          "id": "edge_03",
+          "source": "node_00",
+          "target": "node_03",
+          "kind": "contains",
+          "schema_version": 1,
+          "provenance": {
+            "producer": "fixture-tree-builder",
+            "source": "repository_verified",
+            "evidence_refs": [
+              "b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d"
+            ],
+            "policy_digest": "0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe"
+          },
+          "tombstone": false,
+          "visibility": "project",
+          "sensitivity": "internal"
+        },
+        {
+          "id": "edge_04",
+          "source": "node_02",
+          "target": "node_04",
+          "kind": "contains",
+          "schema_version": 1,
+          "provenance": {
+            "producer": "fixture-tree-builder",
+            "source": "repository_verified",
+            "evidence_refs": [
+              "b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d"
+            ],
+            "policy_digest": "0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe"
+          },
+          "tombstone": false,
+          "visibility": "project",
+          "sensitivity": "internal"
+        },
+        {
+          "id": "edge_05",
+          "source": "node_03",
+          "target": "node_05",
+          "kind": "contains",
+          "schema_version": 1,
+          "provenance": {
+            "producer": "fixture-tree-builder",
+            "source": "repository_verified",
+            "evidence_refs": [
+              "b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d"
+            ],
+            "policy_digest": "0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe"
+          },
+          "tombstone": false,
+          "visibility": "project",
+          "sensitivity": "internal"
+        },
+        {
+          "id": "edge_06",
+          "source": "node_01",
+          "target": "node_06",
+          "kind": "evidenced_by",
+          "schema_version": 1,
+          "provenance": {
+            "producer": "fixture-tree-builder",
+            "source": "repository_verified",
+            "evidence_refs": [
+              "b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d"
+            ],
+            "policy_digest": "0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe"
+          },
+          "tombstone": false,
+          "visibility": "project",
+          "sensitivity": "internal"
+        },
+        {
+          "id": "edge_07",
+          "source": "node_02",
+          "target": "node_07",
+          "kind": "evidenced_by",
+          "schema_version": 1,
+          "provenance": {
+            "producer": "fixture-tree-builder",
+            "source": "repository_verified",
+            "evidence_refs": [
+              "b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d"
+            ],
+            "policy_digest": "0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe"
+          },
+          "tombstone": false,
+          "visibility": "project",
+          "sensitivity": "internal"
+        },
+        {
+          "id": "edge_08",
+          "source": "node_03",
+          "target": "node_08",
+          "kind": "evidenced_by",
+          "schema_version": 1,
+          "provenance": {
+            "producer": "fixture-tree-builder",
+            "source": "repository_verified",
+            "evidence_refs": [
+              "b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d"
+            ],
+            "policy_digest": "0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe"
+          },
+          "tombstone": false,
+          "visibility": "project",
+          "sensitivity": "internal"
+        },
+        {
+          "id": "edge_09",
+          "source": "node_01",
+          "target": "node_09",
+          "kind": "evidenced_by",
+          "schema_version": 1,
+          "provenance": {
+            "producer": "fixture-tree-builder",
+            "source": "repository_verified",
+            "evidence_refs": [
+              "b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d"
+            ],
+            "policy_digest": "0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe"
+          },
+          "tombstone": false,
+          "visibility": "project",
+          "sensitivity": "internal"
+        },
+        {
+          "id": "edge_10",
+          "source": "node_02",
+          "target": "node_10",
+          "kind": "evidenced_by",
+          "schema_version": 1,
+          "provenance": {
+            "producer": "fixture-tree-builder",
+            "source": "repository_verified",
+            "evidence_refs": [
+              "b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d"
+            ],
+            "policy_digest": "0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe"
+          },
+          "tombstone": false,
+          "visibility": "project",
+          "sensitivity": "internal"
+        },
+        {
+          "id": "edge_11",
+          "source": "node_03",
+          "target": "node_11",
+          "kind": "evidenced_by",
+          "schema_version": 1,
+          "provenance": {
+            "producer": "fixture-tree-builder",
+            "source": "repository_verified",
+            "evidence_refs": [
+              "b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d"
+            ],
+            "policy_digest": "0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe"
+          },
+          "tombstone": false,
+          "visibility": "project",
+          "sensitivity": "internal"
+        }
+      ],
+      "partial": false,
+      "truncation_reasons": []
+    },
+    "commit": {
+      "schema_version": "ProjectMemoryCommitV1",
+      "commit_id": "memc_cccccccccccccccccccccccccccccccccccccccc",
+      "graph_id": "pgraph_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "project_id": "prj_0123456789abcdef",
+      "parent_commit_ids": [],
+      "base_revision": 0,
+      "root_object_digest": "152b89ab7c2750fe41f5fec5fc2623e9bfafb9d979872341289355dbbd63c28b",
+      "graph_checksum": "152b89ab7c2750fe41f5fec5fc2623e9bfafb9d979872341289355dbbd63c28b",
+      "builder_version": "apr-project-memory/v1",
+      "source_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "source_tree_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "message": "Synthetic verified-graph fixture",
+      "change_summary": "Contract fixture",
+      "linked_git_commits": [],
+      "linked_pull_requests": [],
+      "linked_context_cycle_id": null,
+      "linked_context_seal_digest": null,
+      "author_principal_id": "fixture-owner",
+      "device_id": null,
+      "created_at": 1000,
+      "policy_digest": "0a182f343cfa4b9b79e389317433798001efd0279a989c4a0aaf39e12b100cfe",
+      "provenance_refs": [
+        "b01f7bd19189353398f31c9c4fc78c0fd1dafc540b7a927bf162a8f0e059708d"
+      ]
+    },
+    "checksum": "152b89ab7c2750fe41f5fec5fc2623e9bfafb9d979872341289355dbbd63c28b",
+    "attestation": {
+      "payload": {
+        "schema_version": "ProjectMemoryPackAttestationV1",
+        "project_id": "prj_0123456789abcdef",
+        "head": {
+          "schema_version": "ProjectMemoryRefV1",
+          "project_id": "prj_0123456789abcdef",
+          "graph_id": "pgraph_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "commit_id": "memc_cccccccccccccccccccccccccccccccccccccccc",
+          "revision": 1,
+          "checksum": "152b89ab7c2750fe41f5fec5fc2623e9bfafb9d979872341289355dbbd63c28b",
+          "manifest_checksum": "6ae72d5baeabca8c820376e5aad1836685729023b57cd56d3d8b6f07dec9c3da",
+          "source_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "cas_token": "fcb21adf57973620100fec0fc02c144f7937089e90d4ff61fbba6068a03398ed"
+        },
+        "commit_digest": "6ae72d5baeabca8c820376e5aad1836685729023b57cd56d3d8b6f07dec9c3da",
+        "graph_checksum": "152b89ab7c2750fe41f5fec5fc2623e9bfafb9d979872341289355dbbd63c28b",
+        "repository_id": "1",
+        "repository_full_name": "fixture/context-project"
+      },
+      "key_id": "fixture-only",
+      "signature": "+r4hSAJu9Q/KZCM1VmflXuisK05J9LOO/MaD06Pf+HPnclOCdzUfHn3UXotbZkcu1cyk/3sXxIgH0Nv9N+CXAA=="
+    }
+  }
+}
