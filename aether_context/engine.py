@@ -52,6 +52,7 @@ class ContextEngine:
         remote_deletion_keys: dict | None = None,
         executor_stability_keys: dict | None = None,
         managed_key_provider_receipt: dict | None = None,
+        managed_key_provider_receipts: list[dict] | None = None,
         key_provider_keys: dict | None = None,
         key_destruction_keys: dict | None = None,
         runtime_build_manifest: dict | None = None,
@@ -60,6 +61,11 @@ class ContextEngine:
     ):
         if profile.index_version != sqlite3.sqlite_version:
             raise ContextFault("context_index_version_mismatch")
+        if (
+            managed_key_provider_receipt is not None
+            and managed_key_provider_receipts is not None
+        ):
+            raise ContextFault("context_key_provider_config_invalid")
         if not authority_keys or not proof_keys:
             raise ContextFault("context_verification_keys_required")
         key_groups = [authority_keys, proof_keys, {signer.key_id: signer.key.public_key()}]
@@ -83,7 +89,15 @@ class ContextEngine:
         self.cycle_keys = cycle_keys
         self.remote_deletion_keys = remote_deletion_keys or {}
         self.key_destruction_keys = key_destruction_keys or {}
-        self.managed_key_provider_receipt = managed_key_provider_receipt
+        self.managed_key_provider_receipts = tuple(
+            managed_key_provider_receipts
+            if managed_key_provider_receipts is not None
+            else (
+                [managed_key_provider_receipt]
+                if managed_key_provider_receipt is not None
+                else []
+            )
+        )
         self.key_provider_keys = key_provider_keys or {}
         self._benchmark_receipt = benchmark_receipt
         self._benchmark_keys = benchmark_keys or {}
@@ -112,6 +126,33 @@ class ContextEngine:
         if self.cycle_keys is None:
             raise ContextFault("context_key_provider_required")
         return self.cycle_keys.cipher(key_ref, namespace)
+
+    def _provider_current_key_version(self) -> str | None:
+        if self.cycle_keys is None:
+            return None
+        try:
+            value = getattr(self.cycle_keys, "current_key_version", None)
+            if callable(value):
+                value = value()
+            if value is None:
+                value = getattr(self.cycle_keys, "key_version", None)
+        except Exception:  # Provider availability is reflected as unqualified health.
+            return None
+        return value if isinstance(value, str) and value else None
+
+    def _provider_key_version(self, key_ref: str) -> str | None:
+        if self.cycle_keys is None:
+            return None
+        try:
+            resolver = getattr(self.cycle_keys, "version_for", None)
+            value = (
+                resolver(key_ref)
+                if callable(resolver)
+                else self._provider_current_key_version()
+            )
+        except Exception:  # Provider availability is reflected as unqualified health.
+            return None
+        return value if isinstance(value, str) and value else None
 
     def _audit_startup(self):
         # A bounded canary verifies its complete encrypted chain and derived
@@ -213,40 +254,66 @@ class ContextEngine:
 
     def _managed_key_qualification(
         self, *, expected_key_version: str | None = None
-    ) -> tuple[bool, tuple[str, ...], str | None]:
+    ) -> tuple[bool, tuple[str, ...], dict[str, str]]:
         failures: list[str] = []
-        envelope = self.managed_key_provider_receipt
         if self.cycle_keys is None:
             failures.append("cycle_key_provider_missing")
-        if envelope is None or not self.key_provider_keys:
+        if not self.managed_key_provider_receipts or not self.key_provider_keys:
             failures.append("managed_key_provider_receipt_missing")
-            return False, tuple(failures), None
-        try:
-            receipt = ManagedKeyProviderReceiptV1.model_validate(
-                verify(envelope, self.key_provider_keys)
-            )
-        except (ContextFault, ValueError, TypeError):
-            failures.append("managed_key_provider_receipt_invalid")
-            return False, tuple(failures), digest(envelope)
-        configured_key_version = (
-            expected_key_version
-            if expected_key_version is not None
-            else getattr(self.cycle_keys, "key_version", None)
-        )
-        if self.cycle_keys is not None and (
-            receipt.provider != getattr(self.cycle_keys, "provider", None)
-            or receipt.key_version != configured_key_version
-        ):
-            failures.append("managed_key_provider_mismatch")
-        if receipt.provider == "file-wrapped-dek/v1":
-            failures.append("file_key_provider_canary_only")
-        if not receipt.issued_at <= self.now() < receipt.expires_at:
-            failures.append("managed_key_provider_receipt_expired")
+            return False, tuple(failures), {}
+        required_versions: set[str] = set()
+        if expected_key_version is not None:
+            required_versions.add(expected_key_version)
+        else:
+            current_version = self._provider_current_key_version()
+            if current_version is None:
+                failures.append("managed_key_provider_version_missing")
+            else:
+                required_versions.add(current_version)
+            with self.store.connection() as db:
+                stored_keys = db.execute(
+                    "SELECT DISTINCT key_ref,key_version FROM cycles WHERE key_ref IS NOT NULL "
+                    "AND state!='EXPIRED'"
+                ).fetchall()
+            if any(row[1] is None for row in stored_keys):
+                failures.append("cycle_key_version_missing")
+            for key_ref, key_version in stored_keys:
+                if key_version is not None:
+                    required_versions.add(key_version)
+                    if self._provider_key_version(key_ref) != key_version:
+                        failures.append("cycle_key_version_unresolvable")
+        receipt_digests: dict[str, str] = {}
+        seen_versions: set[str] = set()
+        for envelope in self.managed_key_provider_receipts:
+            try:
+                receipt = ManagedKeyProviderReceiptV1.model_validate(
+                    verify(envelope, self.key_provider_keys)
+                )
+            except (ContextFault, ValueError, TypeError):
+                failures.append("managed_key_provider_receipt_invalid")
+                continue
+            if receipt.key_version in seen_versions:
+                failures.append("managed_key_provider_receipt_duplicate")
+                continue
+            seen_versions.add(receipt.key_version)
+            if receipt.provider != getattr(self.cycle_keys, "provider", None):
+                failures.append("managed_key_provider_mismatch")
+                continue
+            if receipt.provider == "file-wrapped-dek/v1":
+                failures.append("file_key_provider_canary_only")
+                continue
+            if not receipt.issued_at <= self.now() < receipt.expires_at:
+                if receipt.key_version in required_versions:
+                    failures.append("managed_key_provider_receipt_expired")
+                continue
+            receipt_digests[receipt.key_version] = digest(envelope)
+        if missing := sorted(required_versions - receipt_digests.keys()):
+            failures.extend(f"managed_key_provider_version_unqualified:{item}" for item in missing)
         if not self.remote_deletion_keys:
             failures.append("remote_deletion_keys_missing")
         if not self.key_destruction_keys:
             failures.append("key_destruction_keys_missing")
-        return not failures, tuple(failures), digest(envelope)
+        return not failures, tuple(failures), receipt_digests
 
     def health(self) -> dict:
         # Time-bounded benchmark and provider evidence is rechecked on every
@@ -256,7 +323,7 @@ class ContextEngine:
         with self.store.connection() as db:
             db.execute("SELECT count(*) FROM cycles").fetchone()
         benchmark_ready = self.scale_qualification.valid
-        managed_keys_ready, managed_key_failures, managed_key_receipt_digest = (
+        managed_keys_ready, managed_key_failures, managed_key_receipt_digests = (
             self._managed_key_qualification()
         )
         profile_ready = self.profile.name != "hosted-v1" or (
@@ -299,7 +366,12 @@ class ContextEngine:
             "cycle_key_provider": getattr(self.cycle_keys, "provider", None),
             "managed_cycle_keys_ready": managed_keys_ready,
             "managed_cycle_key_failures": list(managed_key_failures),
-            "managed_key_provider_receipt_digest": managed_key_receipt_digest,
+            "managed_key_provider_receipt_digests": managed_key_receipt_digests,
+            "managed_key_provider_receipt_digest": (
+                next(iter(managed_key_receipt_digests.values()))
+                if len(managed_key_receipt_digests) == 1
+                else None
+            ),
         }
 
     def _space(self) -> None:
@@ -438,10 +510,20 @@ class ContextEngine:
                     raise ContextFault("context_state_conflict")
                 key_ref = self.cycle_keys.ensure(ns) if self.cycle_keys is not None else None
                 key_version = (
-                    getattr(self.cycle_keys, "key_version", None)
-                    if key_ref is not None
-                    else None
+                    self._provider_key_version(key_ref) if key_ref is not None else None
                 )
+                if key_ref is not None and key_version is None:
+                    raise ContextFault("context_key_version_unavailable")
+                if (
+                    key_ref is not None
+                    and getattr(self.cycle_keys, "provider", None)
+                    != "file-wrapped-dek/v1"
+                ):
+                    managed_ready, _, _ = self._managed_key_qualification(
+                        expected_key_version=key_version
+                    )
+                    if not managed_ready:
+                        raise ContextFault("context_managed_key_provider_unqualified")
                 cipher = (
                     self.cycle_keys.cipher(key_ref, ns) if key_ref is not None else self.cipher
                 )
@@ -1109,9 +1191,15 @@ class ContextEngine:
                 or grant["key_version"] != key_version
                 or self.cycle_keys is None
                 or key_provider != getattr(self.cycle_keys, "provider", None)
-                or key_version != getattr(self.cycle_keys, "key_version", None)
+                or key_version != self._provider_key_version(key_ref)
             ):
                 raise ContextFault("context_hydrate_grant_invalid")
+            if key_provider != "file-wrapped-dek/v1":
+                managed_ready, _, _ = self._managed_key_qualification(
+                    expected_key_version=key_version
+                )
+                if not managed_ready:
+                    raise ContextFault("context_managed_key_provider_unqualified")
             cipher = self.cycle_keys.cipher(key_ref, grant["namespace"])
         snapshot = cipher.decrypt(
             pack,

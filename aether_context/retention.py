@@ -123,11 +123,16 @@ class FileCycleKeyProvider:
             raise ContextFault("context_key_invalid")
         return EnvelopeCipher(dek, domain=b"context-cycle/v1")
 
+    def version_for(self, key_ref: str) -> str:
+        self._paths(key_ref)
+        return self.key_version
+
     def destroy(self, key_ref: str, namespace: dict, destroyed_at: int) -> dict:
         expected, namespace_digest = self._identity(namespace)
         if key_ref != expected:
             raise ContextFault("context_key_reference_invalid")
         key_path, tombstone_path = self._paths(key_ref)
+        key_version = self.version_for(key_ref)
         tombstone: dict[str, Any] | None = None
         if tombstone_path.exists():
             try:
@@ -148,7 +153,7 @@ class FileCycleKeyProvider:
                 or tombstone["schema_version"] != "ContextLocalKeyDestructionV1"
                 or tombstone["provider"] != self.provider
                 or tombstone["key_ref"] != key_ref
-                or tombstone["key_version"] != self.key_version
+                or tombstone["key_version"] != key_version
                 or tombstone["namespace_digest"] != namespace_digest
             ):
                 raise ContextFault("context_key_destruction_unverified")
@@ -161,7 +166,7 @@ class FileCycleKeyProvider:
                     "schema_version": "ContextLocalKeyDestructionV1",
                     "provider": self.provider,
                     "key_ref": key_ref,
-                    "key_version": self.key_version,
+                    "key_version": key_version,
                     "namespace_digest": namespace_digest,
                     "wrapped_key_digest": wrapped_digest,
                     "destroyed_at": destroyed_at,
@@ -326,6 +331,34 @@ class RetentionManager:
                 or row["cleanup_state"] not in {"NONE", "PENDING"}
             ):
                 raise ContextFault("context_retention_denied")
+            if row["cleanup_state"] == "PENDING":
+                cleanup_key = row["cleanup_operation_key"]
+                cleanup_digest = row["cleanup_request_digest"]
+                if cleanup_key is None and cleanup_digest is None:
+                    # Rolling recovery for a PENDING row written before the
+                    # cleanup-owner columns existed. Only one exact unfinished
+                    # expiry can be adopted; ambiguity stays fail-closed.
+                    pending = db.execute(
+                        "SELECT key,request_digest FROM retention_operations "
+                        "WHERE cycle=? AND operation='expire' AND result IS NULL",
+                        (row["id"],),
+                    ).fetchall()
+                    if len(pending) != 1:
+                        raise ContextFault("context_cleanup_in_progress")
+                    cleanup_key = pending[0]["key"]
+                    cleanup_digest = pending[0]["request_digest"]
+                    db.execute(
+                        "UPDATE cycles SET cleanup_operation_key=?,"
+                        "cleanup_request_digest=? WHERE id=? AND cleanup_state='PENDING'",
+                        (cleanup_key, cleanup_digest, row["id"]),
+                    )
+                elif cleanup_key is None or cleanup_digest is None:
+                    raise ContextFault("context_cleanup_in_progress")
+                if (
+                    cleanup_key != command.idempotency_key
+                    or cleanup_digest != request_digest
+                ):
+                    raise ContextFault("context_cleanup_in_progress")
             namespace = cap.namespace.model_dump()
             key_ref = row["key_ref"]
             key_version = row["key_version"]
@@ -357,6 +390,7 @@ class RetentionManager:
                 changed = db.execute(
                     "UPDATE cycles SET cleanup_state='PENDING',"
                     "checkpoint_object_ref_digest=?,cleanup_remote_receipt=?,"
+                    "cleanup_operation_key=?,cleanup_request_digest=?,"
                     "revision=revision+1 WHERE id=? AND revision=?",
                     (
                         object_ref_digest,
@@ -365,6 +399,8 @@ class RetentionManager:
                             if remote_envelope is not None
                             else None
                         ),
+                        command.idempotency_key,
+                        request_digest,
                         row["id"],
                         command.expected_revision,
                     ),
@@ -413,6 +449,8 @@ class RetentionManager:
                 raise ContextFault("context_key_provider_required")
             if key_version is None:
                 raise ContextFault("context_key_reference_invalid")
+            if self.engine._provider_key_version(key_ref) != key_version:
+                raise ContextFault("context_key_version_unavailable")
             provider = getattr(self.engine.cycle_keys, "provider", None)
             if provider == FileCycleKeyProvider.provider:
                 local_key_destruction = self.engine.cycle_keys.destroy(
@@ -421,13 +459,14 @@ class RetentionManager:
                 if not local_key_destruction.get("verified"):
                     raise ContextFault("context_key_destruction_unverified")
             else:
-                managed_ready, _, provider_receipt_digest = (
+                managed_ready, _, provider_receipt_digests = (
                     self.engine._managed_key_qualification(
                         expected_key_version=key_version
                     )
                 )
                 if not managed_ready:
                     raise ContextFault("context_managed_key_provider_unqualified")
+                provider_receipt_digest = provider_receipt_digests[key_version]
                 key_destruction_envelope = self.engine.cycle_keys.destroy(
                     key_ref, namespace, now
                 )
@@ -465,6 +504,11 @@ class RetentionManager:
                 "cleanup_state"
             ] != "PENDING":
                 raise ContextFault("context_retention_denied")
+            if (
+                row["cleanup_operation_key"] != command.idempotency_key
+                or row["cleanup_request_digest"] != request_digest
+            ):
+                raise ContextFault("context_cleanup_in_progress")
             db.execute("DELETE FROM postings WHERE cycle=?", (row["id"],))
             db.execute("DELETE FROM segments WHERE cycle=?", (row["id"],))
             db.execute("DELETE FROM operations WHERE cycle=?", (row["id"],))
@@ -478,6 +522,8 @@ class RetentionManager:
                     "retention_expired_at": row["expires"],
                     "deleted_at": now,
                     "reason_code": command.reason_code,
+                    "retention_operation_key": command.idempotency_key,
+                    "retention_request_digest": request_digest,
                     "logical_deletion": True,
                     "cryptographic_erasure": cryptographic_erasure,
                     "local_key_destruction": local_key_destruction,

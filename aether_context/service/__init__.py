@@ -197,9 +197,23 @@ def main() -> None:
         if args.runtime_build_manifest
         else None
     )
-    managed_key_provider_receipt = (
+    managed_key_provider_config = (
         json.loads(Path(args.managed_key_provider_receipt).read_text())
         if args.managed_key_provider_receipt
+        else None
+    )
+    if managed_key_provider_config is not None and not isinstance(
+        managed_key_provider_config, (dict, list)
+    ):
+        raise SystemExit("context_key_provider_config_invalid")
+    managed_key_provider_receipt = (
+        managed_key_provider_config
+        if isinstance(managed_key_provider_config, dict)
+        else None
+    )
+    managed_key_provider_receipts = (
+        managed_key_provider_config
+        if isinstance(managed_key_provider_config, list)
         else None
     )
     engine = ContextEngine(
@@ -226,14 +240,15 @@ def main() -> None:
             else None
         ),
         managed_key_provider_receipt=managed_key_provider_receipt,
+        managed_key_provider_receipts=managed_key_provider_receipts,
         key_provider_keys=(
             public_keys("context-key-provider-keys.json")
-            if managed_key_provider_receipt is not None
+            if managed_key_provider_config is not None
             else None
         ),
         key_destruction_keys=(
             public_keys("context-key-destruction-keys.json")
-            if managed_key_provider_receipt is not None
+            if managed_key_provider_config is not None
             else None
         ),
         runtime_build_manifest=runtime_build_manifest,

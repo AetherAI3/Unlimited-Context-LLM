@@ -26,7 +26,8 @@ CREATE TABLE IF NOT EXISTS cycles (
  key_ref TEXT, key_version TEXT, retention_class TEXT NOT NULL DEFAULT 'ephemeral',
  hold_reason TEXT, cleanup_state TEXT NOT NULL DEFAULT 'NONE',
  seal_digest TEXT, checkpoint_manifest_checksum TEXT, checkpoint_object_ref_digest TEXT,
- cleanup_remote_receipt TEXT, deletion_receipt TEXT,
+ cleanup_remote_receipt TEXT, cleanup_operation_key TEXT, cleanup_request_digest TEXT,
+ deletion_receipt TEXT,
  UNIQUE(owner,project,request_key));
 CREATE TABLE IF NOT EXISTS segments (
  cycle TEXT NOT NULL REFERENCES cycles(id), seq INTEGER NOT NULL,
@@ -68,6 +69,8 @@ _CYCLE_COLUMNS = {
     "checkpoint_manifest_checksum": "TEXT",
     "checkpoint_object_ref_digest": "TEXT",
     "cleanup_remote_receipt": "TEXT",
+    "cleanup_operation_key": "TEXT",
+    "cleanup_request_digest": "TEXT",
     "deletion_receipt": "TEXT",
 }
 

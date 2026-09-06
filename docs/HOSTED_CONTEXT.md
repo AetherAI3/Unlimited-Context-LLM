@@ -82,9 +82,14 @@ Credential names: `context-dek`, `context-cycle-wrapper-key` (32 bytes each),
 `context-runtime-build-keys.json` verifies
 `context-runtime-build-manifest.json`, which binds the source revision, wheel
 digest, approved recall-dataset digest and a digest of every installed runtime
-source/schema byte. It also pins the approved hosted data-plane case-generator
-digest; older manifests without that field remain readable but cannot enable
-reach. An operator environment string cannot qualify a build.
+source/schema byte. `wheel_digest` is signed supply-chain provenance; the daemon
+enforces a digest of the exact imported package-tree bytes because it does not
+independently retain or reconstruct the wheel archive. A deployment that needs
+wheel-byte enforcement must supply a separately authenticated wheel artifact and
+verifier.
+The manifest also pins the approved hosted data-plane case-generator digest;
+older manifests without that field remain readable but cannot enable reach. An
+operator environment string cannot qualify a build.
 `context-benchmark-receipt.json` is the signed measured receipt. Build,
 benchmark, executor-stability, deletion, Gateway, verifier and service keys
 must be cryptographically distinct, including when their key IDs differ. The
@@ -104,8 +109,10 @@ the managed cycle key only through a currently qualified shared provider. A
 closed, independently signed KMS destruction receipt must bind the exact
 provider, opaque key reference, namespace digest, key version and destroyed
 state. The durable service deletion receipt embeds that evidence and both proof
-digests. A crash between phases resumes from the persisted remote proof and the
-provider's idempotent destruction result. Every command carries the cycle
+digests. A crash between phases persists the exact operation key and request
+digest before key destruction. Only that request can resume from the persisted
+remote proof and provider's idempotent destruction result; a competing operation
+cannot take over the pending cleanup. Every command carries the cycle
 revision it observed, so a stale release cannot clear a newer legal or incident
 hold. The legacy `expire` operation fails closed; legacy cycles use this same
 signed retention path and remote deletion proof.
@@ -116,11 +123,20 @@ but their local tombstone can never claim production cryptographic erasure.
 Production needs an injected shared managed KMS/key provider, a short-lived
 independently signed provider qualification, independently signed exact-version
 destruction evidence, and remote deletion trust roots. Hosted health validates
-those receipts on each admission and remains false after they expire. A custom
-production unit supplies `context-key-provider-keys.json`,
+those receipts on each admission and remains false after they expire. During key
+rotation, the provider must resolve the immutable version for every opaque
+`key_ref`, and every version used by a non-expired cycle must retain its own valid
+signed provider qualification. The `--managed-key-provider-receipt` JSON file may
+contain one signed envelope or an array of signed envelopes; old versions remain
+configured until their last cycle has been securely expired. A custom production
+unit supplies `context-key-provider-keys.json`,
 `context-key-destruction-keys.json`, and the signed provider receipt alongside
 its managed provider implementation; the checked-in file-provider unit cannot
 cross that gate.
+
+Health reports `managed_key_provider_receipt_digests` keyed by qualified key
+version. The older singular `managed_key_provider_receipt_digest` remains
+populated only when exactly one version is qualified.
 
 ## Measured limits and remaining release gates
 

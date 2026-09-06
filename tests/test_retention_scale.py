@@ -41,6 +41,22 @@ class ManagedTestCycleKeys(FileCycleKeyProvider):
         self.destruction_signer = destruction_signer
         self.clock = clock
         self.receipts = {}
+        self.active_key_version = self.key_version
+        self.key_versions = {}
+
+    def current_key_version(self):
+        return self.active_key_version
+
+    def ensure(self, namespace):
+        key_ref = super().ensure(namespace)
+        self.key_versions.setdefault(key_ref, self.active_key_version)
+        return key_ref
+
+    def version_for(self, key_ref):
+        try:
+            return self.key_versions[key_ref]
+        except KeyError as exc:
+            raise ContextFault("context_key_version_unavailable") from exc
 
     def destroy(self, key_ref, namespace, destroyed_at):
         local = super().destroy(key_ref, namespace, destroyed_at)
@@ -51,7 +67,7 @@ class ManagedTestCycleKeys(FileCycleKeyProvider):
                     "provider": self.provider,
                     "key_ref": key_ref,
                     "namespace_digest": digest(namespace),
-                    "key_version": self.key_version,
+                    "key_version": self.version_for(key_ref),
                     "destroyed": True,
                     "destroyed_at": local["destroyed_at"],
                     "issued_at": self.clock[0],
@@ -113,6 +129,7 @@ def _keyed_cycle(tmp_path, *, managed=True, keyed=True, legacy_binding=False):
         if managed and provider is not None
         else None
     )
+    provider_receipts = [provider_receipt] if provider_receipt is not None else []
 
     def make(path):
         return ContextEngine(
@@ -125,10 +142,10 @@ def _keyed_cycle(tmp_path, *, managed=True, keyed=True, legacy_binding=False):
             clock=lambda: clock[0],
             cycle_keys=provider,
             remote_deletion_keys={deletion.key_id: deletion.key.public_key()},
-            managed_key_provider_receipt=provider_receipt,
+            managed_key_provider_receipts=(provider_receipts or None),
             key_provider_keys=(
                 {provider_authority.key_id: provider_authority.key.public_key()}
-                if provider_receipt is not None
+                if provider_receipts
                 else None
             ),
             key_destruction_keys={destruction.key_id: destruction.key.public_key()},
@@ -288,6 +305,7 @@ def _keyed_cycle(tmp_path, *, managed=True, keyed=True, legacy_binding=False):
         "service": service,
         "global_cipher": global_cipher,
         "provider": provider,
+        "provider_receipts": provider_receipts,
         "namespace": namespace,
         "binding": binding,
         "binding_payload": binding_payload,
@@ -325,6 +343,8 @@ def test_storage_v2_additively_migrates_legacy_cycles(tmp_path):
         row = db.execute("SELECT * FROM cycles WHERE id='legacy'").fetchone()
         assert row["retention_class"] == "ephemeral"
         assert row["cleanup_state"] == "NONE"
+        assert row["cleanup_operation_key"] is None
+        assert row["cleanup_request_digest"] is None
         assert row["key_ref"] is None
         assert row["snapshot"] is None
 
@@ -596,11 +616,39 @@ def test_cleanup_recovers_after_crash_between_key_destroy_and_sql_cleanup(tmp_pa
     with pytest.raises(RuntimeError, match="simulated process loss"):
         item["engine"].retention(item["cap"]("durability"), command)
     with item["engine"].store.connection() as db:
-        assert db.execute("SELECT cleanup_state FROM cycles").fetchone()[0] == "PENDING"
+        pending = db.execute(
+            "SELECT cleanup_state,cleanup_operation_key,cleanup_request_digest FROM cycles"
+        ).fetchone()
+        assert tuple(pending) == (
+            "PENDING",
+            command["payload"]["idempotency_key"],
+            digest(command["payload"]),
+        )
     item["clock"][0] = 1200  # Both original signed proofs have expired on this retry.
     item["engine"].retention_manager = RetentionManager(item["engine"])
+    current_revision = item["engine"].status(item["cap"]("durability"))["payload"][
+        "revision"
+    ]
+    competing_payload = dict(command["payload"])
+    competing_payload.update(
+        idempotency_key="expire-retention-competing",
+        expected_revision=current_revision,
+        issued_at=1200,
+        expires_at=1300,
+    )
+    competing = item["authority"].sign(competing_payload)
+    with pytest.raises(ContextFault, match="cleanup_in_progress"):
+        item["engine"].retention(item["cap"]("durability"), competing)
+    with item["engine"].store.connection() as db:
+        assert (
+            db.execute(
+                "SELECT count(*) FROM retention_operations WHERE operation='expire'"
+            ).fetchone()[0]
+            == 1
+        )
     receipt = item["engine"].retention(item["cap"]("durability"), command)
     assert receipt["payload"]["cryptographic_erasure"] is True
+    assert item["engine"].retention(item["cap"]("durability"), command) == receipt
 
 
 def test_aborted_cycle_gets_post_terminal_retention_without_remote_proof_if_never_checkpointed(
@@ -718,6 +766,284 @@ def test_keyed_checkpoint_hydrates_on_replacement_using_opaque_reference(tmp_pat
         ),
     )
     assert capsule["payload"]["entries"][0]["text"] == "needle replacement evidence"
+
+
+def test_managed_key_rotation_keeps_v1_and_v2_cycles_hydratable_and_expirable(
+    tmp_path,
+):
+    item = _keyed_cycle(tmp_path)
+    engine = item["engine"]
+    engine.append(
+        item["cap"](),
+        AppendRequestV1(
+            idempotency_key="rotation-v1-record",
+            text="managed rotation version one evidence",
+            action_ref="rotation-v1",
+        ),
+    )
+    v1_checkpoint = engine.checkpoint(
+        item["cap"]("durability"), "rotation-v1-checkpoint"
+    )
+    assert v1_checkpoint["receipt"]["payload"]["key_version"] == (
+        "managed-test-key/v1"
+    )
+
+    item["provider"].active_key_version = "managed-test-key/v2"
+    v2_provider_receipt = item["provider_authority"].sign(
+        {
+            "schema_version": "ContextManagedKeyProviderReceiptV1",
+            "provider": item["provider"].provider,
+            "key_version": "managed-test-key/v2",
+            "shared_hydrate_supported": True,
+            "verified_destruction_supported": True,
+            "issued_at": 900,
+            "expires_at": 2000,
+        }
+    )
+    item["provider_receipts"].append(v2_provider_receipt)
+    engine.managed_key_provider_receipts = (v2_provider_receipt,)
+    missing_v1 = engine.health()
+    assert missing_v1["managed_cycle_keys_ready"] is False
+    assert (
+        "managed_key_provider_version_unqualified:managed-test-key/v1"
+        in missing_v1["managed_cycle_key_failures"]
+    )
+    both_provider_receipts = list(item["provider_receipts"])
+    item["provider_receipts"][:] = [v2_provider_receipt]
+    unqualified_replacement = item["make"](
+        tmp_path / "rotation-v1-unqualified.sqlite3"
+    )
+    v1_claim = v1_checkpoint["receipt"]["payload"]
+    with pytest.raises(ContextFault, match="managed_key_provider_unqualified"):
+        unqualified_replacement.hydrate(
+            item["authority"].sign(
+                {
+                    "operation": "hydrate",
+                    "namespace": item["namespace"].model_dump(),
+                    "manifest_checksum": v1_claim["manifest_checksum"],
+                    "key_ref": v1_claim["key_ref"],
+                    "key_provider": v1_claim["key_provider"],
+                    "key_version": v1_claim["key_version"],
+                    "fence": 2,
+                    "expires_at": 2000,
+                }
+            ),
+            v1_checkpoint["receipt"],
+            base64.b64decode(v1_checkpoint["pack"], validate=True),
+            {item["service"].key_id: item["service"].key.public_key()},
+        )
+    item["provider_receipts"][:] = both_provider_receipts
+    engine.managed_key_provider_receipts = tuple(item["provider_receipts"])
+
+    reservation = engine.reserve(
+        item["authority"].sign(
+            {
+                "operation": "reserve",
+                "owner_id": "owner-retention",
+                "project_id": "project-retention",
+                "idempotency_key": "request-retention-v2",
+                "request_digest": digest("request-retention-v2"),
+                "profile_digest": digest(item["profile"]),
+                "expires_at": 1500,
+            }
+        )
+    )
+    namespace_v2 = NamespaceV1(
+        owner_id="owner-retention",
+        project_id="project-retention",
+        objective_id="objective-retention-v2",
+        context_cycle_id=reservation["payload"]["context_cycle_id"],
+    )
+    authority_v2 = {"objective": "retention rotation v2", "paths": ["src"]}
+    snapshot_v2 = {
+        "project_id": namespace_v2.project_id,
+        "graph_id": "graph-retention-v2",
+        "policy_digest": digest("policy-retention-v2"),
+        "nodes": [],
+    }
+    binding_v2 = ContextBindingV1(
+        namespace=namespace_v2,
+        context_bucket_id=reservation["payload"]["context_bucket_id"],
+        repository_id="repository-retention",
+        repo_main_sha="a" * 40,
+        project_graph_id="graph-retention-v2",
+        graph_revision=2,
+        graph_checksum=digest(snapshot_v2),
+        plan_digest=digest("plan-retention-v2"),
+        execution_profile_digest=digest("execution-retention-v2"),
+        shared_ir_digest=digest("ir-retention-v2"),
+        authorization_receipt_ref="authority-retention-v2",
+        authorization_digest=digest(authority_v2),
+        policy_digest=digest("policy-retention-v2"),
+        redaction_digest=digest("redaction-retention-v2"),
+        profile_digest=digest(item["profile"]),
+        captain_binding_id="captain-retention-v2",
+        created_at=1000,
+        expires_at=100000,
+    )
+    binding_v2_digest = digest(binding_v2)
+    engine.bind(
+        item["authority"].sign(binding_v2.model_dump()), authority_v2, snapshot_v2
+    )
+
+    def cap_v2(role="worker", fence=1):
+        return item["authority"].sign(
+            CapabilityV1(
+                namespace=namespace_v2,
+                principal_id="principal-retention-v2",
+                lane_id="lane-retention-v2",
+                task_id="task-retention-v2",
+                role=role,
+                operations=[
+                    "append",
+                    "retrieve",
+                    "checkpoint",
+                    "seal",
+                    "status",
+                    "retention",
+                ],
+                source_class="tool_observation",
+                binding_digest=binding_v2_digest,
+                policy_digest=binding_v2.policy_digest,
+                profile_digest=digest(item["profile"]),
+                fence=fence,
+                expires_at=90000,
+                max_bytes=32768,
+                max_tokens=12000,
+            ).model_dump()
+        )
+
+    engine.append(
+        cap_v2(),
+        AppendRequestV1(
+            idempotency_key="rotation-v2-record",
+            text="managed rotation version two evidence",
+            action_ref="rotation-v2",
+        ),
+    )
+    v2_checkpoint = engine.checkpoint(cap_v2("durability"), "rotation-v2-checkpoint")
+    assert v2_checkpoint["receipt"]["payload"]["key_version"] == (
+        "managed-test-key/v2"
+    )
+    health = engine.health()
+    assert health["managed_cycle_keys_ready"] is True
+    assert set(health["managed_key_provider_receipt_digests"]) == {
+        "managed-test-key/v1",
+        "managed-test-key/v2",
+    }
+
+    def hydrate(checkpoint, namespace, path):
+        claim = checkpoint["receipt"]["payload"]
+        replacement = item["make"](path)
+        return replacement.hydrate(
+            item["authority"].sign(
+                {
+                    "operation": "hydrate",
+                    "namespace": namespace.model_dump(),
+                    "manifest_checksum": claim["manifest_checksum"],
+                    "key_ref": claim["key_ref"],
+                    "key_provider": claim["key_provider"],
+                    "key_version": claim["key_version"],
+                    "fence": 2,
+                    "expires_at": 2000,
+                }
+            ),
+            checkpoint["receipt"],
+            base64.b64decode(checkpoint["pack"], validate=True),
+            {item["service"].key_id: item["service"].key.public_key()},
+        )
+
+    assert hydrate(
+        v1_checkpoint, item["namespace"], tmp_path / "rotation-v1-replacement.sqlite3"
+    )["payload"]["key_version"] == "managed-test-key/v1"
+    assert hydrate(
+        v2_checkpoint, namespace_v2, tmp_path / "rotation-v2-replacement.sqlite3"
+    )["payload"]["key_version"] == "managed-test-key/v2"
+
+    v1_terminal, _ = item["seal"]()
+    v2_terminal = engine.checkpoint(cap_v2("durability"), "rotation-v2-terminal")
+    v2_closure = item["proof"].sign(
+        {
+            "schema_version": "ContextClosureProofV1",
+            "namespace": namespace_v2.model_dump(),
+            "binding_digest": binding_v2_digest,
+            "final_root": v2_terminal["receipt"]["payload"]["segment_chain_root"],
+            "final_cursor": v2_terminal["receipt"]["payload"]["cursor"],
+            "execution_dag_digest": digest("dag-retention-v2"),
+            "plan_ir_digest": binding_v2.shared_ir_digest,
+            "shared_ir_digest": digest("final-ir-retention-v2"),
+            "repo_main_sha": binding_v2.repo_main_sha,
+            "git_head_sha": "b" * 40,
+            "pr_head_sha": "b" * 40,
+            "pr_url": "https://github.com/org/repo/pull/2",
+            "ci_receipt": digest("ci-retention-v2"),
+            "nano_receipt": digest("nano-retention-v2"),
+            "proof_receipt": digest("proof-retention-v2"),
+            "memory_candidate_digest": digest("memory-retention-v2"),
+            "promotion_set_root": digest([]),
+            "accepted_record_ids": [],
+            "rejected_record_ids": [],
+            "expires_at": 2000,
+        }
+    )
+    engine.seal(cap_v2("verifier"), v2_closure, v2_terminal["receipt"])
+
+    item["clock"][0] = 1061
+
+    def expire(checkpoint, namespace, capability, operation_key):
+        object_ref = digest(f"spaces://context/{operation_key}")
+        remote = item["deletion"].sign(
+            {
+                "schema_version": "ContextRemoteDeletionReceiptV1",
+                "namespace": namespace.model_dump(),
+                "manifest_checksum": checkpoint["receipt"]["payload"][
+                    "manifest_checksum"
+                ],
+                "object_ref_digest": object_ref,
+                "deleted": True,
+                "issued_at": 1061,
+                "expires_at": 1161,
+            }
+        )
+        status = engine.status(capability)["payload"]
+        return engine.retention(
+            capability,
+            item["authority"].sign(
+                {
+                    "schema_version": "ContextRetentionCommandV1",
+                    "operation": "expire",
+                    "namespace": namespace.model_dump(),
+                    "idempotency_key": operation_key,
+                    "expected_revision": status["revision"],
+                    "reason_code": "policy_expiry",
+                    "remote_deletion_receipt": remote,
+                    "checkpoint_object_ref_digest": object_ref,
+                    "issued_at": 1061,
+                    "expires_at": 1161,
+                }
+            ),
+        )
+
+    v1_deleted = expire(
+        v1_terminal,
+        item["namespace"],
+        item["cap"]("durability"),
+        "expire-retention-v1",
+    )
+    v2_deleted = expire(
+        v2_terminal,
+        namespace_v2,
+        cap_v2("durability"),
+        "expire-retention-v2",
+    )
+    assert v1_deleted["payload"]["cryptographic_erasure"] is True
+    assert v2_deleted["payload"]["cryptographic_erasure"] is True
+    assert v1_deleted["payload"]["key_destruction_receipt"]["payload"][
+        "key_version"
+    ] == "managed-test-key/v1"
+    assert v2_deleted["payload"]["key_destruction_receipt"]["payload"][
+        "key_version"
+    ] == "managed-test-key/v2"
 
 
 def test_hydrate_receipts_distinguish_checkpoints_with_the_same_root(tmp_path):
