@@ -6,6 +6,8 @@ All notable changes to `aether-context` are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-09-18
+
 ### Added
 - Hosted V1 now has signed freeze manifests, exact checkpoint/hydrate receipts,
   revision-bound retention commands, independent remote-object and managed-KMS
@@ -171,7 +173,8 @@ pool — local-first, numpy-only core.
   completion), hermetic via `MockLLM`.
 - Docs (`how-it-works`, `local-models`), examples, CI, Apache-2.0 license.
 
-[Unreleased]: https://github.com/AetherAI3/Unlimited-Context-LLM/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/AetherAI3/Unlimited-Context-LLM/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/AetherAI3/Unlimited-Context-LLM/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/AetherAI3/Unlimited-Context-LLM/releases/tag/v0.3.1
 [0.3.0]: https://github.com/AetherAI3/Unlimited-Context-LLM/releases/tag/v0.3.0
 [0.2.0]: https://github.com/AetherAI3/Unlimited-Context-LLM/releases/tag/v0.2.0
