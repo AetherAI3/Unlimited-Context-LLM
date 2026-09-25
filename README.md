@@ -40,6 +40,27 @@ aether-context setup
 `setup` sizes the pool, checks for a local model, and verifies the engine end to end. It works
 with no daemon, no network and no model pulled — the check runs against the built-in mock model.
 
+Two `run` commands can use the same pool directory. The first task is stored as user-authored
+memory; the second retrieves it before generation, even with the default `separate` pool mode:
+
+```bash
+aether-context run "remember: the deploy key rotates on Fridays" --dir ./pool
+aether-context run "when does the deploy key rotate?" --dir ./pool
+```
+
+With the default mock model, the status lines from a fresh pool are:
+
+```text
+[pool 5 GB | slices 2/2275390 | reach 1.17B tok | hit 0% | recalled 0 | mode separate | index flat]
+[pool 5 GB | slices 4/2275390 | reach 1.17B tok | hit 0% | recalled 1 | mode separate | index flat]
+```
+
+The mock prints synthetic text, so use a real local model for an answer to the question.
+`recalled` counts slices supplied before generation; `hit` remains the pager's warm-cache rate.
+Only user and tool memory is supplied by default. `run --include-model-memory` also supplies
+model-authored spill. Retrieved context is capped at 20% of the model window, with room reserved
+for the task and output; a slice too large to fit is skipped.
+
 ```python
 from aether_context import Session
 
@@ -196,7 +217,9 @@ session its own pool and index — fully isolated and private, but you pay one i
 RAM scales with `N × pool` (that's the last column above). `--pool-mode shared` pays for the index
 **once**; each extra session adds only ~30 MB, so 50–70+ sessions fit and CPU becomes the limit
 instead of memory. The trade-off is that sessions can see each other's context. Use shared for
-related work on one project, separate for unrelated tasks.
+related work on one project, separate for unrelated tasks. A `run` invocation is a special case:
+it recalls prior user/tool facts from the same pool directory on reopen, even in separate mode.
+Use different directories when those tasks must not share memory.
 
 **How much building is that?** A ~128K window fills after well under an hour of active agent work,
 then starts compacting and forgetting. Assuming a busy coding agent encodes ~300K–1M keep-worthy

@@ -6,6 +6,12 @@ All notable changes to `aether-context` are documented here. Format follows
 
 ## [Unreleased]
 
+### Fixed
+- `run` now stores each non-empty user task and retrieves prior user/tool memory before model
+  generation across CLI invocations using one pool directory, including the default pool mode
+  (#74). Model-authored spill requires `--include-model-memory` to enter the prompt. Retrieval
+  has a bounded window budget and a separate `recalled` count; pager `hit` keeps its prior meaning.
+
 ## [0.4.0] — 2026-09-18
 
 ### Added

@@ -158,6 +158,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_run.add_argument("task", type=str, help="the task/prompt to run.")
     _add_session_flags(p_run)
+    p_run.add_argument(
+        "--include-model-memory", action="store_true",
+        help="also supply model-authored spill as retrieved context (excluded by default).",
+    )
 
     p_chat = subparsers.add_parser(
         "chat", help="interactive REPL with slash-commands (/clear /new /status /quit ...)."
@@ -539,6 +543,7 @@ def _build_session(args: argparse.Namespace) -> Session:
         pool_index=args.index,
         pool_dir=pool_dir,
         mpo_chain=getattr(args, "mpo_chain", True),
+        include_model_memory=getattr(args, "include_model_memory", False),
         fallback_to_mock=True,
     )
 
@@ -564,6 +569,7 @@ def _status_line(s: dict[str, Any]) -> str:
     return (
         f"[pool {s['pool_gb']} GB | slices {s['slices_used']}/{s['capacity']} | "
         f"reach {int(s['reach_tokens']) / 1e9:.2f}B tok | hit {float(s['hit_rate']):.0%} | "
+        f"recalled {s['recalled']} | "
         f"mode {s['pool_mode']} | index {s['index']}]"
     )
 
@@ -885,6 +891,7 @@ def _status_lines(s: dict[str, Any]) -> list[str]:
         f"  slices:      {s['slices_used']} / {s['capacity']}",
         f"  reach:       {reach:,} tokens",
         f"  hit rate:    {float(s['hit_rate']):.0%}",
+        f"  recalled:    {s['recalled']} slices (last run)",
         f"  resident RAM ~= {s['resident_ram_mb']} MB (estimate)",
         f"  pool-mode:   {s['pool_mode']}",
         f"  index:       {s['index']}",

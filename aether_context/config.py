@@ -174,12 +174,14 @@ class SessionConfig:
     verbatim_fraction: float = VERBATIM_FRACTION
     trigger_fraction: float = TRIGGER_FRACTION
     target_fraction: float = TARGET_FRACTION
+    recall_fraction: float = 0.20
 
     def __post_init__(self) -> None:
         for name, value in (
             ("verbatim_fraction", self.verbatim_fraction),
             ("trigger_fraction", self.trigger_fraction),
             ("target_fraction", self.target_fraction),
+            ("recall_fraction", self.recall_fraction),
         ):
             if not (0.0 <= float(value) <= 1.0):
                 raise PoolBudgetError(
