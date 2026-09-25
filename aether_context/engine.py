@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import shutil
 import sqlite3
+import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -16,23 +18,58 @@ from .contracts import (
     CapabilityV1,
     ClosureProofV1,
     ContextBindingV1,
+    ContextBindingCommandV2,
+    ContextBindingCommandV3,
+    ContextCheckpointDurabilityCommandV1,
+    ContextCheckpointDurabilityReceiptV1,
+    ContextCheckpointDurabilityReceiptV2,
     ContextCheckpointReceiptV1,
+    ContextDeletionReceiptV2,
     ContextFreezeReceiptV1,
+    ContextHealthV1,
+    ContextHealthV2,
+    ContextHealthV3,
+    ContextHydrateCommandV2,
     ContextHydrateReceiptV1,
+    ContextHydrateReceiptV2,
     ContextProfileV1,
+    ContextReservationAbortCommandV1,
+    ContextReservationAbortExpiryCommandV1,
+    ContextReservationAbortReceiptV1,
+    ContextReservationCommandV2,
+    ContextReservationCommandV3,
+    ContextInvocationNoDispatchReceiptV1,
+    ContextReservationExpiryCommandV1,
+    ContextReservationExpiryReceiptV1,
+    ContextReservationReceiptV1,
+    ContextReservationReceiptV2,
+    ContextReservationReceiptV3,
+    ContextReservationReleaseCommandV1,
+    ContextReservationReleaseReceiptV1,
     ManagedKeyProviderReceiptV1,
     PromotionCandidateV1,
     RetrieveRequestV1,
+    RuntimeEnvironmentV2,
+    SignedV1,
+    HOSTED_CONTEXT_CAPABILITIES,
+    LIVE_IPC_MAX_CHECKPOINT_BYTES,
     canonical,
     digest,
 )
 from .crypto import ContextFault, EnvelopeCipher, ReceiptSigner, verify, require_disjoint_keys
 from .policy import NOTICE, filter_text, namespace_matches, token_bound, visible, words, writable
-from .scale import qualify_runtime_build, qualify_scale_receipt, runtime_package_tree_digest
+from .scale import (
+    HOSTED_RUNTIME_DISTRIBUTIONS,
+    qualify_runtime_build,
+    qualify_scale_receipt,
+    runtime_environment_identity,
+    runtime_package_tree_digest,
+)
 from .storage_v2 import SegmentStoreV2
 
 ZERO = "0" * 64
 TERMINAL = {"SEALED", "EXPIRED", "ABORTED", "QUARANTINED"}
+HOT_ATTESTATION_SECONDS = 60
 
 
 class ContextEngine:
@@ -103,17 +140,68 @@ class ContextEngine:
         self._benchmark_keys = benchmark_keys or {}
         self._executor_stability_keys = executor_stability_keys or {}
         self._data_plane_isolation_keys = data_plane_isolation_keys or {}
+        self._runtime_build_manifest = runtime_build_manifest
+        self._runtime_build_keys = runtime_build_keys or {}
         self.store = SegmentStoreV2(path, profile.resident_cache_bytes)
         from . import __version__
 
-        self._runtime_package_tree_digest = runtime_package_tree_digest()
+        self._runtime_source_only = bool(
+            isinstance(runtime_build_manifest, dict)
+            and isinstance(runtime_build_manifest.get("payload"), dict)
+            and runtime_build_manifest["payload"].get("schema_version")
+            in {"ContextRuntimeBuildManifestV2", "ContextRuntimeBuildManifestV3"}
+        )
+        manifest_payload = (
+            runtime_build_manifest.get("payload", {})
+            if isinstance(runtime_build_manifest, dict)
+            else {}
+        )
+        configured_closure = (
+            manifest_payload.get("runtime_environment", {}).get(
+                "dependency_import_closure"
+            )
+            if manifest_payload.get("schema_version")
+            == "ContextRuntimeBuildManifestV3"
+            else None
+        )
+        self._runtime_distributions = (
+            tuple(configured_closure)
+            if isinstance(configured_closure, list)
+            and all(isinstance(item, str) for item in configured_closure)
+            else HOSTED_RUNTIME_DISTRIBUTIONS
+        )
+        self._runtime_startup_failure: str | None = None
+        self._runtime_package_tree_digest: str | None
+        runtime_environment = None
+        try:
+            self._runtime_package_tree_digest = runtime_package_tree_digest(
+                require_source_only=self._runtime_source_only
+            )
+            if self._runtime_source_only:
+                runtime_environment = runtime_environment_identity(
+                    distributions=self._runtime_distributions
+                )
+        except (ContextFault, OSError):
+            self._runtime_package_tree_digest = None
+            self._runtime_startup_failure = "runtime_package_tree_unavailable"
+        self._runtime_environment_identity = runtime_environment
         self.build_qualification = qualify_runtime_build(
-            runtime_build_manifest,
-            runtime_build_keys or {},
+            self._runtime_build_manifest,
+            self._runtime_build_keys,
             expected_version=__version__,
-            package_tree_digest=self._runtime_package_tree_digest,
+            package_tree_digest=self._runtime_package_tree_digest or ZERO,
+            runtime_environment=runtime_environment,
         )
         self.scale_qualification = self._qualify_scale()
+        self._attestation_lock = threading.RLock()
+        self._hot_attestation_checked_at = -1
+        self._hot_attestation_valid_until = -1
+        self._hot_attestation_ready = False
+        self._hot_reach_claim_enabled = False
+        # Startup already measured the package and executable environment. This
+        # validates the remaining signed evidence once without repeating either
+        # expensive measurement.
+        self._health(version=3, measure_environment=False, measure_package=False)
         from .retention import RetentionManager
 
         self.retention_manager = RetentionManager(self)
@@ -316,8 +404,54 @@ class ContextEngine:
         return not failures, tuple(failures), receipt_digests
 
     def health(self) -> dict:
-        # Time-bounded benchmark and provider evidence is rechecked on every
-        # health/admission call, so a once-valid startup cache cannot outlive it.
+        """Rolling-compatible ContextHealthV1 response."""
+        return self._health(version=1, measure_environment=True, measure_package=True)
+
+    def health_v2(self) -> dict:
+        """ContextHealthV2 adds the current imported package-tree digest."""
+        return self._health(version=2, measure_environment=True, measure_package=True)
+
+    def health_v3(self) -> dict:
+        """ContextHealthV3 proves the guarded complete import closure."""
+        return self._health(version=3, measure_environment=True, measure_package=True)
+
+    def _health(
+        self, *, version: int, measure_environment: bool, measure_package: bool
+    ) -> dict:
+        # Package bytes plus time-bounded benchmark/provider evidence are
+        # rechecked on every health/admission call.
+        runtime_package_digest: str | None
+        runtime_environment = None
+        runtime_hash_failure: str | None = None
+        if measure_package:
+            try:
+                runtime_package_digest = runtime_package_tree_digest(
+                    require_source_only=self._runtime_source_only
+                )
+                if self._runtime_source_only:
+                    runtime_environment = (
+                        runtime_environment_identity(
+                            distributions=self._runtime_distributions
+                        )
+                        if measure_environment
+                        else self._runtime_environment_identity
+                    )
+                from . import __version__
+
+                self.build_qualification = qualify_runtime_build(
+                    self._runtime_build_manifest,
+                    self._runtime_build_keys,
+                    expected_version=__version__,
+                    package_tree_digest=runtime_package_digest,
+                    runtime_environment=runtime_environment,
+                )
+            except (ContextFault, OSError):
+                runtime_package_digest = None
+                runtime_hash_failure = "runtime_package_tree_unavailable"
+        else:
+            runtime_package_digest = self._runtime_package_tree_digest
+            runtime_environment = self._runtime_environment_identity
+            runtime_hash_failure = self._runtime_startup_failure
         self.scale_qualification = self._qualify_scale()
         free = shutil.disk_usage(self.store.path.parent).free
         with self.store.connection() as db:
@@ -326,12 +460,33 @@ class ContextEngine:
         managed_keys_ready, managed_key_failures, managed_key_receipt_digests = (
             self._managed_key_qualification()
         )
-        profile_ready = self.profile.name != "hosted-v1" or (
-            benchmark_ready and managed_keys_ready and self.build_qualification.valid
+        runtime_build_failures = list(self.build_qualification.failures)
+        if runtime_hash_failure is not None:
+            runtime_build_failures.append(runtime_hash_failure)
+        runtime_package_stable = (
+            runtime_package_digest is not None
+            and runtime_package_digest == self._runtime_package_tree_digest
+            and self._runtime_startup_failure is None
         )
-        return {
+        runtime_build_ready = (
+            runtime_hash_failure is None
+            and runtime_package_stable
+            and self.build_qualification.valid
+        )
+        if self._runtime_startup_failure is not None:
+            runtime_build_failures.append("runtime_package_tree_startup_unavailable")
+        if runtime_package_digest is not None and not runtime_package_stable:
+            runtime_build_failures.append("runtime_package_tree_changed")
+        profile_ready = self.profile.name != "hosted-v1" or (
+            benchmark_ready and managed_keys_ready and runtime_build_ready
+        )
+        payload = {
             "schema_version": "ContextHealthV1",
-            "ready": free >= self.profile.disk_free_floor and profile_ready,
+            "ready": (
+                free >= self.profile.disk_free_floor
+                and profile_ready
+                and runtime_package_stable
+            ),
             "profile_digest": digest(self.profile),
             "index_implementation": self.profile.index_implementation,
             "index_version": sqlite3.sqlite_version,
@@ -356,8 +511,8 @@ class ContextEngine:
             "benchmark_recall_dataset_digest": (
                 self.scale_qualification.recall_dataset_digest
             ),
-            "runtime_build_ready": self.build_qualification.valid,
-            "runtime_build_failures": list(self.build_qualification.failures),
+            "runtime_build_ready": runtime_build_ready,
+            "runtime_build_failures": runtime_build_failures,
             "runtime_build_manifest_digest": self.build_qualification.manifest_digest,
             "runtime_source_revision": self.build_qualification.source_revision,
             "runtime_data_plane_case_generator_digest": (
@@ -373,12 +528,129 @@ class ContextEngine:
                 else None
             ),
         }
+        if version >= 2:
+            payload["schema_version"] = (
+                "ContextHealthV3" if version == 3 else "ContextHealthV2"
+            )
+            payload["runtime_package_tree_digest"] = runtime_package_digest
+            payload["runtime_locked_environment_digest"] = (
+                digest(runtime_environment) if runtime_environment is not None else None
+            )
+            payload["runtime_python_implementation"] = (
+                runtime_environment.python_implementation
+                if runtime_environment is not None
+                else None
+            )
+            payload["runtime_python_version"] = (
+                runtime_environment.python_version if runtime_environment is not None else None
+            )
+            payload["runtime_python_abi"] = (
+                runtime_environment.python_abi if runtime_environment is not None else None
+            )
+            payload["runtime_python_executable_digest"] = (
+                runtime_environment.python_executable_digest
+                if runtime_environment is not None
+                else None
+            )
+            payload["runtime_dependency_versions"] = (
+                dict(runtime_environment.dependency_versions)
+                if runtime_environment is not None
+                else {}
+            )
+            payload["runtime_dependency_artifact_digests"] = (
+                dict(runtime_environment.dependency_artifact_digests)
+                if runtime_environment is not None
+                else {}
+            )
+            payload["runtime_sqlite_version"] = (
+                runtime_environment.sqlite_version if runtime_environment is not None else None
+            )
+            payload["runtime_package_import_root_digest"] = (
+                runtime_environment.package_import_root_digest
+                if runtime_environment is not None
+                else None
+            )
+            payload["runtime_bytecode_policy"] = (
+                runtime_environment.bytecode_policy
+                if version == 3 and runtime_environment is not None
+                else "source-only/no-bytecode/v1"
+                if runtime_environment is not None
+                else None
+            )
+            if version == 3:
+                payload["runtime_dependency_import_closure"] = (
+                    list(runtime_environment.dependency_import_closure)
+                    if isinstance(runtime_environment, RuntimeEnvironmentV2)
+                    else []
+                )
+                payload["context_protocol_version"] = 3
+                payload["capabilities"] = list(HOSTED_CONTEXT_CAPABILITIES)
+                payload["live_ipc_checkpoint_bytes"] = min(
+                    self.profile.max_checkpoint_bytes,
+                    LIVE_IPC_MAX_CHECKPOINT_BYTES,
+                )
+                result = ContextHealthV3.model_validate(payload).model_dump(mode="json")
+            else:
+                result = ContextHealthV2.model_validate(payload).model_dump(mode="json")
+        else:
+            result = ContextHealthV1.model_validate(payload).model_dump(mode="json")
+        now = self.now()
+        self._hot_attestation_checked_at = now
+        self._hot_attestation_valid_until = min(
+            now + HOT_ATTESTATION_SECONDS,
+            self._evidence_valid_until(now + HOT_ATTESTATION_SECONDS),
+        )
+        self._hot_attestation_ready = bool(result["ready"])
+        self._hot_reach_claim_enabled = bool(result["reach_claim_enabled"])
+        return result
 
-    def _space(self) -> None:
-        health = self.health()
-        if health["disk_free_bytes"] < self.profile.disk_free_floor:
+    def _evidence_valid_until(self, fallback: int) -> int:
+        expiries: list[int] = []
+
+        def collect(value: Any) -> None:
+            if isinstance(value, dict):
+                if type(value.get("expires_at")) is int:
+                    expiries.append(value["expires_at"])
+                for nested in value.values():
+                    collect(nested)
+            elif isinstance(value, (list, tuple)):
+                for nested in value:
+                    collect(nested)
+
+        collect(self._benchmark_receipt)
+        collect(self.managed_key_provider_receipts)
+        return min(expiries, default=fallback)
+
+    def _space(self, *, full_environment: bool = False) -> None:
+        if full_environment:
+            health = self._health(
+                version=2, measure_environment=True, measure_package=True
+            )
+            ready = bool(health["ready"])
+            free = health["disk_free_bytes"]
+        else:
+            now = self.now()
+            if (
+                now >= self._hot_attestation_valid_until
+                or now - self._hot_attestation_checked_at >= HOT_ATTESTATION_SECONDS
+            ):
+                with self._attestation_lock:
+                    now = self.now()
+                    if (
+                        now >= self._hot_attestation_valid_until
+                        or now - self._hot_attestation_checked_at
+                        >= HOT_ATTESTATION_SECONDS
+                    ):
+                        self._health(
+                            version=3,
+                            measure_environment=True,
+                            measure_package=True,
+                        )
+            free = shutil.disk_usage(self.store.path.parent).free
+            ready = self._hot_attestation_ready and now < self._hot_attestation_valid_until
+        if free < self.profile.disk_free_floor:
             raise ContextFault("context_disk_watermark")
-        if not health["ready"]:
+        if not ready:
             raise ContextFault("context_hosted_gate_unready")
 
     def _cycle(self, db, cycle: str):
@@ -406,8 +678,19 @@ class ContextEngine:
 
     def reserve(self, signed_reservation: dict) -> dict:
         """Only Gateway can mint this command, before consuming run authority."""
+        return self._reserve(signed_reservation, version=1)
+
+    def reserve_v2(self, signed_reservation: dict) -> dict:
+        """Revisioned reservation wire required for explicit release revival."""
+        return self._reserve(signed_reservation, version=2)
+
+    def reserve_v3(self, signed_reservation: dict) -> dict:
+        """Revive only from an exact service-signed no-dispatch expiry."""
+        return self._reserve(signed_reservation, version=3)
+
+    def _reserve(self, signed_reservation: dict, *, version: int) -> dict:
         request = verify(signed_reservation, self.authority_keys)
-        if set(request) != {
+        base_fields = {
             "operation",
             "owner_id",
             "project_id",
@@ -415,34 +698,212 @@ class ContextEngine:
             "request_digest",
             "profile_digest",
             "expires_at",
-        }:
+        }
+        reservation_v3: ContextReservationCommandV3 | None = None
+        if version == 3:
+            try:
+                reservation_v3 = ContextReservationCommandV3.model_validate(request)
+            except (TypeError, ValueError) as exc:
+                raise ContextFault("context_reservation_schema") from exc
+            if request != reservation_v3.model_dump(mode="json"):
+                raise ContextFault("context_reservation_schema")
+        elif version == 2:
+            try:
+                reservation_v2 = ContextReservationCommandV2.model_validate(request)
+            except (TypeError, ValueError) as exc:
+                raise ContextFault("context_reservation_schema") from exc
+            if request != reservation_v2.model_dump(mode="json"):
+                raise ContextFault("context_reservation_schema")
+        elif version != 1 or set(request) != base_fields:
             raise ContextFault("context_reservation_schema")
         if request["operation"] != "reserve" or request["profile_digest"] != digest(self.profile):
             raise ContextFault("context_profile_mismatch")
-        if not self.now() < request["expires_at"] <= self.now() + 3600:
-            raise ContextFault("context_reservation_expired")
+        reservation_authority_valid = (
+            self.now() < request["expires_at"] <= self.now() + 3600
+        )
         for field in ("owner_id", "project_id", "idempotency_key", "request_digest"):
             if not isinstance(request[field], str) or not 1 <= len(request[field]) <= 200:
                 raise ContextFault("context_reservation_schema")
-        self._space()
+        if (
+            len(request["request_digest"]) != 64
+            or any(item not in "0123456789abcdef" for item in request["request_digest"])
+        ):
+            raise ContextFault("context_reservation_schema")
+        released_revision = request.get("released_revision")
+        if released_revision is not None and (
+            type(released_revision) is not int or released_revision < 2
+        ):
+            raise ContextFault("context_reservation_schema")
+        expiry_envelope: dict | None = None
+        expiry_claim: ContextReservationExpiryReceiptV1 | None = None
+        if version == 3:
+            if reservation_v3 is None:
+                raise ContextFault("context_reservation_schema")
+            try:
+                expiry_envelope = reservation_v3.expired_reservation_receipt.model_dump(
+                    mode="json"
+                )
+                expiry_payload = verify(
+                    expiry_envelope,
+                    {self.signer.key_id: self.signer.key.public_key()},
+                )
+                expiry_claim = ContextReservationExpiryReceiptV1.model_validate(
+                    expiry_payload
+                )
+            except (ContextFault, TypeError, ValueError) as exc:
+                raise ContextFault("context_reservation_expiry_receipt_invalid") from exc
+            if expiry_payload != expiry_claim.model_dump(mode="json"):
+                raise ContextFault("context_reservation_expiry_receipt_invalid")
+        self._space(full_environment=True)
         identity = {k: request[k] for k in ("owner_id", "project_id", "idempotency_key")}
         cycle = "ctx_" + digest(identity)[:32]
         with self.store.transaction() as db:
             for expired in db.execute(
                 "SELECT id FROM cycles WHERE state='RESERVED' AND expires<=?", (self.now(),)
             ).fetchall():
-                db.execute(
+                changed = db.execute(
                     "UPDATE cycles SET state='EXPIRED',revision=revision+1 WHERE id=?",
                     (expired[0],),
                 )
                 self._event(db, expired[0], "context.reservation_expired")
             existing = db.execute("SELECT * FROM cycles WHERE id=?", (cycle,)).fetchone()
             if existing is not None:
-                if existing["request_digest"] != request["request_digest"]:
+                if (
+                    existing["owner"] != request["owner_id"]
+                    or existing["project"] != request["project_id"]
+                    or existing["request_key"] != request["idempotency_key"]
+                    or existing["profile"] != request["profile_digest"]
+                    or existing["request_digest"] != request["request_digest"]
+                ):
                     raise ContextFault("context_idempotency_conflict")
-                if existing["state"] in TERMINAL:
+                if not reservation_authority_valid:
+                    if existing["state"] in TERMINAL:
+                        raise ContextFault("context_reservation_terminal")
+                    raise ContextFault("context_reservation_expired")
+                if (
+                    existing["state"] == "EXPIRED"
+                    and existing["reservation_release_digest"] is not None
+                ):
+                    if released_revision is None:
+                        raise ContextFault("context_reservation_terminal")
+                    if released_revision != existing["revision"]:
+                        raise ContextFault("context_stale_state")
+                    if not self._reservation_never_bound(
+                        existing
+                    ) or not self._reservation_data_empty(db, cycle):
+                        raise ContextFault("context_integrity_failure")
+                    self._reservation_release_replay(
+                        db, existing, existing["reservation_release_digest"]
+                    )
+                    count = db.execute(
+                        "SELECT count(*) FROM cycles WHERE owner=? AND state NOT IN "
+                        "('SEALED','EXPIRED','ABORTED','QUARANTINED')",
+                        (request["owner_id"],),
+                    ).fetchone()[0]
+                    if count >= self.profile.max_concurrent_cycles:
+                        raise ContextFault("context_cycle_quota")
+                    changed = db.execute(
+                        "UPDATE cycles SET state='RESERVED',expires=?,revision=revision+1,"
+                        "reservation_release_digest=NULL,reservation_release_receipt=NULL,"
+                        "reservation_revival_from_revision=?,reservation_revival_kind='release',"
+                        "reservation_revival_command_digest=?,"
+                        "reservation_revival_receipt_digest=NULL,"
+                        "reservation_revival_no_dispatch_receipt_digest=NULL "
+                        "WHERE id=? AND state='EXPIRED' AND revision=?",
+                        (
+                            request["expires_at"],
+                            released_revision,
+                            digest(request),
+                            cycle,
+                            existing["revision"],
+                        ),
+                    ).rowcount
+                    if changed != 1:
+                        raise ContextFault("context_stale_state")
+                    self._event(db, cycle, "context.reservation_revived")
+                    existing = self._cycle(db, cycle)
+                elif (
+                    existing["state"] == "EXPIRED"
+                    and existing["reservation_expiry_digest"] is not None
+                ):
+                    if version != 3 or expiry_envelope is None or expiry_claim is None:
+                        raise ContextFault("context_reservation_terminal")
+                    if (
+                        existing["reservation_expiry_receipt"]
+                        != canonical(expiry_envelope).decode()
+                        or expiry_claim.expiry_command_digest
+                        != existing["reservation_expiry_digest"]
+                        or expiry_claim.context_cycle_id != cycle
+                        or expiry_claim.owner_id != request["owner_id"]
+                        or expiry_claim.project_id != request["project_id"]
+                        or expiry_claim.idempotency_key != request["idempotency_key"]
+                        or expiry_claim.request_digest != request["request_digest"]
+                        or expiry_claim.profile_digest != request["profile_digest"]
+                        or expiry_claim.revision != existing["revision"]
+                        or not self._reservation_never_bound(existing)
+                        or not self._reservation_data_empty(db, cycle)
+                        or existing["reservation_release_digest"] is not None
+                        or existing["reservation_abort_digest"] is not None
+                    ):
+                        raise ContextFault("context_integrity_failure")
+                    count = db.execute(
+                        "SELECT count(*) FROM cycles WHERE owner=? AND state NOT IN "
+                        "('SEALED','EXPIRED','ABORTED','QUARANTINED')",
+                        (request["owner_id"],),
+                    ).fetchone()[0]
+                    if count >= self.profile.max_concurrent_cycles:
+                        raise ContextFault("context_cycle_quota")
+                    changed = db.execute(
+                        "UPDATE cycles SET state='RESERVED',expires=?,revision=revision+1,"
+                        "reservation_expiry_digest=NULL,reservation_expiry_receipt=NULL,"
+                        "reservation_revival_from_revision=?,reservation_revival_kind='expiry',"
+                        "reservation_revival_command_digest=?,"
+                        "reservation_revival_receipt_digest=?,"
+                        "reservation_revival_no_dispatch_receipt_digest=? "
+                        "WHERE id=? AND state='EXPIRED' AND revision=?",
+                        (
+                            request["expires_at"],
+                            expiry_claim.revision,
+                            digest(request),
+                            digest(expiry_envelope),
+                            expiry_claim.invocation_no_dispatch_receipt_digest,
+                            cycle,
+                            existing["revision"],
+                        ),
+                    ).rowcount
+                    if changed != 1:
+                        raise ContextFault("context_stale_state")
+                    self._event(db, cycle, "context.reservation_revived")
+                    existing = self._cycle(db, cycle)
+                elif existing["state"] in TERMINAL:
                     raise ContextFault("context_reservation_terminal")
+                elif existing["reservation_revival_from_revision"] is not None:
+                    if (
+                        version == 1
+                        or existing["state"] != "RESERVED"
+                        or existing["reservation_revival_command_digest"]
+                        != digest(request)
+                        or existing["revision"]
+                        != existing["reservation_revival_from_revision"] + 1
+                    ):
+                        raise ContextFault("context_stale_state")
+                    if version == 2 and existing["reservation_revival_kind"] != "release":
+                        raise ContextFault("context_stale_state")
+                    if version == 3 and (
+                        expiry_envelope is None
+                        or expiry_claim is None
+                        or existing["reservation_revival_kind"] != "expiry"
+                        or existing["reservation_revival_receipt_digest"]
+                        != digest(expiry_envelope)
+                        or existing["reservation_revival_no_dispatch_receipt_digest"]
+                        != expiry_claim.invocation_no_dispatch_receipt_digest
+                    ):
+                        raise ContextFault("context_integrity_failure")
+                elif released_revision is not None or version == 3:
+                    raise ContextFault("context_stale_state")
             else:
+                if released_revision is not None or version == 3:
+                    raise ContextFault("context_stale_state")
                 count = db.execute(
                     "SELECT count(*) FROM cycles WHERE owner=? AND state NOT IN ('SEALED','EXPIRED','ABORTED','QUARANTINED')",
                     (request["owner_id"],),
@@ -450,7 +911,10 @@ class ContextEngine:
                 if count >= self.profile.max_concurrent_cycles:
                     raise ContextFault("context_cycle_quota")
                 db.execute(
-                    "INSERT INTO cycles(id,owner,project,request_key,request_digest,profile,state,root,expires) VALUES(?,?,?,?,?,?,'RESERVED',?,?)",
+                    "INSERT INTO cycles(id,owner,project,request_key,request_digest,profile,state,"
+                    "root,expires,checkpoint_durability_mode,checkpoint_durability_legacy,"
+                    "reservation_protocol_version) "
+                    "VALUES(?,?,?,?,?,?,'RESERVED',?,?,?,?,?)",
                     (
                         cycle,
                         request["owner_id"],
@@ -460,22 +924,1184 @@ class ContextEngine:
                         digest(self.profile),
                         ZERO,
                         request["expires_at"],
+                        "remote_registered" if version == 1 else "unregistered",
+                        1 if version == 1 else 0,
+                        version,
                     ),
                 )
                 self._event(db, cycle, "context.reserved")
-            return self.signer.sign(
-                {
-                    "schema_version": "ContextReservationReceiptV1",
-                    "context_cycle_id": cycle,
-                    "context_bucket_id": "bucket_" + cycle[4:],
-                    "request_digest": request["request_digest"],
-                    "profile_digest": digest(self.profile),
-                }
+                existing = self._cycle(db, cycle)
+            receipt_fields = {
+                "context_cycle_id": cycle,
+                "context_bucket_id": "bucket_" + cycle[4:],
+                "request_digest": request["request_digest"],
+                "profile_digest": digest(self.profile),
+            }
+            receipt: (
+                ContextReservationReceiptV1
+                | ContextReservationReceiptV2
+                | ContextReservationReceiptV3
             )
+            if version == 3:
+                if (
+                    existing["reservation_revival_from_revision"] is None
+                    or existing["reservation_revival_receipt_digest"] is None
+                    or existing["reservation_revival_no_dispatch_receipt_digest"] is None
+                    or existing["reservation_revival_command_digest"] is None
+                ):
+                    raise ContextFault("context_integrity_failure")
+                receipt = ContextReservationReceiptV3(
+                    **receipt_fields,
+                    revision=existing["revision"],
+                    prior_expiry_receipt_digest=existing[
+                        "reservation_revival_receipt_digest"
+                    ],
+                    prior_expiry_revision=existing[
+                        "reservation_revival_from_revision"
+                    ],
+                    invocation_no_dispatch_receipt_digest=existing[
+                        "reservation_revival_no_dispatch_receipt_digest"
+                    ],
+                    revival_command_digest=existing[
+                        "reservation_revival_command_digest"
+                    ],
+                )
+            elif version == 2:
+                receipt = ContextReservationReceiptV2(
+                    **receipt_fields, revision=existing["revision"]
+                )
+            else:
+                if not reservation_authority_valid:
+                    raise ContextFault("context_reservation_expired")
+                receipt = ContextReservationReceiptV1(**receipt_fields)
+            return self.signer.sign(receipt.model_dump(mode="json"))
+
+    @staticmethod
+    def _reservation_unbound_metadata(row: sqlite3.Row) -> bool:
+        return (
+            row["binding"] is None
+            and row["binding_digest"] is None
+            and row["authority"] is None
+            and row["snapshot"] is None
+            and row["cursor"] == 0
+            and row["root"] == ZERO
+            and row["bytes"] == 0
+            and row["checkpoint"] == 0
+            and row["key_ref"] is None
+            and row["key_version"] is None
+            and row["seal_digest"] is None
+            and row["checkpoint_manifest_checksum"] is None
+            and row["checkpoint_object_ref_digest"] is None
+            and row["checkpoint_durability_mode"] == "unregistered"
+            and row["checkpoint_durability_legacy"] == 0
+            and row["checkpoint_durability_command_digest"] is None
+            and row["checkpoint_durability_receipt"] is None
+            and row["hydrate_command_digest"] is None
+            and row["hydrate_request_digest"] is None
+            and row["hydrate_receipt"] is None
+            and row["hold"] == 0
+            and row["hold_reason"] is None
+            and row["reservation_binding_receipt_digest"] is None
+            and row["reservation_binding_revision"] is None
+        )
+
+    @classmethod
+    def _reservation_never_bound(cls, row: sqlite3.Row) -> bool:
+        return (
+            cls._reservation_unbound_metadata(row)
+            and row["cleanup_state"] == "NONE"
+            and row["cleanup_remote_receipt"] is None
+            and row["cleanup_operation_key"] is None
+            and row["cleanup_request_digest"] is None
+            and row["deletion_receipt"] is None
+        )
+
+    @staticmethod
+    def _reservation_data_empty(
+        db: sqlite3.Connection, cycle: str, *, include_retention: bool = True
+    ) -> bool:
+        tables = ["segments", "postings", "operations", "fences", "call_budgets"]
+        if include_retention:
+            tables.append("retention_operations")
+        return all(
+            db.execute(
+                f"SELECT 1 FROM {table} WHERE cycle=? LIMIT 1", (cycle,)
+            ).fetchone()
+            is None
+            for table in tables
+        )
+
+    def _reservation_release_replay(
+        self, db: sqlite3.Connection, row: sqlite3.Row, command_digest: str
+    ) -> dict | None:
+        stored_digest = row["reservation_release_digest"]
+        stored_receipt = row["reservation_release_receipt"]
+        if stored_digest is None and stored_receipt is None:
+            return None
+        if stored_digest is None or stored_receipt is None:
+            raise ContextFault("context_integrity_failure")
+        if stored_digest != command_digest:
+            raise ContextFault("context_reservation_release_conflict")
+        try:
+            envelope = json.loads(stored_receipt)
+            payload = verify(
+                envelope,
+                {self.signer.key_id: self.signer.key.public_key()},
+            )
+            receipt = ContextReservationReleaseReceiptV1.model_validate(payload)
+        except (ContextFault, TypeError, ValueError) as exc:
+            raise ContextFault("context_integrity_failure") from exc
+        if (
+            payload != receipt.model_dump(mode="json")
+            or receipt.context_cycle_id != row["id"]
+            or receipt.owner_id != row["owner"]
+            or receipt.project_id != row["project"]
+            or receipt.idempotency_key != row["request_key"]
+            or receipt.request_digest != row["request_digest"]
+            or receipt.profile_digest != row["profile"]
+            or receipt.release_command_digest != stored_digest
+            or receipt.revision != row["revision"]
+            or row["state"] != "EXPIRED"
+            or row["reservation_protocol_version"] < 2
+            or row["reservation_abort_digest"] is not None
+            or row["reservation_abort_receipt"] is not None
+            or row["reservation_expiry_digest"] is not None
+            or row["reservation_expiry_receipt"] is not None
+            or row["reservation_revival_from_revision"] is not None
+            or row["reservation_revival_kind"] is not None
+            or row["reservation_revival_command_digest"] is not None
+            or row["reservation_revival_receipt_digest"] is not None
+            or row["reservation_revival_no_dispatch_receipt_digest"] is not None
+            or not self._reservation_never_bound(row)
+            or not self._reservation_data_empty(db, row["id"])
+        ):
+            raise ContextFault("context_integrity_failure")
+        return envelope
+
+    def release_reservation(self, signed_command: dict) -> dict:
+        """Release only a Gateway-attested pre-dispatch failure, with CAS replay safety."""
+
+        payload = verify(signed_command, self.authority_keys)
+        try:
+            command = ContextReservationReleaseCommandV1.model_validate(payload)
+        except (TypeError, ValueError) as exc:
+            raise ContextFault("context_reservation_release_schema") from exc
+        if payload != command.model_dump(mode="json"):
+            raise ContextFault("context_reservation_release_schema")
+        command_digest = digest(payload)
+        with self.store.transaction() as db:
+            row = self._cycle(db, command.context_cycle_id)
+            replay = self._reservation_release_replay(db, row, command_digest)
+            if replay is not None:
+                return replay
+            if not command.issued_at <= self.now() < command.expires_at:
+                raise ContextFault("context_reservation_release_expired")
+            if (
+                row["owner"] != command.owner_id
+                or row["project"] != command.project_id
+                or row["request_key"] != command.idempotency_key
+                or row["request_digest"] != command.request_digest
+                or row["profile"] != command.profile_digest
+                or row["reservation_protocol_version"] < 2
+                or not self._reservation_never_bound(row)
+                or not self._reservation_data_empty(db, row["id"])
+                or row["state"] not in {"RESERVED", "EXPIRED"}
+                or row["reservation_abort_digest"] is not None
+                or row["reservation_abort_receipt"] is not None
+                or row["reservation_expiry_digest"] is not None
+                or row["reservation_expiry_receipt"] is not None
+            ):
+                raise ContextFault("context_reservation_release_denied")
+            allowed_revisions = {row["revision"]}
+            if row["state"] == "EXPIRED":
+                # The reservation expiry sweep is the only never-bound transition
+                # that may advance the receipt revision before this proof arrives.
+                allowed_revisions.add(row["revision"] - 1)
+            if command.expected_revision not in allowed_revisions:
+                raise ContextFault("context_stale_state")
+            revision = row["revision"] + 1
+            receipt = self.signer.sign(
+                ContextReservationReleaseReceiptV1(
+                    context_cycle_id=row["id"],
+                    owner_id=row["owner"],
+                    project_id=row["project"],
+                    idempotency_key=row["request_key"],
+                    request_digest=row["request_digest"],
+                    profile_digest=row["profile"],
+                    authorization_failure_receipt_digest=(
+                        command.authorization_failure_receipt_digest
+                    ),
+                    release_command_digest=command_digest,
+                    revision=revision,
+                ).model_dump(mode="json")
+            )
+            changed = db.execute(
+                "UPDATE cycles SET state='EXPIRED',expires=?,revision=?,"
+                "reservation_release_digest=?,reservation_release_receipt=?,"
+                "reservation_revival_from_revision=NULL,reservation_revival_kind=NULL,"
+                "reservation_revival_command_digest=NULL,"
+                "reservation_revival_receipt_digest=NULL,"
+                "reservation_revival_no_dispatch_receipt_digest=NULL "
+                "WHERE id=? AND revision=? AND binding IS NULL",
+                (
+                    self.now(),
+                    revision,
+                    command_digest,
+                    canonical(receipt).decode(),
+                    row["id"],
+                    row["revision"],
+                ),
+            ).rowcount
+            if changed != 1:
+                raise ContextFault("context_stale_state")
+            self._event(
+                db,
+                row["id"],
+                "context.reservation_released",
+                authorization_failure_receipt_digest=(
+                    command.authorization_failure_receipt_digest
+                ),
+                release_command_digest=command_digest,
+            )
+            return receipt
+
+    def _reservation_expiry_replay(
+        self,
+        db: sqlite3.Connection,
+        row: sqlite3.Row,
+        command_digest: str,
+        reservation_receipt_digest: str,
+        no_dispatch_receipt_digest: str,
+    ) -> dict | None:
+        stored_digest = row["reservation_expiry_digest"]
+        stored_receipt = row["reservation_expiry_receipt"]
+        if stored_digest is None and stored_receipt is None:
+            return None
+        if stored_digest is None or stored_receipt is None:
+            raise ContextFault("context_integrity_failure")
+        if stored_digest != command_digest:
+            raise ContextFault("context_reservation_expiry_conflict")
+        try:
+            envelope = json.loads(stored_receipt)
+            payload = verify(
+                envelope,
+                {self.signer.key_id: self.signer.key.public_key()},
+            )
+            receipt = ContextReservationExpiryReceiptV1.model_validate(payload)
+        except (ContextFault, TypeError, ValueError) as exc:
+            raise ContextFault("context_integrity_failure") from exc
+        if (
+            payload != receipt.model_dump(mode="json")
+            or receipt.context_cycle_id != row["id"]
+            or receipt.context_bucket_id != "bucket_" + row["id"][4:]
+            or receipt.objective_id == ""
+            or receipt.owner_id != row["owner"]
+            or receipt.project_id != row["project"]
+            or receipt.idempotency_key != row["request_key"]
+            or receipt.request_digest != row["request_digest"]
+            or receipt.profile_digest != row["profile"]
+            or receipt.reservation_receipt_digest != reservation_receipt_digest
+            or receipt.invocation_no_dispatch_receipt_digest != no_dispatch_receipt_digest
+            or receipt.expiry_command_digest != stored_digest
+            or receipt.revision != row["revision"]
+            or receipt.expired_at != row["expires"]
+            or row["state"] != "EXPIRED"
+            or row["reservation_release_digest"] is not None
+            or row["reservation_release_receipt"] is not None
+            or row["reservation_abort_digest"] is not None
+            or row["reservation_abort_receipt"] is not None
+            or row["reservation_revival_from_revision"] is not None
+            or row["reservation_revival_kind"] is not None
+            or row["reservation_revival_command_digest"] is not None
+            or row["reservation_revival_receipt_digest"] is not None
+            or row["reservation_revival_no_dispatch_receipt_digest"] is not None
+            or not self._reservation_never_bound(row)
+            or not self._reservation_data_empty(db, row["id"])
+        ):
+            raise ContextFault("context_integrity_failure")
+        return envelope
+
+    def _validated_reservation_receipt(
+        self, envelope: dict
+    ) -> ContextReservationReceiptV2 | ContextReservationReceiptV3:
+        try:
+            payload = verify(
+                envelope,
+                {self.signer.key_id: self.signer.key.public_key()},
+            )
+            if payload.get("schema_version") == "ContextReservationReceiptV3":
+                claim: ContextReservationReceiptV2 | ContextReservationReceiptV3 = (
+                    ContextReservationReceiptV3.model_validate(payload)
+                )
+            else:
+                claim = ContextReservationReceiptV2.model_validate(payload)
+        except (ContextFault, TypeError, ValueError) as exc:
+            raise ContextFault("context_reservation_receipt_invalid") from exc
+        if payload != claim.model_dump(mode="json"):
+            raise ContextFault("context_reservation_receipt_invalid")
+        return claim
+
+    @staticmethod
+    def _reservation_receipt_lineage_matches(
+        row: sqlite3.Row,
+        claim: ContextReservationReceiptV2 | ContextReservationReceiptV3,
+    ) -> bool:
+        if isinstance(claim, ContextReservationReceiptV3):
+            return (
+                row["reservation_revival_kind"] == "expiry"
+                and row["reservation_revival_from_revision"]
+                == claim.prior_expiry_revision
+                and row["reservation_revival_receipt_digest"]
+                == claim.prior_expiry_receipt_digest
+                and row["reservation_revival_no_dispatch_receipt_digest"]
+                == claim.invocation_no_dispatch_receipt_digest
+                and row["reservation_revival_command_digest"]
+                == claim.revival_command_digest
+            )
+        return row["reservation_revival_kind"] != "expiry"
+
+    def expire_reservation(self, signed_command: dict) -> dict:
+        """Expire a never-dispatched reservation only after ledger closure proof."""
+
+        payload = verify(signed_command, self.authority_keys)
+        try:
+            command = ContextReservationExpiryCommandV1.model_validate(payload)
+        except (TypeError, ValueError) as exc:
+            raise ContextFault("context_reservation_expiry_schema") from exc
+        if payload != command.model_dump(mode="json"):
+            raise ContextFault("context_reservation_expiry_schema")
+        reservation_envelope = command.reservation_receipt.model_dump(mode="json")
+        try:
+            reservation_claim = self._validated_reservation_receipt(
+                reservation_envelope
+            )
+        except ContextFault as exc:
+            raise ContextFault("context_reservation_expiry_receipt_invalid") from exc
+        try:
+            no_dispatch_envelope = command.invocation_no_dispatch_receipt.model_dump(mode="json")
+            no_dispatch_payload = verify(no_dispatch_envelope, self.authority_keys)
+            no_dispatch_claim = ContextInvocationNoDispatchReceiptV1.model_validate(
+                no_dispatch_payload
+            )
+        except (ContextFault, TypeError, ValueError) as exc:
+            raise ContextFault("context_invocation_no_dispatch_receipt_invalid") from exc
+        if no_dispatch_payload != no_dispatch_claim.model_dump(mode="json"):
+            raise ContextFault("context_invocation_no_dispatch_receipt_invalid")
+        command_digest = digest(payload)
+        reservation_receipt_digest = digest(reservation_envelope)
+        no_dispatch_receipt_digest = digest(no_dispatch_envelope)
+        no_dispatch_snapshot = no_dispatch_claim.ledger_snapshot
+        with self.store.transaction() as db:
+            row = self._cycle(db, command.context_cycle_id)
+            replay = self._reservation_expiry_replay(
+                db,
+                row,
+                command_digest,
+                reservation_receipt_digest,
+                no_dispatch_receipt_digest,
+            )
+            if replay is not None:
+                return replay
+            if row["state"] == "RESERVED":
+                if not (
+                    reservation_claim.revision
+                    == command.expected_revision
+                    == row["revision"]
+                ):
+                    raise ContextFault("context_stale_state")
+            elif row["state"] == "EXPIRED" and not (
+                reservation_claim.revision == row["revision"] - 1
+                and command.expected_revision
+                in {row["revision"] - 1, row["revision"]}
+            ):
+                raise ContextFault("context_stale_state")
+            now = self.now()
+            if (
+                not command.issued_at <= now < command.expires_at
+                or not no_dispatch_claim.issued_at <= now < no_dispatch_claim.expires_at
+            ):
+                raise ContextFault("context_reservation_expiry_expired")
+            bucket = "bucket_" + row["id"][4:]
+            if (
+                row["owner"] != command.owner_id
+                or row["project"] != command.project_id
+                or row["request_key"] != command.idempotency_key
+                or row["request_digest"] != command.request_digest
+                or row["profile"] != command.profile_digest
+                or command.context_bucket_id != bucket
+                or command.objective_id != no_dispatch_snapshot.objective_id
+                or reservation_claim.context_cycle_id != row["id"]
+                or reservation_claim.context_bucket_id != bucket
+                or reservation_claim.request_digest != row["request_digest"]
+                or reservation_claim.profile_digest != row["profile"]
+                or no_dispatch_snapshot.context_cycle_id != row["id"]
+                or no_dispatch_snapshot.reservation_revision != reservation_claim.revision
+                or no_dispatch_snapshot.reservation_receipt_digest
+                != reservation_receipt_digest
+                or no_dispatch_snapshot.owner_user_id != row["owner"]
+                or no_dispatch_snapshot.idempotency_key != row["request_key"]
+                or no_dispatch_snapshot.request_digest
+                != "sha256:" + row["request_digest"]
+                or command.invocation_no_dispatch_receipt_digest
+                != no_dispatch_receipt_digest
+                or not self._reservation_receipt_lineage_matches(
+                    row, reservation_claim
+                )
+                or row["state"] not in {"RESERVED", "EXPIRED"}
+                or not self._reservation_never_bound(row)
+                or not self._reservation_data_empty(db, row["id"])
+                or row["reservation_release_digest"] is not None
+                or row["reservation_release_receipt"] is not None
+                or row["reservation_abort_digest"] is not None
+                or row["reservation_abort_receipt"] is not None
+            ):
+                raise ContextFault("context_reservation_expiry_denied")
+            revision = row["revision"] + 1
+            receipt = self.signer.sign(
+                ContextReservationExpiryReceiptV1(
+                    context_cycle_id=row["id"],
+                    context_bucket_id=bucket,
+                    objective_id=command.objective_id,
+                    owner_id=row["owner"],
+                    project_id=row["project"],
+                    idempotency_key=row["request_key"],
+                    request_digest=row["request_digest"],
+                    profile_digest=row["profile"],
+                    reason_code=command.reason_code,
+                    reservation_receipt_digest=reservation_receipt_digest,
+                    invocation_no_dispatch_receipt_digest=no_dispatch_receipt_digest,
+                    expiry_command_digest=command_digest,
+                    expired_at=now,
+                    revision=revision,
+                ).model_dump(mode="json")
+            )
+            changed = db.execute(
+                "UPDATE cycles SET state='EXPIRED',expires=?,revision=?,"
+                "reservation_expiry_digest=?,reservation_expiry_receipt=?,"
+                "reservation_revival_from_revision=NULL,reservation_revival_kind=NULL,"
+                "reservation_revival_command_digest=NULL,"
+                "reservation_revival_receipt_digest=NULL,"
+                "reservation_revival_no_dispatch_receipt_digest=NULL "
+                "WHERE id=? AND state=? AND revision=? AND binding IS NULL",
+                (
+                    now,
+                    revision,
+                    command_digest,
+                    canonical(receipt).decode(),
+                    row["id"],
+                    row["state"],
+                    row["revision"],
+                ),
+            ).rowcount
+            if changed != 1:
+                raise ContextFault("context_stale_state")
+            self._event(
+                db,
+                row["id"],
+                "context.reservation_expired_without_dispatch",
+                reservation_receipt_digest=reservation_receipt_digest,
+                invocation_no_dispatch_receipt_digest=no_dispatch_receipt_digest,
+                expiry_command_digest=command_digest,
+            )
+            return receipt
+
+    def _reservation_abort_replay(
+        self,
+        db: sqlite3.Connection,
+        row: sqlite3.Row,
+        command_digest: str,
+        reservation_receipt_digest: str,
+    ) -> dict | None:
+        stored_digest = row["reservation_abort_digest"]
+        stored_receipt = row["reservation_abort_receipt"]
+        if stored_digest is None and stored_receipt is None:
+            return None
+        if stored_digest is None or stored_receipt is None:
+            raise ContextFault("context_integrity_failure")
+        if stored_digest != command_digest:
+            raise ContextFault("context_reservation_abort_conflict")
+        try:
+            envelope = json.loads(stored_receipt)
+            payload = verify(
+                envelope,
+                {self.signer.key_id: self.signer.key.public_key()},
+            )
+            receipt = ContextReservationAbortReceiptV1.model_validate(payload)
+        except (ContextFault, TypeError, ValueError) as exc:
+            raise ContextFault("context_integrity_failure") from exc
+        if (
+            payload != receipt.model_dump(mode="json")
+            or receipt.context_cycle_id != row["id"]
+            or receipt.owner_id != row["owner"]
+            or receipt.project_id != row["project"]
+            or receipt.idempotency_key != row["request_key"]
+            or receipt.request_digest != row["request_digest"]
+            or receipt.profile_digest != row["profile"]
+            or receipt.abort_command_digest != stored_digest
+            or receipt.reservation_receipt_digest != reservation_receipt_digest
+            or receipt.retention_expires_at != row["expires"]
+            or row["reservation_expiry_digest"] is not None
+            or row["reservation_expiry_receipt"] is not None
+            or row["reservation_revival_from_revision"] is not None
+            or row["reservation_revival_kind"] is not None
+            or row["reservation_revival_command_digest"] is not None
+            or row["reservation_revival_receipt_digest"] is not None
+            or row["reservation_revival_no_dispatch_receipt_digest"] is not None
+        ):
+            raise ContextFault("context_integrity_failure")
+        active_abort = (
+            row["state"] == "ABORTED"
+            and receipt.revision == row["revision"]
+            and self._reservation_never_bound(row)
+            and self._reservation_data_empty(db, row["id"])
+        )
+        completed_cleanup = self._reservation_abort_cleanup_valid(db, row, receipt)
+        if not active_abort and not completed_cleanup:
+            raise ContextFault("context_integrity_failure")
+        return envelope
+
+    def _reservation_abort_cleanup_valid(
+        self,
+        db: sqlite3.Connection,
+        row: sqlite3.Row,
+        abort_receipt: ContextReservationAbortReceiptV1,
+    ) -> bool:
+        if (
+            row["state"] != "EXPIRED"
+            or row["revision"] != abort_receipt.revision + 1
+            or row["cleanup_state"] != "COMPLETE"
+            or row["cleanup_remote_receipt"] is not None
+            or row["cleanup_operation_key"] is None
+            or row["cleanup_request_digest"] is None
+            or row["deletion_receipt"] is None
+            or not self._reservation_unbound_metadata(row)
+            or not self._reservation_data_empty(
+                db, row["id"], include_retention=False
+            )
+        ):
+            return False
+        try:
+            deletion_envelope = json.loads(row["deletion_receipt"])
+            deletion_payload = verify(
+                deletion_envelope,
+                {self.signer.key_id: self.signer.key.public_key()},
+            )
+            deletion = ContextDeletionReceiptV2.model_validate(deletion_payload)
+        except (ContextFault, TypeError, ValueError):
+            return False
+        if (
+            deletion_payload != deletion.model_dump(mode="json")
+            or deletion.context_cycle_id != row["id"]
+            or deletion.segment_chain_root != ZERO
+            or deletion.context_seal_digest is not None
+            or deletion.retention_class != row["retention_class"]
+            or deletion.retention_expired_at != abort_receipt.retention_expires_at
+            or deletion.retention_operation_key != row["cleanup_operation_key"]
+            or deletion.retention_request_digest != row["cleanup_request_digest"]
+            or deletion.cryptographic_erasure
+            or deletion.checkpoint_durability_mode != "unregistered"
+        ):
+            return False
+        operation = db.execute(
+            "SELECT request_digest,result FROM retention_operations "
+            "WHERE cycle=? AND operation='expire_aborted_reservation' AND key=?",
+            (row["id"], row["cleanup_operation_key"]),
+        ).fetchone()
+        count = db.execute(
+            "SELECT count(*) FROM retention_operations WHERE cycle=?",
+            (row["id"],),
+        ).fetchone()[0]
+        return (
+            operation is not None
+            and count == 1
+            and operation["request_digest"] == row["cleanup_request_digest"]
+            and operation["result"] == canonical(deletion_envelope).decode()
+        )
+
+    def abort_reservation(self, signed_command: dict) -> dict:
+        """Abort an exact dispatched objective that never reached context bind."""
+
+        payload = verify(signed_command, self.authority_keys)
+        try:
+            command = ContextReservationAbortCommandV1.model_validate(payload)
+        except (TypeError, ValueError) as exc:
+            raise ContextFault("context_reservation_abort_schema") from exc
+        if payload != command.model_dump(mode="json"):
+            raise ContextFault("context_reservation_abort_schema")
+        reservation_envelope = command.reservation_receipt.model_dump(mode="json")
+        try:
+            reservation_claim = self._validated_reservation_receipt(
+                reservation_envelope
+            )
+        except ContextFault as exc:
+            raise ContextFault("context_reservation_abort_receipt_invalid") from exc
+        command_digest = digest(payload)
+        with self.store.transaction() as db:
+            row = self._cycle(db, command.context_cycle_id)
+            replay = self._reservation_abort_replay(
+                db, row, command_digest, digest(reservation_envelope)
+            )
+            if replay is not None:
+                return replay
+            if row["state"] == "RESERVED":
+                if not (
+                    reservation_claim.revision
+                    == command.expected_revision
+                    == row["revision"]
+                ):
+                    raise ContextFault("context_stale_state")
+            elif row["state"] == "EXPIRED" and not (
+                reservation_claim.revision == row["revision"] - 1
+                and command.expected_revision
+                in {row["revision"] - 1, row["revision"]}
+            ):
+                raise ContextFault("context_stale_state")
+            now = self.now()
+            if not command.issued_at <= now < command.expires_at:
+                raise ContextFault("context_reservation_abort_expired")
+            if (
+                row["owner"] != command.owner_id
+                or row["project"] != command.project_id
+                or row["request_key"] != command.idempotency_key
+                or row["request_digest"] != command.request_digest
+                or row["profile"] != command.profile_digest
+                or reservation_claim.context_cycle_id != row["id"]
+                or reservation_claim.context_bucket_id
+                != "bucket_" + row["id"][4:]
+                or reservation_claim.request_digest != row["request_digest"]
+                or reservation_claim.profile_digest != row["profile"]
+                or not self._reservation_receipt_lineage_matches(
+                    row, reservation_claim
+                )
+                or row["state"] not in {"RESERVED", "EXPIRED"}
+                or not self._reservation_never_bound(row)
+                or not self._reservation_data_empty(db, row["id"])
+                or row["reservation_release_digest"] is not None
+                or row["reservation_release_receipt"] is not None
+                or row["reservation_expiry_digest"] is not None
+                or row["reservation_expiry_receipt"] is not None
+            ):
+                raise ContextFault("context_reservation_abort_denied")
+            revision = row["revision"] + 1
+            retention_expires_at = now + self.profile.retention_seconds
+            receipt = self.signer.sign(
+                ContextReservationAbortReceiptV1(
+                    context_cycle_id=row["id"],
+                    owner_id=row["owner"],
+                    project_id=row["project"],
+                    objective_id=command.objective_id,
+                    idempotency_key=row["request_key"],
+                    request_digest=row["request_digest"],
+                    profile_digest=row["profile"],
+                    reason_code=command.reason_code,
+                    objective_dispatch_receipt_digest=(
+                        command.objective_dispatch_receipt_digest
+                    ),
+                    reservation_receipt_digest=digest(reservation_envelope),
+                    abort_command_digest=command_digest,
+                    aborted_at=now,
+                    retention_expires_at=retention_expires_at,
+                    revision=revision,
+                ).model_dump(mode="json")
+            )
+            changed = db.execute(
+                "UPDATE cycles SET state='ABORTED',expires=?,revision=?,"
+                "reservation_abort_digest=?,reservation_abort_receipt=?,"
+                "reservation_revival_from_revision=NULL,reservation_revival_kind=NULL,"
+                "reservation_revival_command_digest=NULL,"
+                "reservation_revival_receipt_digest=NULL,"
+                "reservation_revival_no_dispatch_receipt_digest=NULL "
+                "WHERE id=? AND state=? AND revision=? AND binding IS NULL "
+                "AND binding_digest IS NULL AND authority IS NULL AND snapshot IS NULL "
+                "AND cursor=0 AND root=? AND bytes=0 AND checkpoint=0 "
+                "AND key_ref IS NULL AND key_version IS NULL AND seal_digest IS NULL "
+                "AND checkpoint_manifest_checksum IS NULL",
+                (
+                    retention_expires_at,
+                    revision,
+                    command_digest,
+                    canonical(receipt).decode(),
+                    row["id"],
+                    row["state"],
+                    row["revision"],
+                    ZERO,
+                ),
+            ).rowcount
+            if changed != 1:
+                raise ContextFault("context_stale_state")
+            self._event(
+                db,
+                row["id"],
+                "context.reservation_aborted",
+                objective_id=command.objective_id,
+                reason_code=command.reason_code,
+                objective_dispatch_receipt_digest=(
+                    command.objective_dispatch_receipt_digest
+                ),
+                reservation_receipt_digest=digest(reservation_envelope),
+                abort_command_digest=command_digest,
+            )
+            return receipt
+
+    def expire_aborted_reservation(self, signed_command: dict) -> dict:
+        """Clean an empty unbound abort after its retention deadline."""
+
+        payload = verify(signed_command, self.authority_keys)
+        try:
+            command = ContextReservationAbortExpiryCommandV1.model_validate(payload)
+        except (TypeError, ValueError) as exc:
+            raise ContextFault("context_reservation_abort_expiry_schema") from exc
+        if payload != command.model_dump(mode="json"):
+            raise ContextFault("context_reservation_abort_expiry_schema")
+        try:
+            abort_envelope = command.abort_receipt.model_dump(mode="json")
+            abort_payload = verify(
+                abort_envelope,
+                {self.signer.key_id: self.signer.key.public_key()},
+            )
+            abort_receipt = ContextReservationAbortReceiptV1.model_validate(
+                abort_payload
+            )
+        except (ContextFault, TypeError, ValueError) as exc:
+            raise ContextFault("context_reservation_abort_receipt_invalid") from exc
+        if abort_payload != abort_receipt.model_dump(mode="json"):
+            raise ContextFault("context_reservation_abort_receipt_invalid")
+        request_digest = digest(payload)
+        with self.store.transaction() as db:
+            row = self._cycle(db, command.namespace.context_cycle_id)
+            replay = db.execute(
+                "SELECT request_digest,result FROM retention_operations "
+                "WHERE cycle=? AND operation='expire_aborted_reservation' AND key=?",
+                (row["id"], command.idempotency_key),
+            ).fetchone()
+            if replay is not None:
+                if replay["request_digest"] != request_digest:
+                    raise ContextFault("context_idempotency_conflict")
+                if replay["result"] is None:
+                    raise ContextFault("context_integrity_failure")
+                try:
+                    result = json.loads(replay["result"])
+                    result_payload = verify(
+                        result,
+                        {self.signer.key_id: self.signer.key.public_key()},
+                    )
+                    result_claim = ContextDeletionReceiptV2.model_validate(
+                        result_payload
+                    )
+                except (ContextFault, TypeError, ValueError) as exc:
+                    raise ContextFault("context_integrity_failure") from exc
+                if (
+                    result_payload != result_claim.model_dump(mode="json")
+                    or row["deletion_receipt"] != canonical(result).decode()
+                    or not self._reservation_abort_cleanup_valid(
+                        db, row, abort_receipt
+                    )
+                ):
+                    raise ContextFault("context_integrity_failure")
+                return result
+            now = self.now()
+            if not command.issued_at <= now < command.expires_at:
+                raise ContextFault("context_reservation_abort_expiry_expired")
+            namespace = command.namespace.model_dump(mode="json")
+            if (
+                row["state"] != "ABORTED"
+                or row["owner"] != namespace["owner_id"]
+                or row["project"] != namespace["project_id"]
+                or row["revision"] != command.expected_revision
+                or abort_receipt.context_cycle_id != row["id"]
+                or abort_receipt.owner_id != row["owner"]
+                or abort_receipt.project_id != row["project"]
+                or abort_receipt.objective_id != namespace["objective_id"]
+                or abort_receipt.idempotency_key != row["request_key"]
+                or abort_receipt.request_digest != row["request_digest"]
+                or abort_receipt.profile_digest != row["profile"]
+                or abort_receipt.revision != row["revision"]
+                or abort_receipt.retention_expires_at != row["expires"]
+                or abort_receipt.abort_command_digest
+                != row["reservation_abort_digest"]
+                or row["reservation_abort_receipt"]
+                != canonical(abort_envelope).decode()
+                or now < row["expires"]
+                or not self._reservation_never_bound(row)
+                or not self._reservation_data_empty(db, row["id"])
+            ):
+                raise ContextFault("context_reservation_abort_expiry_denied")
+            db.execute(
+                "INSERT INTO retention_operations(cycle,operation,key,request_digest,result) "
+                "VALUES(?,'expire_aborted_reservation',?,?,NULL)",
+                (row["id"], command.idempotency_key, request_digest),
+            )
+            deletion_payload = ContextDeletionReceiptV2(
+                context_cycle_id=row["id"],
+                segment_chain_root=ZERO,
+                context_seal_digest=None,
+                retention_class=row["retention_class"],
+                retention_expired_at=row["expires"],
+                deleted_at=now,
+                reason_code=command.reason_code,
+                retention_operation_key=command.idempotency_key,
+                retention_request_digest=request_digest,
+                logical_deletion=True,
+                cryptographic_erasure=False,
+                local_key_destruction=None,
+                key_destruction_receipt=None,
+                key_destruction_receipt_digest=None,
+                managed_key_provider_receipt_digest=None,
+                remote_deletion_receipt_digest=None,
+                checkpoint_manifest_checksum=None,
+                checkpoint_object_ref_digest=None,
+                checkpoint_durability_mode="unregistered",
+                checkpoint_durability_registration_receipt_digest=None,
+            ).model_dump(mode="json")
+            receipt = self.signer.sign(deletion_payload)
+            changed = db.execute(
+                "UPDATE cycles SET state='EXPIRED',cleanup_state='COMPLETE',"
+                "cleanup_operation_key=?,cleanup_request_digest=?,"
+                "deletion_receipt=?,revision=revision+1 "
+                "WHERE id=? AND state='ABORTED' AND revision=? AND binding IS NULL",
+                (
+                    command.idempotency_key,
+                    request_digest,
+                    canonical(receipt).decode(),
+                    row["id"],
+                    row["revision"],
+                ),
+            ).rowcount
+            if changed != 1:
+                raise ContextFault("context_stale_state")
+            db.execute(
+                "UPDATE retention_operations SET result=? WHERE cycle=? "
+                "AND operation='expire_aborted_reservation' AND key=?",
+                (
+                    canonical(receipt).decode(),
+                    row["id"],
+                    command.idempotency_key,
+                ),
+            )
+            self._event(
+                db,
+                row["id"],
+                "context.expired",
+                deletion_receipt_digest=digest(receipt),
+                cryptographic_erasure=False,
+            )
+            return receipt
+
+    def register_checkpoint_durability(self, signed_command: dict) -> dict:
+        """Register an immutable checkpoint persistence mode before the first pack."""
+
+        payload = verify(signed_command, self.authority_keys)
+        try:
+            command = ContextCheckpointDurabilityCommandV1.model_validate(payload)
+        except (TypeError, ValueError) as exc:
+            raise ContextFault("context_checkpoint_durability_schema") from exc
+        if payload != command.model_dump(mode="json"):
+            raise ContextFault("context_checkpoint_durability_schema")
+        command_digest = digest(payload)
+        with self.store.transaction() as db:
+            row = self._cycle(db, command.namespace.context_cycle_id)
+            stored_digest = row["checkpoint_durability_command_digest"]
+            stored_receipt = row["checkpoint_durability_receipt"]
+            if stored_digest is not None or stored_receipt is not None:
+                if stored_digest is None or stored_receipt is None:
+                    raise ContextFault("context_integrity_failure")
+                if stored_digest != command_digest:
+                    raise ContextFault("context_checkpoint_durability_conflict")
+                try:
+                    envelope = json.loads(stored_receipt)
+                    receipt, receipt_payload = self._validated_durability_receipt(
+                        envelope,
+                        {self.signer.key_id: self.signer.key.public_key()},
+                    )
+                except (ContextFault, TypeError, ValueError) as exc:
+                    raise ContextFault("context_integrity_failure") from exc
+                if (
+                    receipt_payload != receipt.model_dump(mode="json")
+                    or receipt.namespace != command.namespace
+                    or receipt.idempotency_key != command.idempotency_key
+                    or receipt.mode != command.mode
+                    or row["checkpoint_durability_mode"] != receipt.mode
+                    or row["checkpoint_durability_legacy"]
+                    or receipt.command_digest != stored_digest
+                    or receipt.revision > row["revision"]
+                ):
+                    raise ContextFault("context_integrity_failure")
+                return envelope
+            if not command.issued_at <= self.now() < command.expires_at:
+                raise ContextFault("context_checkpoint_durability_expired")
+            try:
+                binding_payload = json.loads(row["binding"])
+                binding = ContextBindingV1.model_validate(binding_payload)
+            except (TypeError, ValueError) as exc:
+                raise ContextFault("context_checkpoint_durability_denied") from exc
+            if (
+                binding.namespace != command.namespace
+                or row["binding_digest"] != digest(binding_payload)
+                or row["state"] != "ACTIVE"
+                or row["checkpoint"] != 0
+                or row["checkpoint_manifest_checksum"] is not None
+            ):
+                raise ContextFault("context_checkpoint_durability_denied")
+            if row["revision"] != command.expected_revision:
+                raise ContextFault("context_stale_state")
+            revision = row["revision"] + 1
+            receipt_envelope = self.signer.sign(
+                ContextCheckpointDurabilityReceiptV1(
+                    namespace=command.namespace,
+                    idempotency_key=command.idempotency_key,
+                    mode=command.mode,
+                    command_digest=command_digest,
+                    effective_at=self.now(),
+                    revision=revision,
+                ).model_dump(mode="json")
+            )
+            changed = db.execute(
+                "UPDATE cycles SET checkpoint_durability_mode=?,"
+                "checkpoint_durability_command_digest=?,checkpoint_durability_receipt=?,"
+                "checkpoint_durability_legacy=0,revision=? WHERE id=? AND revision=?",
+                (
+                    command.mode,
+                    command_digest,
+                    canonical(receipt_envelope).decode(),
+                    revision,
+                    row["id"],
+                    row["revision"],
+                ),
+            ).rowcount
+            if changed != 1:
+                raise ContextFault("context_stale_state")
+            self._event(
+                db,
+                row["id"],
+                "context.checkpoint_durability_registered",
+                mode=command.mode,
+                command_digest=command_digest,
+            )
+            return receipt_envelope
+
+    @staticmethod
+    def _validated_durability_receipt(
+        envelope: dict, keys: dict
+    ) -> tuple[ContextCheckpointDurabilityReceiptV1, dict]:
+        payload = verify(envelope, keys)
+        model = (
+            ContextCheckpointDurabilityReceiptV2
+            if payload.get("schema_version")
+            == "ContextCheckpointDurabilityReceiptV2"
+            else ContextCheckpointDurabilityReceiptV1
+        )
+        receipt = model.model_validate(payload)
+        if payload != receipt.model_dump(mode="json"):
+            raise ContextFault("context_integrity_failure")
+        return receipt, payload
+
+    def _verify_checkpoint_durability_registration(self, row: sqlite3.Row) -> None:
+        mode = row["checkpoint_durability_mode"]
+        command_digest = row["checkpoint_durability_command_digest"]
+        stored_receipt = row["checkpoint_durability_receipt"]
+        if row["checkpoint_durability_legacy"]:
+            if (
+                mode != "remote_registered"
+                or command_digest is not None
+                or stored_receipt is not None
+            ):
+                raise ContextFault("context_integrity_failure")
+            return
+        if mode == "unregistered":
+            if command_digest is not None or stored_receipt is not None:
+                raise ContextFault("context_integrity_failure")
+            raise ContextFault("context_checkpoint_durability_unregistered")
+        if command_digest is None or stored_receipt is None:
+            raise ContextFault("context_checkpoint_durability_unregistered")
+        try:
+            envelope = json.loads(stored_receipt)
+            receipt, payload = self._validated_durability_receipt(
+                envelope,
+                {self.signer.key_id: self.signer.key.public_key()},
+            )
+        except (ContextFault, TypeError, ValueError) as exc:
+            raise ContextFault("context_integrity_failure") from exc
+        if (
+            payload != receipt.model_dump(mode="json")
+            or receipt.namespace.context_cycle_id != row["id"]
+            or receipt.namespace.owner_id != row["owner"]
+            or receipt.namespace.project_id != row["project"]
+            or receipt.mode != mode
+            or receipt.command_digest != command_digest
+            or receipt.revision > row["revision"]
+        ):
+            raise ContextFault("context_integrity_failure")
+
+    def _restore_checkpoint_durability_registration(
+        self,
+        snapshot: dict,
+        namespace: dict,
+        mode: str,
+        receipt_keys: dict,
+        hydrated_revision: int,
+    ) -> tuple[str | None, dict | None, int, str | None]:
+        fields = {
+            "checkpoint_durability_command_digest",
+            "checkpoint_durability_receipt",
+        }
+        present = fields & snapshot.keys()
+        if not present:
+            if mode != "remote_registered":
+                raise ContextFault("context_hydrate_durability_denied")
+            return None, None, 1, None
+        if present != fields:
+            raise ContextFault("context_integrity_failure")
+        command_digest = snapshot["checkpoint_durability_command_digest"]
+        source_envelope = snapshot["checkpoint_durability_receipt"]
+        if (
+            not isinstance(command_digest, str)
+            or len(command_digest) != 64
+            or any(character not in "0123456789abcdef" for character in command_digest)
+            or not isinstance(source_envelope, dict)
+        ):
+            raise ContextFault("context_integrity_failure")
+        try:
+            source_receipt, source_payload = self._validated_durability_receipt(
+                source_envelope, receipt_keys
+            )
+        except (ContextFault, TypeError, ValueError) as exc:
+            raise ContextFault("context_integrity_failure") from exc
+        if (
+            source_payload != source_receipt.model_dump(mode="json")
+            or source_receipt.namespace.model_dump(mode="json") != namespace
+            or source_receipt.mode != mode
+            or source_receipt.command_digest != command_digest
+            or source_receipt.revision > hydrated_revision
+        ):
+            raise ContextFault("context_integrity_failure")
+        if isinstance(source_receipt, ContextCheckpointDurabilityReceiptV2):
+            # Each replacement verifies the immediate source host's V2 receipt,
+            # then carries the original signed V1 registration forward. This
+            # keeps the evidence constant-sized while preserving a resolvable
+            # authority-issued root through arbitrarily many replacements.
+            original_envelope = source_receipt.source_registration_receipt.model_dump(
+                mode="json"
+            )
+            try:
+                original_receipt = (
+                    ContextCheckpointDurabilityReceiptV1.model_validate(
+                        original_envelope["payload"]
+                    )
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ContextFault("context_integrity_failure") from exc
+            if (
+                original_envelope["payload"]
+                != original_receipt.model_dump(mode="json")
+                or source_receipt.source_registration_receipt_digest
+                != digest(original_envelope)
+            ):
+                raise ContextFault("context_integrity_failure")
+        else:
+            original_envelope = source_envelope
+            original_receipt = source_receipt
+        reattested = self.signer.sign(
+            ContextCheckpointDurabilityReceiptV2(
+                namespace=original_receipt.namespace,
+                idempotency_key=original_receipt.idempotency_key,
+                mode=original_receipt.mode,
+                command_digest=original_receipt.command_digest,
+                effective_at=original_receipt.effective_at,
+                revision=original_receipt.revision,
+                source_registration_receipt=SignedV1.model_validate(
+                    original_envelope
+                ),
+                source_registration_receipt_digest=digest(original_envelope),
+                reattested_at=self.now(),
+            ).model_dump(mode="json")
+        )
+        return command_digest, reattested, 0, digest(original_envelope)
 
     def bind(self, signed_binding: dict, authority: dict, project_snapshot: dict) -> dict:
         binding_payload = verify(signed_binding, self.authority_keys)
-        binding = ContextBindingV1.model_validate(binding_payload)
+        try:
+            binding = ContextBindingV1.model_validate(binding_payload)
+        except (TypeError, ValueError) as exc:
+            raise ContextFault("context_binding_invalid") from exc
+        return self._bind(
+            binding,
+            binding_payload,
+            authority,
+            project_snapshot,
+            reservation_claim=None,
+            reservation_receipt_digest=None,
+        )
+
+    def bind_v2(self, signed_command: dict, authority: dict, project_snapshot: dict) -> dict:
+        payload = verify(signed_command, self.authority_keys)
+        try:
+            command = ContextBindingCommandV2.model_validate(payload)
+            reservation_envelope = command.reservation_receipt.model_dump(mode="json")
+            reservation_payload = verify(
+                reservation_envelope,
+                {self.signer.key_id: self.signer.key.public_key()},
+            )
+            reservation_claim = ContextReservationReceiptV2.model_validate(
+                reservation_payload
+            )
+        except (ContextFault, TypeError, ValueError) as exc:
+            raise ContextFault("context_binding_invalid") from exc
+        if (
+            payload != command.model_dump(mode="json")
+            or reservation_payload != reservation_claim.model_dump(mode="json")
+            or command.expected_reservation_revision != reservation_claim.revision
+        ):
+            raise ContextFault("context_binding_invalid")
+        binding_payload = command.binding.model_dump(mode="json")
+        return self._bind(
+            command.binding,
+            binding_payload,
+            authority,
+            project_snapshot,
+            reservation_claim=reservation_claim,
+            reservation_receipt_digest=digest(reservation_envelope),
+        )
+
+    def bind_v3(self, signed_command: dict, authority: dict, project_snapshot: dict) -> dict:
+        payload = verify(signed_command, self.authority_keys)
+        try:
+            command = ContextBindingCommandV3.model_validate(payload)
+            reservation_envelope = command.reservation_receipt.model_dump(mode="json")
+            reservation_payload = verify(
+                reservation_envelope,
+                {self.signer.key_id: self.signer.key.public_key()},
+            )
+            reservation_claim = ContextReservationReceiptV3.model_validate(
+                reservation_payload
+            )
+        except (ContextFault, TypeError, ValueError) as exc:
+            raise ContextFault("context_binding_invalid") from exc
+        if (
+            payload != command.model_dump(mode="json")
+            or reservation_payload != reservation_claim.model_dump(mode="json")
+            or command.expected_reservation_revision != reservation_claim.revision
+        ):
+            raise ContextFault("context_binding_invalid")
+        binding_payload = command.binding.model_dump(mode="json")
+        return self._bind(
+            command.binding,
+            binding_payload,
+            authority,
+            project_snapshot,
+            reservation_claim=reservation_claim,
+            reservation_receipt_digest=digest(reservation_envelope),
+        )
+
+    def _bind(
+        self,
+        binding: ContextBindingV1,
+        binding_payload: dict,
+        authority: dict,
+        project_snapshot: dict,
+        *,
+        reservation_claim: ContextReservationReceiptV2 | ContextReservationReceiptV3 | None,
+        reservation_receipt_digest: str | None,
+    ) -> dict:
         binding_digest = digest(binding_payload)
         # Authority comes from the same authenticated control plane; its exact
         # digest is already committed by the authorization receipt.
@@ -502,12 +2128,53 @@ class ContextEngine:
             row = self._cycle(db, cycle)
             if row["owner"] != ns["owner_id"] or row["project"] != ns["project_id"]:
                 raise ContextFault("context_namespace_denied")
+            if isinstance(reservation_claim, ContextReservationReceiptV3):
+                if (
+                    row["reservation_revival_kind"] != "expiry"
+                    or row["reservation_revival_from_revision"]
+                    != reservation_claim.prior_expiry_revision
+                    or row["reservation_revival_receipt_digest"]
+                    != reservation_claim.prior_expiry_receipt_digest
+                    or row["reservation_revival_no_dispatch_receipt_digest"]
+                    != reservation_claim.invocation_no_dispatch_receipt_digest
+                    or row["reservation_revival_command_digest"]
+                    != reservation_claim.revival_command_digest
+                ):
+                    raise ContextFault("context_stale_state")
+            elif row["reservation_revival_kind"] == "expiry":
+                raise ContextFault("context_binding_revision_required")
             if row["binding"]:
                 if row["binding_digest"] != binding_digest:
                     raise ContextFault("context_binding_conflict")
+                if reservation_claim is None:
+                    if row["reservation_binding_revision"] is not None:
+                        raise ContextFault("context_binding_revision_required")
+                elif (
+                    row["reservation_binding_receipt_digest"]
+                    != reservation_receipt_digest
+                    or row["reservation_binding_revision"]
+                    != reservation_claim.revision
+                    or reservation_claim.context_cycle_id != row["id"]
+                    or reservation_claim.context_bucket_id != binding.context_bucket_id
+                    or reservation_claim.request_digest != row["request_digest"]
+                    or reservation_claim.profile_digest != row["profile"]
+                ):
+                    raise ContextFault("context_stale_state")
             else:
                 if row["state"] != "RESERVED" or row["expires"] <= self.now():
                     raise ContextFault("context_state_conflict")
+                if row["reservation_revival_from_revision"] is not None and (
+                    reservation_claim is None
+                ):
+                    raise ContextFault("context_binding_revision_required")
+                if reservation_claim is not None and (
+                    reservation_claim.context_cycle_id != row["id"]
+                    or reservation_claim.context_bucket_id != binding.context_bucket_id
+                    or reservation_claim.request_digest != row["request_digest"]
+                    or reservation_claim.profile_digest != row["profile"]
+                    or reservation_claim.revision != row["revision"]
+                ):
+                    raise ContextFault("context_stale_state")
                 key_ref = self.cycle_keys.ensure(ns) if self.cycle_keys is not None else None
                 key_version = (
                     self._provider_key_version(key_ref) if key_ref is not None else None
@@ -527,11 +2194,11 @@ class ContextEngine:
                 cipher = (
                     self.cycle_keys.cipher(key_ref, ns) if key_ref is not None else self.cipher
                 )
-                db.execute(
+                changed = db.execute(
                     "UPDATE cycles SET binding=?,binding_digest=?,authority=?,snapshot=?,"
                     "state='BOUND',expires=?,key_ref=?,key_version=?,retention_class=?,"
-                    "revision=revision+1 "
-                    "WHERE id=?",
+                    "reservation_binding_receipt_digest=?,reservation_binding_revision=?,"
+                    "revision=revision+1 WHERE id=? AND revision=?",
                     (
                         canonical(binding_payload).decode(),
                         binding_digest,
@@ -541,9 +2208,14 @@ class ContextEngine:
                         key_ref,
                         key_version,
                         binding.retention_class,
+                        reservation_receipt_digest,
+                        reservation_claim.revision if reservation_claim is not None else None,
                         cycle,
+                        row["revision"],
                     ),
-                )
+                ).rowcount
+                if changed != 1:
+                    raise ContextFault("context_stale_state")
                 self._event(db, cycle, "context.bound", binding_digest=binding_digest)
                 db.execute(
                     "UPDATE cycles SET state='HYDRATING',revision=revision+1 WHERE id=?", (cycle,)
@@ -892,6 +2564,7 @@ class ContextEngine:
         return {"metadata": metadata, "text": text}
 
     def retrieve(self, capability: dict, request: RetrieveRequestV1) -> dict:
+        self._space()
         filter_text(request.query)
         with self._transaction(capability) as db:
             cap, cycle = self._authorize(db, capability, "retrieve")
@@ -1025,8 +2698,30 @@ class ContextEngine:
                 db, cycle["id"], "retrieve", request.turn_id, req_digest, result, cipher
             )
 
-    def checkpoint(self, capability: dict, idempotency_key: str) -> dict:
+    def checkpoint(
+        self,
+        capability: dict,
+        idempotency_key: str,
+        *,
+        transport_max_bytes: int | None = None,
+        transport_snapshot_max_bytes: int | None = None,
+    ) -> dict:
         self._space()
+        checkpoint_limit = self.profile.max_checkpoint_bytes
+        snapshot_limit = self.profile.max_checkpoint_bytes
+        if transport_max_bytes is not None:
+            if type(transport_max_bytes) is not int or transport_max_bytes < 1024:
+                raise ContextFault("context_checkpoint_transport_limit")
+            checkpoint_limit = min(checkpoint_limit, transport_max_bytes)
+        if transport_snapshot_max_bytes is not None:
+            if (
+                type(transport_snapshot_max_bytes) is not int
+                or transport_snapshot_max_bytes < 1024
+            ):
+                raise ContextFault("context_checkpoint_transport_limit")
+            snapshot_limit = min(
+                snapshot_limit, transport_snapshot_max_bytes
+            )
         with self._transaction(capability) as db:
             cap, cycle = self._authorize(db, capability, "checkpoint")
             if cap.role not in {"coordinator", "verifier", "durability"}:
@@ -1042,9 +2737,30 @@ class ContextEngine:
                 cipher,
             )
             if replay:
+                if transport_max_bytes is not None:
+                    try:
+                        replay_pack = base64.b64decode(
+                            replay.get("pack", ""), validate=True
+                        )
+                    except (TypeError, ValueError) as exc:
+                        raise ContextFault("context_integrity_failure") from exc
+                    if (
+                        base64.b64encode(replay_pack).decode("ascii")
+                        != replay.get("pack")
+                    ):
+                        raise ContextFault("context_integrity_failure")
+                    if len(replay_pack) > checkpoint_limit:
+                        raise ContextFault("context_checkpoint_transport_limit")
                 return replay
             if cycle["state"] not in {"ACTIVE", "SEALING"}:
                 raise ContextFault("context_not_active")
+            if cycle["checkpoint_durability_mode"] not in {
+                "unregistered",
+                "local_ephemeral",
+                "remote_registered",
+            }:
+                raise ContextFault("context_integrity_failure")
+            self._verify_checkpoint_durability_registration(cycle)
             records: list[dict] = []
             previous = ZERO
             for row in db.execute(
@@ -1077,6 +2793,7 @@ class ContextEngine:
                 "request_key": cycle["request_key"],
                 "request_digest": cycle["request_digest"],
                 "fence": cycle["fence"],
+                "revision": cycle["revision"],
                 "checkpoint": cycle["checkpoint"] + 1,
                 "key_ref": cycle["key_ref"],
                 "key_provider": (
@@ -1086,11 +2803,18 @@ class ContextEngine:
                 ),
                 "key_version": cycle["key_version"],
                 "retention_class": cycle["retention_class"],
+                "checkpoint_durability_mode": cycle["checkpoint_durability_mode"],
+                "reservation_protocol_version": cycle["reservation_protocol_version"],
             }
+            if not cycle["checkpoint_durability_legacy"]:
+                snapshot["checkpoint_durability_command_digest"] = cycle[
+                    "checkpoint_durability_command_digest"
+                ]
+                snapshot["checkpoint_durability_receipt"] = json.loads(
+                    cycle["checkpoint_durability_receipt"]
+                )
             snapshot["state"] = cycle["state"]
             # Replays survive host replacement too, including immutable capsules.
-            import base64
-
             snapshot["operations"] = [
                 {**dict(row), "result": base64.b64encode(row["result"]).decode()}
                 for row in db.execute(
@@ -1098,9 +2822,11 @@ class ContextEngine:
                     (cycle["id"],),
                 )
             ]
-            if len(canonical(snapshot)) > self.profile.max_checkpoint_bytes:
+            if len(canonical(snapshot)) > snapshot_limit:
                 raise ContextFault("context_checkpoint_quota")
             pack = cipher.encrypt(snapshot, {"namespace": ns, "domain": "checkpoint/v1"})
+            if len(pack) > checkpoint_limit:
+                raise ContextFault("context_checkpoint_quota")
             checksum = hashlib.sha256(pack).hexdigest()
             number = cycle["checkpoint"] + 1
             receipt = self.signer.sign(
@@ -1146,17 +2872,43 @@ class ContextEngine:
                 cipher,
             )
 
-    def hydrate(self, signed_grant: dict, receipt: dict, pack: bytes, receipt_keys: dict) -> dict:
+    def hydrate(
+        self,
+        signed_grant: dict,
+        receipt: dict,
+        pack: bytes,
+        receipt_keys: dict,
+        *,
+        snapshot_max_bytes: int | None = None,
+    ) -> dict:
         """Host replacement needs a fresh fence and the exact cloud-selected root."""
+        hydrate_snapshot_limit = self.profile.max_checkpoint_bytes
+        if snapshot_max_bytes is not None:
+            if type(snapshot_max_bytes) is not int or snapshot_max_bytes < 1024:
+                raise ContextFault("context_checkpoint_transport_limit")
+            hydrate_snapshot_limit = min(
+                hydrate_snapshot_limit, snapshot_max_bytes
+            )
         grant = verify(signed_grant, self.authority_keys)
         legacy_grant = {"operation", "namespace", "manifest_checksum", "fence", "expires_at"}
         keyed_grant = legacy_grant | {"key_ref", "key_provider", "key_version"}
-        if frozenset(grant) not in {frozenset(legacy_grant), frozenset(keyed_grant)} or grant[
-            "operation"
-        ] != "hydrate":
+        hydrate_command_digest: str | None = None
+        expected_source_revision: str | None = None
+        if grant.get("schema_version") == "ContextHydrateCommandV2":
+            try:
+                command = ContextHydrateCommandV2.model_validate(grant)
+            except (TypeError, ValueError) as exc:
+                raise ContextFault("context_hydrate_grant_invalid") from exc
+            if grant != command.model_dump(mode="json"):
+                raise ContextFault("context_hydrate_grant_invalid")
+            grant = command.model_dump(mode="json")
+            hydrate_command_digest = digest(grant)
+            expected_source_revision = command.expected_source_revision
+        elif (
+            frozenset(grant) not in {frozenset(legacy_grant), frozenset(keyed_grant)}
+            or grant.get("operation") != "hydrate"
+        ):
             raise ContextFault("context_hydrate_grant_invalid")
-        if grant["expires_at"] <= self.now():
-            raise ContextFault("context_capability_denied")
         try:
             claim = ContextCheckpointReceiptV1.model_validate(
                 verify(receipt, receipt_keys)
@@ -1164,6 +2916,13 @@ class ContextEngine:
         except (ValueError, TypeError) as exc:
             raise ContextFault("context_checkpoint_receipt_invalid") from exc
         checksum = hashlib.sha256(pack).hexdigest()
+        hydrate_request_digest = digest(
+            {
+                "grant": signed_grant,
+                "checkpoint_receipt": receipt,
+                "manifest_checksum": checksum,
+            }
+        )
         if (
             claim.get("schema_version") != "ContextCheckpointReceiptV1"
             or checksum != grant["manifest_checksum"]
@@ -1172,12 +2931,25 @@ class ContextEngine:
             or len(pack) > self.profile.max_checkpoint_bytes
         ):
             raise ContextFault("context_integrity_failure")
+        if hydrate_command_digest is None:
+            legacy_now = self.now()
+            if (
+                type(grant.get("expires_at")) is not int
+                or not legacy_now < grant["expires_at"] <= legacy_now + 900
+            ):
+                raise ContextFault("context_capability_denied")
         key_ref = claim.get("key_ref")
         key_provider = claim.get("key_provider")
         key_version = claim.get("key_version")
+        if hydrate_command_digest is not None and (
+            grant.get("key_ref") != key_ref
+            or grant.get("key_provider") != key_provider
+            or grant.get("key_version") != key_version
+        ):
+            raise ContextFault("context_hydrate_grant_invalid")
         if key_ref is None:
             if (
-                set(grant) != legacy_grant
+                (hydrate_command_digest is None and set(grant) != legacy_grant)
                 or key_provider is not None
                 or key_version is not None
             ):
@@ -1185,7 +2957,7 @@ class ContextEngine:
             cipher = self.cipher
         else:
             if (
-                set(grant) != keyed_grant
+                (hydrate_command_digest is None and set(grant) != keyed_grant)
                 or grant["key_ref"] != key_ref
                 or grant["key_provider"] != key_provider
                 or grant["key_version"] != key_version
@@ -1204,10 +2976,17 @@ class ContextEngine:
         snapshot = cipher.decrypt(
             pack,
             {"namespace": grant["namespace"], "domain": "checkpoint/v1"},
-            self.profile.max_checkpoint_bytes,
+            hydrate_snapshot_limit,
         )
         binding_payload = snapshot["binding"]
         binding = ContextBindingV1.model_validate(binding_payload)
+        hydrated_revision = snapshot.get("revision", 1)
+        reservation_protocol_version = snapshot.get(
+            "reservation_protocol_version", 1
+        )
+        checkpoint_durability_mode = snapshot.get(
+            "checkpoint_durability_mode", "remote_registered"
+        )
         if (
             binding.namespace.model_dump() != grant["namespace"]
             or binding.profile_digest != digest(self.profile)
@@ -1219,8 +2998,27 @@ class ContextEngine:
             or snapshot.get("key_ref") != key_ref
             or snapshot.get("key_provider") != key_provider
             or snapshot.get("key_version") != key_version
+            or type(hydrated_revision) is not int
+            or hydrated_revision < 1
+            or type(reservation_protocol_version) is not int
+            or reservation_protocol_version not in {1, 2, 3}
+            or checkpoint_durability_mode not in {"local_ephemeral", "remote_registered"}
         ):
             raise ContextFault("context_hydrate_grant_invalid")
+        if checkpoint_durability_mode != "remote_registered":
+            raise ContextFault("context_hydrate_durability_denied")
+        (
+            durability_command_digest,
+            restored_durability_receipt,
+            durability_legacy,
+            source_durability_receipt_digest,
+        ) = self._restore_checkpoint_durability_registration(
+            snapshot,
+            grant["namespace"],
+            checkpoint_durability_mode,
+            receipt_keys,
+            hydrated_revision,
+        )
         if (
             snapshot["state"] not in {"ACTIVE", "SEALING"}
             or digest(snapshot["authority"]) != binding.authorization_digest
@@ -1244,7 +3042,7 @@ class ContextEngine:
         if previous != snapshot["root"]:
             raise ContextFault("context_chain_corrupt")
         ns, cycle = grant["namespace"], binding.namespace.context_cycle_id
-        hydrate_payload = ContextHydrateReceiptV1(
+        hydrate_fields = dict(
             namespace=binding.namespace,
             context_cycle_id=cycle,
             manifest_checksum=checksum,
@@ -1256,29 +3054,124 @@ class ContextEngine:
             key_version=key_version,
             replay_digest=digest(snapshot["operations"]),
             fence=grant["fence"],
-        ).model_dump()
-        import base64
+        )
+        def hydrate_result_payload(durability_receipt: dict | None) -> dict:
+            if hydrate_command_digest is not None:
+                if expected_source_revision is None:
+                    raise ContextFault("context_hydrate_source_mismatch")
+                return ContextHydrateReceiptV2(
+                    **hydrate_fields,
+                    hydrate_command_digest=hydrate_command_digest,
+                    expected_source_revision=expected_source_revision,
+                    checkpoint_durability_registration_receipt=(
+                        SignedV1.model_validate(durability_receipt)
+                        if durability_receipt is not None
+                        else None
+                    ),
+                    checkpoint_durability_registration_receipt_digest=(
+                        digest(durability_receipt)
+                        if durability_receipt is not None
+                        else None
+                    ),
+                ).model_dump(mode="json")
+            return ContextHydrateReceiptV1(**hydrate_fields).model_dump(
+                mode="json"
+            )
+
+        hydrate_payload = hydrate_result_payload(restored_durability_receipt)
 
         with self.store.transaction() as db:
             existing = db.execute("SELECT * FROM cycles WHERE id=?", (cycle,)).fetchone()
             if existing:
-                if (
-                    existing["root"] == previous
-                    and existing["fence"] == grant["fence"]
-                    and existing["checkpoint_manifest_checksum"] == checksum
-                    and existing["checkpoint"] == claim["checkpoint_number"]
-                    and existing["cursor"] == claim["cursor"]
-                    and existing["key_ref"] == key_ref
-                    and existing["key_version"] == key_version
-                    and existing["binding_digest"] == digest(binding_payload)
-                ):
-                    return self.signer.sign(hydrate_payload)
+                try:
+                    exact_replay = self._hydrate_replay_exact(
+                        db,
+                        existing,
+                        snapshot,
+                        ns,
+                        cipher,
+                        checksum=checksum,
+                        fence=grant["fence"],
+                        binding_digest=digest(binding_payload),
+                        durability_mode=checkpoint_durability_mode,
+                        revision=hydrated_revision,
+                        reservation_protocol_version=(
+                            reservation_protocol_version
+                        ),
+                        durability_command_digest=durability_command_digest,
+                        durability_legacy=durability_legacy,
+                        source_durability_receipt_digest=(
+                            source_durability_receipt_digest
+                        ),
+                        hydrate_command_digest=hydrate_command_digest,
+                        hydrate_request_digest=hydrate_request_digest,
+                    )
+                except (ContextFault, TypeError, ValueError):
+                    exact_replay = False
+                if exact_replay:
+                    if hydrate_command_digest is not None:
+                        try:
+                            persisted_result = json.loads(existing["hydrate_receipt"])
+                            persisted_payload = verify(
+                                persisted_result,
+                                {self.signer.key_id: self.signer.key.public_key()},
+                            )
+                            persisted_claim = ContextHydrateReceiptV2.model_validate(
+                                persisted_payload
+                            )
+                        except (ContextFault, TypeError, ValueError) as exc:
+                            raise ContextFault("context_integrity_failure") from exc
+                        if (
+                            persisted_payload
+                            != persisted_claim.model_dump(mode="json")
+                            or persisted_payload
+                            != hydrate_result_payload(
+                                json.loads(
+                                    existing["checkpoint_durability_receipt"]
+                                )
+                                if not durability_legacy
+                                else None
+                            )
+                        ):
+                            raise ContextFault("context_integrity_failure")
+                        return persisted_result
+                    replay_durability_receipt = (
+                        None
+                        if durability_legacy
+                        else json.loads(existing["checkpoint_durability_receipt"])
+                    )
+                    return self.signer.sign(
+                        hydrate_result_payload(replay_durability_receipt)
+                    )
                 raise ContextFault("context_hydrate_conflict")
+            now = self.now()
+            if (
+                hydrate_command_digest is not None
+                and (
+                    type(grant.get("expires_at")) is not int
+                    or not grant["issued_at"] <= now < grant["expires_at"] <= now + 900
+                )
+            ):
+                raise ContextFault("context_capability_denied")
+            if hydrate_command_digest is not None:
+                runtime_health = self.health_v2()
+                if (
+                    not runtime_health["runtime_build_ready"]
+                    or expected_source_revision
+                    != self.build_qualification.source_revision
+                ):
+                    raise ContextFault("context_hydrate_source_mismatch")
+            hydrate_result = self.signer.sign(hydrate_payload)
             db.execute(
-                "INSERT INTO cycles(id,owner,project,request_key,request_digest,profile,state,fence,"
+                "INSERT INTO cycles(id,owner,project,request_key,request_digest,profile,state,"
+                "revision,fence,"
                 "binding,binding_digest,authority,snapshot,cursor,root,bytes,expires,checkpoint,"
-                "key_ref,key_version,retention_class,checkpoint_manifest_checksum) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "key_ref,key_version,retention_class,checkpoint_manifest_checksum,"
+                "checkpoint_durability_mode,checkpoint_durability_legacy,"
+                "checkpoint_durability_command_digest,checkpoint_durability_receipt,"
+                "hydrate_command_digest,hydrate_request_digest,hydrate_receipt,"
+                "reservation_protocol_version) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     cycle,
                     ns["owner_id"],
@@ -1287,6 +3180,7 @@ class ContextEngine:
                     snapshot["request_digest"],
                     digest(self.profile),
                     snapshot["state"],
+                    hydrated_revision,
                     grant["fence"],
                     canonical(binding_payload).decode(),
                     digest(binding_payload),
@@ -1303,6 +3197,22 @@ class ContextEngine:
                     key_version,
                     snapshot.get("retention_class", binding.retention_class),
                     checksum,
+                    checkpoint_durability_mode,
+                    durability_legacy,
+                    durability_command_digest,
+                    (
+                        canonical(restored_durability_receipt).decode()
+                        if restored_durability_receipt is not None
+                        else None
+                    ),
+                    hydrate_command_digest,
+                    hydrate_request_digest if hydrate_command_digest is not None else None,
+                    (
+                        canonical(hydrate_result).decode()
+                        if hydrate_command_digest is not None
+                        else None
+                    ),
+                    reservation_protocol_version,
                 ),
             )
             for record in records:
@@ -1353,7 +3263,132 @@ class ContextEngine:
                     ),
                 )
             self._event(db, cycle, "context.recovered", root=previous, fence=grant["fence"])
-            return self.signer.sign(hydrate_payload)
+            return hydrate_result
+
+    def _hydrate_replay_exact(
+        self,
+        db: sqlite3.Connection,
+        row: sqlite3.Row,
+        snapshot: dict,
+        namespace: dict,
+        cipher: EnvelopeCipher,
+        *,
+        checksum: str,
+        fence: int,
+        binding_digest: str,
+        durability_mode: str,
+        revision: int,
+        reservation_protocol_version: int,
+        durability_command_digest: str | None,
+        durability_legacy: int,
+        source_durability_receipt_digest: str | None,
+        hydrate_command_digest: str | None,
+        hydrate_request_digest: str,
+    ) -> bool:
+        records = snapshot["records"]
+        if (
+            row["owner"] != namespace["owner_id"]
+            or row["project"] != namespace["project_id"]
+            or row["request_key"] != snapshot["request_key"]
+            or row["request_digest"] != snapshot["request_digest"]
+            or row["profile"] != digest(self.profile)
+            or row["state"] != snapshot["state"]
+            or row["state"] not in {"ACTIVE", "SEALING"}
+            or row["revision"] != revision
+            or row["reservation_protocol_version"]
+            != reservation_protocol_version
+            or row["fence"] != fence
+            or row["binding_digest"] != binding_digest
+            or row["cursor"] != snapshot["cursor"]
+            or row["root"] != snapshot["root"]
+            or row["bytes"] != sum(len(item["text"].encode()) for item in records)
+            or row["expires"] != json.loads(row["binding"])["expires_at"]
+            or row["checkpoint"] != snapshot["checkpoint"]
+            or row["key_ref"] != snapshot.get("key_ref")
+            or row["key_version"] != snapshot.get("key_version")
+            or row["retention_class"]
+            != snapshot.get("retention_class", "ephemeral")
+            or row["checkpoint_manifest_checksum"] != checksum
+            or row["checkpoint_durability_mode"] != durability_mode
+            or row["checkpoint_durability_legacy"] != durability_legacy
+            or row["checkpoint_durability_command_digest"]
+            != durability_command_digest
+        ):
+            return False
+        if hydrate_command_digest is not None:
+            if (
+                row["hydrate_command_digest"] != hydrate_command_digest
+                or row["hydrate_request_digest"] != hydrate_request_digest
+                or row["hydrate_receipt"] is None
+            ):
+                return False
+        if durability_legacy:
+            if row["checkpoint_durability_receipt"] is not None:
+                return False
+        else:
+            try:
+                stored_envelope = json.loads(row["checkpoint_durability_receipt"])
+                stored_receipt, _ = self._validated_durability_receipt(
+                    stored_envelope,
+                    {self.signer.key_id: self.signer.key.public_key()},
+                )
+            except (ContextFault, TypeError, ValueError):
+                return False
+            if (
+                not isinstance(stored_receipt, ContextCheckpointDurabilityReceiptV2)
+                or stored_receipt.source_registration_receipt_digest
+                != source_durability_receipt_digest
+            ):
+                return False
+        if (
+            cipher.decrypt(row["authority"], namespace, self.profile.max_record_bytes)
+            != snapshot["authority"]
+            or self._snapshot(row, namespace) != snapshot["project_snapshot"]
+        ):
+            return False
+        stored_records = db.execute(
+            "SELECT * FROM segments WHERE cycle=? ORDER BY seq", (row["id"],)
+        ).fetchall()
+        if len(stored_records) != len(records):
+            return False
+        expected_postings: set[tuple[str, int]] = set()
+        for stored, expected in zip(stored_records, records):
+            readback = self._record(stored, namespace, cipher)
+            if (
+                readback["metadata"] != expected["metadata"]
+                or readback["text"] != expected["text"]
+                or stored["root"] != expected["root"]
+                or stored["superseded"] != expected["superseded"]
+                or stored["quarantined"] != expected["quarantined"]
+            ):
+                return False
+            expected_postings.update(
+                (cipher.token(namespace, word), stored["seq"])
+                for word in words(expected["text"])
+            )
+        stored_postings = {
+            (item["term"], item["seq"])
+            for item in db.execute(
+                "SELECT term,seq FROM postings WHERE cycle=?", (row["id"],)
+            )
+        }
+        if stored_postings != expected_postings:
+            return False
+        stored_operations = [
+            {
+                **dict(item),
+                "result": base64.b64encode(item["result"]).decode(),
+            }
+            for item in db.execute(
+                "SELECT * FROM operations WHERE cycle=? AND operation!='checkpoint' "
+                "ORDER BY operation,key",
+                (row["id"],),
+            )
+        ]
+        expected_operations = sorted(
+            snapshot["operations"], key=lambda item: (item["operation"], item["key"])
+        )
+        return stored_operations == expected_operations
 
     def _promotion_entry(self, row, namespace: dict, cipher: EnvelopeCipher) -> dict | None:
         metadata = self._record(row, namespace, cipher)["metadata"]
@@ -1537,15 +3572,24 @@ class ContextEngine:
                 or row["revision"] != command["expected_revision"]
             ):
                 raise ContextFault("context_stale_state")
+            if (
+                row["binding"] is None
+                or row["binding_digest"] is None
+                or row["state"] == "RESERVED"
+            ):
+                raise ContextFault("context_transition_denied")
             transitions = {
                 "degrade": ({"ACTIVE"}, "DEGRADED"),
                 "recover": ({"DEGRADED"}, "ACTIVE"),
-                "abort": ({"RESERVED", "BOUND", "ACTIVE", "DEGRADED"}, "ABORTED"),
+                "abort": ({"BOUND", "ACTIVE", "DEGRADED"}, "ABORTED"),
                 "quarantine": ({"ACTIVE", "DEGRADED", "SEALING"}, "QUARANTINED"),
             }
             op = command["operation"]
             if op == "fence":
-                if command["fence"] <= row["fence"] or row["state"] in TERMINAL:
+                if (
+                    command["fence"] <= row["fence"]
+                    or row["state"] not in {"BOUND", "ACTIVE", "DEGRADED", "SEALING"}
+                ):
                     raise ContextFault("context_stale_fence")
                 db.execute(
                     "UPDATE cycles SET fence=?,revision=revision+1 WHERE id=?",
@@ -1576,7 +3620,8 @@ class ContextEngine:
     def status(self, capability: dict, after: int = 0) -> dict:
         if type(after) is not int or after < 0:
             raise ContextFault("context_stale_cursor")
-        reach_claim_enabled = self.health()["reach_claim_enabled"]
+        self._space()
+        reach_claim_enabled = self._hot_reach_claim_enabled
         with self.store.connection() as db:
             _, row = self._authorize(db, capability, "status")
             events = [

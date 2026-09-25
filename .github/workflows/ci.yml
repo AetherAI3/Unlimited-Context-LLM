@@ -8,6 +8,9 @@ on:
 permissions:
   contents: read
 
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+
 jobs:
   test:
     name: test (py${{ matrix.python-version }} · ${{ matrix.os }})
@@ -54,6 +57,20 @@ jobs:
         run: |
           npm pack --silent
           tar -tzf aether-context-*.tgz
+
+  live-context-ipc:
+    name: live context IPC memory gate
+    runs-on: ubuntu-latest
+    env:
+      AETHER_LIVE_IPC_SCALE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install -e ".[dev]"
+      - run: python -m pytest -q tests/test_retention_scale.py::test_live_unix_ipc_near_cap_memory_and_concurrency_gate
 
   numpy-matrix:
     name: numpy ${{ matrix.numpy }}

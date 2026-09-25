@@ -11,6 +11,7 @@ from aether_context.contracts import (
     AppendRequestV1,
     CapabilityV1,
     ContextBindingV1,
+    ContextCheckpointDurabilityCommandV1,
     ContextProfileV1,
     NamespaceV1,
     RetrieveRequestV1,
@@ -36,6 +37,7 @@ def hosted(tmp_path):
         index_version=sqlite3.sqlite_version,
         max_capsule_tokens=12000,
         max_records=1000,
+        max_checkpoint_bytes=16_000_000,
         disk_free_floor=0,
     )
     cipher = EnvelopeCipher(os.urandom(32))
@@ -104,6 +106,22 @@ def hosted(tmp_path):
             expires_at=500000,
         )
         engine.bind(authority.sign(binding.model_dump()), p0, p1)
+        with engine.store.connection() as db:
+            revision = db.execute(
+                "SELECT revision FROM cycles WHERE id=?", (cycle,)
+            ).fetchone()[0]
+        engine.register_checkpoint_durability(
+            authority.sign(
+                ContextCheckpointDurabilityCommandV1(
+                    namespace=ns,
+                    idempotency_key="durability-" + key,
+                    expected_revision=revision,
+                    mode="remote_registered",
+                    issued_at=clock[0],
+                    expires_at=clock[0] + 100,
+                ).model_dump(mode="json")
+            )
+        )
         return binding
 
     binding = bind()
@@ -231,7 +249,7 @@ def test_encryption_checkpoint_restart_and_host_hydration(hosted, tmp_path):
             "namespace": binding.namespace.model_dump(),
             "manifest_checksum": checkpoint["receipt"]["payload"]["manifest_checksum"],
             "fence": 2,
-            "expires_at": 2000,
+            "expires_at": 1900,
         }
     )
     keys = {engine.signer.key_id: engine.signer.key.public_key()}
@@ -241,6 +259,26 @@ def test_encryption_checkpoint_restart_and_host_hydration(hosted, tmp_path):
         recall(replacement, cap(), "stale")
     with pytest.raises(ContextFault, match="integrity_failure"):
         replacement.hydrate(grant, checkpoint["receipt"], pack[:-1] + bytes([pack[-1] ^ 1]), keys)
+    far_future_grant = authority.sign(
+        {**grant["payload"], "expires_at": 999999999999}
+    )
+    with pytest.raises(ContextFault, match="capability_denied"):
+        replacement.hydrate(far_future_grant, checkpoint["receipt"], pack, keys)
+    restored = replacement.status(cap(fence=2))["payload"]
+    replacement.control(
+        authority.sign(
+            {
+                "operation": "abort",
+                "context_cycle_id": binding.namespace.context_cycle_id,
+                "binding_digest": digest(binding),
+                "expected_revision": restored["revision"],
+                "fence": restored["fence"],
+                "expires_at": 1100,
+            }
+        )
+    )
+    with pytest.raises(ContextFault, match="hydrate_conflict"):
+        replacement.hydrate(grant, checkpoint["receipt"], pack, keys)
 
 
 def test_concurrent_writers_are_serialized(hosted):
@@ -407,7 +445,7 @@ def test_hydration_during_seal_never_reopens_worker_writes(hosted, tmp_path):
             "namespace": binding.namespace.model_dump(),
             "manifest_checksum": checkpoint["receipt"]["payload"]["manifest_checksum"],
             "fence": 2,
-            "expires_at": 2000,
+            "expires_at": 1900,
         }
     )
     replacement.hydrate(

@@ -11,6 +11,7 @@ RuntimeDirectoryMode=0750
 StateDirectory=aether-context
 StateDirectoryMode=0700
 UMask=0077
+Environment=PYTHONDONTWRITEBYTECODE=1
 LoadCredential=context-dek:/etc/aether/context/credentials/context-dek
 LoadCredential=context-cycle-wrapper-key:/etc/aether/context/credentials/context-cycle-wrapper-key
 LoadCredential=context-signing-key:/etc/aether/context/credentials/context-signing-key
@@ -24,7 +25,7 @@ LoadCredential=context-data-plane-isolation-keys.json:/etc/aether/context/creden
 LoadCredential=context-benchmark-receipt.json:/etc/aether/context/credentials/context-benchmark-receipt.json
 LoadCredential=context-runtime-build-keys.json:/etc/aether/context/credentials/context-runtime-build-keys.json
 LoadCredential=context-runtime-build-manifest.json:/etc/aether/context/credentials/context-runtime-build-manifest.json
-ExecStart=/opt/aether-context/venv/bin/aether-contextd --socket /run/aether-context/context.sock --database /var/lib/aether-context/context.sqlite3 --profile /etc/aether/context/profile.json --credentials ${CREDENTIALS_DIRECTORY} --cycle-key-directory /var/lib/aether-context/cycle-keys --benchmark-receipt ${CREDENTIALS_DIRECTORY}/context-benchmark-receipt.json --runtime-build-manifest ${CREDENTIALS_DIRECTORY}/context-runtime-build-manifest.json
+ExecStart=/opt/aether-context/venv/bin/python -I -S -B /opt/aether-context/venv/lib/python3.12/site-packages/aether_context/guard.py --socket /run/aether-context/context.sock --database /var/lib/aether-context/context.sqlite3 --profile /etc/aether/context/profile.json --credentials ${CREDENTIALS_DIRECTORY} --cycle-key-directory /var/lib/aether-context/cycle-keys --benchmark-receipt ${CREDENTIALS_DIRECTORY}/context-benchmark-receipt.json --runtime-build-manifest ${CREDENTIALS_DIRECTORY}/context-runtime-build-manifest.json
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=yes

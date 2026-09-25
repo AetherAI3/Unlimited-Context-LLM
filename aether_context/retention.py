@@ -15,6 +15,9 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .contracts import (
+    ContextDeletionReceiptV1,
+    ContextDeletionReceiptV2,
+    ContextRetentionReceiptV1,
     KeyDestructionReceiptV1,
     RemoteDeletionReceiptV1,
     RetentionCommandV1,
@@ -225,6 +228,202 @@ class RetentionManager:
                 )
             ]
 
+    def _deletion_replay(
+        self,
+        db,
+        row,
+        command: RetentionCommandV1,
+        request_digest: str,
+        stored_result: str,
+    ) -> dict:
+        try:
+            envelope = json.loads(stored_result)
+            payload = verify(
+                envelope,
+                {self.engine.signer.key_id: self.engine.signer.key.public_key()},
+            )
+            if payload.get("schema_version") == "ContextDeletionReceiptV2":
+                receipt: ContextDeletionReceiptV1 | ContextDeletionReceiptV2 = (
+                    ContextDeletionReceiptV2.model_validate(payload)
+                )
+            else:
+                receipt = ContextDeletionReceiptV1.model_validate(payload)
+        except (ContextFault, TypeError, ValueError) as exc:
+            raise ContextFault("context_integrity_failure") from exc
+        operation = db.execute(
+            "SELECT request_digest,result FROM retention_operations "
+            "WHERE cycle=? AND operation='expire' AND key=?",
+            (row["id"], command.idempotency_key),
+        ).fetchone()
+        if (
+            payload != receipt.model_dump(mode="json")
+            or row["state"] != "EXPIRED"
+            or row["cleanup_state"] != "COMPLETE"
+            or row["cleanup_operation_key"] != command.idempotency_key
+            or row["cleanup_request_digest"] != request_digest
+            or row["deletion_receipt"] != canonical(envelope).decode()
+            or receipt.context_cycle_id != row["id"]
+            or receipt.segment_chain_root != row["root"]
+            or receipt.context_seal_digest != row["seal_digest"]
+            or receipt.retention_class != row["retention_class"]
+            or receipt.retention_expired_at != row["expires"]
+            or receipt.retention_operation_key != command.idempotency_key
+            or receipt.retention_request_digest != request_digest
+            or operation is None
+            or operation["request_digest"] != request_digest
+            or operation["result"] != canonical(envelope).decode()
+        ):
+            raise ContextFault("context_integrity_failure")
+        remote_envelope = (
+            json.loads(row["cleanup_remote_receipt"])
+            if row["cleanup_remote_receipt"] is not None
+            else None
+        )
+        if receipt.remote_deletion_receipt_digest != (
+            digest(remote_envelope) if remote_envelope is not None else None
+        ):
+            raise ContextFault("context_integrity_failure")
+        try:
+            namespace = json.loads(row["binding"])["namespace"]
+        except (TypeError, ValueError, KeyError) as exc:
+            raise ContextFault("context_integrity_failure") from exc
+        if remote_envelope is not None:
+            try:
+                self._verify_remote_deletion(
+                    remote_envelope,
+                    row,
+                    namespace,
+                    row["checkpoint_object_ref_digest"],
+                    now=self.engine.now(),
+                    require_fresh=False,
+                )
+            except ContextFault as exc:
+                raise ContextFault("context_integrity_failure") from exc
+        if receipt.key_destruction_receipt is not None:
+            try:
+                self._verify_key_destruction(
+                    receipt.key_destruction_receipt.model_dump(mode="json"),
+                    row["key_ref"],
+                    row["key_version"],
+                    namespace,
+                    self.engine.now(),
+                    command_issued_at=command.issued_at,
+                    require_fresh=False,
+                )
+            except ContextFault as exc:
+                raise ContextFault("context_integrity_failure") from exc
+            # The service-signed terminal receipt records the provider
+            # qualification used at the effect, while the embedded KMS receipt
+            # remains independently verifiable. Exact lost-ACK replay must not
+            # depend on a short-lived provider qualification that is correctly
+            # retired after its last non-expired cycle is deleted.
+        elif receipt.local_key_destruction is not None:
+            local = (
+                receipt.local_key_destruction.model_dump(mode="json")
+                if hasattr(receipt.local_key_destruction, "model_dump")
+                else receipt.local_key_destruction
+            )
+            if (
+                set(local)
+                != {
+                    "schema_version",
+                    "provider",
+                    "key_ref",
+                    "key_version",
+                    "namespace_digest",
+                    "wrapped_key_digest",
+                    "destroyed_at",
+                    "verified",
+                }
+                or local["schema_version"] != "ContextLocalKeyDestructionV1"
+                or local["provider"] != FileCycleKeyProvider.provider
+                or local["key_ref"] != row["key_ref"]
+                or local["key_version"] != row["key_version"]
+                or local["namespace_digest"] != digest(namespace)
+                or local["verified"] is not True
+            ):
+                raise ContextFault("context_integrity_failure")
+        if isinstance(receipt, ContextDeletionReceiptV2):
+            registration_digest = (
+                digest(json.loads(row["checkpoint_durability_receipt"]))
+                if row["checkpoint_durability_receipt"] is not None
+                else None
+            )
+            if (
+                row["checkpoint_durability_legacy"]
+                or receipt.checkpoint_durability_mode
+                != row["checkpoint_durability_mode"]
+                or receipt.checkpoint_durability_registration_receipt_digest
+                != registration_digest
+                or receipt.checkpoint_manifest_checksum
+                != row["checkpoint_manifest_checksum"]
+                or receipt.checkpoint_object_ref_digest
+                != row["checkpoint_object_ref_digest"]
+            ):
+                raise ContextFault("context_integrity_failure")
+        elif not row["checkpoint_durability_legacy"]:
+            raise ContextFault("context_integrity_failure")
+        return envelope
+
+    def _hold_replay(
+        self,
+        db,
+        row,
+        command: RetentionCommandV1,
+        request_digest: str,
+        stored_result: str,
+    ) -> dict:
+        try:
+            envelope = json.loads(stored_result)
+            payload = verify(
+                envelope,
+                {self.engine.signer.key_id: self.engine.signer.key.public_key()},
+            )
+            receipt = ContextRetentionReceiptV1.model_validate(payload)
+        except (ContextFault, TypeError, ValueError) as exc:
+            raise ContextFault("context_integrity_failure") from exc
+        operation = db.execute(
+            "SELECT request_digest,result FROM retention_operations "
+            "WHERE cycle=? AND operation=? AND key=?",
+            (row["id"], command.operation, command.idempotency_key),
+        ).fetchone()
+        event_type = (
+            "context.retention_held"
+            if command.operation == "hold"
+            else "context.retention_released"
+        )
+        historical_event = False
+        for event_row in db.execute(
+            "SELECT body FROM events WHERE cycle=?", (row["id"],)
+        ):
+            try:
+                event = json.loads(event_row["body"])
+            except (TypeError, ValueError):
+                continue
+            if (
+                event.get("type") == event_type
+                and event.get("context_cycle_id") == row["id"]
+                and event.get("state_revision") == receipt.revision
+                and event.get("reason") == receipt.reason_code
+                and event.get("timestamp") == receipt.effective_at
+            ):
+                historical_event = True
+                break
+        if (
+            payload != receipt.model_dump(mode="json")
+            or receipt.operation != command.operation
+            or receipt.context_cycle_id != row["id"]
+            or receipt.reason_code != command.reason_code
+            or not command.issued_at <= receipt.effective_at < command.expires_at
+            or receipt.revision != command.expected_revision + 1
+            or operation is None
+            or operation["request_digest"] != request_digest
+            or operation["result"] != canonical(envelope).decode()
+            or not historical_event
+        ):
+            raise ContextFault("context_integrity_failure")
+        return envelope
+
     def apply(self, capability: dict, signed_command: dict) -> dict:
         raw = verify(signed_command, self.engine.authority_keys)
         command = RetentionCommandV1.model_validate(raw)
@@ -244,7 +443,13 @@ class RetentionManager:
                 if replay["request_digest"] != request_digest:
                     raise ContextFault("context_idempotency_conflict")
                 if replay["result"] is not None:
-                    return json.loads(replay["result"])
+                    if command.operation == "expire":
+                        return self._deletion_replay(
+                            db, row, command, request_digest, replay["result"]
+                        )
+                    return self._hold_replay(
+                        db, row, command, request_digest, replay["result"]
+                    )
             else:
                 if not command.issued_at <= now < command.expires_at:
                     raise ContextFault("context_retention_authority_expired")
@@ -365,9 +570,29 @@ class RetentionManager:
             root = row["root"]
             seal_digest = row["seal_digest"]
             retention_class = row["retention_class"]
+            checkpoint_durability_mode = row["checkpoint_durability_mode"]
+            if checkpoint_durability_mode == "unregistered":
+                if (
+                    row["checkpoint"] != 0
+                    or row["checkpoint_manifest_checksum"] is not None
+                    or row["checkpoint_durability_command_digest"] is not None
+                    or row["checkpoint_durability_receipt"] is not None
+                ):
+                    raise ContextFault("context_integrity_failure")
+            elif checkpoint_durability_mode in {
+                "local_ephemeral",
+                "remote_registered",
+            }:
+                self.engine._verify_checkpoint_durability_registration(row)
+            else:
+                raise ContextFault("context_integrity_failure")
+            remote_checkpoint_registered = (
+                row["checkpoint_manifest_checksum"] is not None
+                and checkpoint_durability_mode == "remote_registered"
+            )
             object_ref_digest = command.checkpoint_object_ref_digest
             if row["cleanup_state"] == "NONE":
-                if row["checkpoint_manifest_checksum"] is not None:
+                if remote_checkpoint_registered:
                     if (
                         command.remote_deletion_receipt is None
                         or object_ref_digest is None
@@ -411,7 +636,7 @@ class RetentionManager:
                     db, row["id"], "context.cleanup_started", reason=command.reason_code
                 )
             else:
-                if row["checkpoint_manifest_checksum"] is not None:
+                if remote_checkpoint_registered:
                     try:
                         remote_envelope = json.loads(row["cleanup_remote_receipt"])
                     except (TypeError, ValueError) as exc:
@@ -483,6 +708,7 @@ class RetentionManager:
                     key_destruction_proof
                     and (
                         row["checkpoint_manifest_checksum"] is None
+                        or checkpoint_durability_mode == "local_ephemeral"
                         or remote_proof is not None
                     )
                 )
@@ -499,7 +725,9 @@ class RetentionManager:
             if replay is None or replay["request_digest"] != request_digest:
                 raise ContextFault("context_idempotency_conflict")
             if replay["result"] is not None:
-                return json.loads(replay["result"])
+                return self._deletion_replay(
+                    db, row, command, request_digest, replay["result"]
+                )
             if row["state"] not in {"SEALED", "ABORTED"} or row[
                 "cleanup_state"
             ] != "PENDING":
@@ -507,13 +735,13 @@ class RetentionManager:
             if (
                 row["cleanup_operation_key"] != command.idempotency_key
                 or row["cleanup_request_digest"] != request_digest
+                or row["checkpoint_durability_mode"] != checkpoint_durability_mode
             ):
                 raise ContextFault("context_cleanup_in_progress")
             db.execute("DELETE FROM postings WHERE cycle=?", (row["id"],))
             db.execute("DELETE FROM segments WHERE cycle=?", (row["id"],))
             db.execute("DELETE FROM operations WHERE cycle=?", (row["id"],))
-            receipt = self.engine.signer.sign(
-                {
+            deletion_payload = {
                     "schema_version": "ContextDeletionReceiptV1",
                     "context_cycle_id": row["id"],
                     "segment_chain_root": root,
@@ -548,7 +776,24 @@ class RetentionManager:
                         remote_proof.object_ref_digest if remote_proof is not None else None
                     ),
                 }
-            )
+            if not row["checkpoint_durability_legacy"]:
+                registration_receipt_digest = (
+                    digest(json.loads(row["checkpoint_durability_receipt"]))
+                    if row["checkpoint_durability_receipt"] is not None
+                    else None
+                )
+                deletion_payload.update(
+                    schema_version="ContextDeletionReceiptV2",
+                    checkpoint_manifest_checksum=row["checkpoint_manifest_checksum"],
+                    checkpoint_durability_mode=checkpoint_durability_mode,
+                    checkpoint_durability_registration_receipt_digest=(
+                        registration_receipt_digest
+                    ),
+                )
+                deletion_payload = ContextDeletionReceiptV2.model_validate(
+                    deletion_payload
+                ).model_dump(mode="json")
+            receipt = self.engine.signer.sign(deletion_payload)
             db.execute(
                 "UPDATE cycles SET state='EXPIRED',authority=NULL,snapshot=NULL,"
                 "cleanup_state='COMPLETE',deletion_receipt=?,revision=revision+1 WHERE id=?",
@@ -586,6 +831,7 @@ class RetentionManager:
             raise ContextFault("context_remote_deletion_proof_invalid") from exc
         if (
             proof.namespace.model_dump() != namespace
+            or row["checkpoint_durability_mode"] != "remote_registered"
             or row["checkpoint_manifest_checksum"] is None
             or proof.manifest_checksum != row["checkpoint_manifest_checksum"]
             or proof.object_ref_digest != object_ref_digest
