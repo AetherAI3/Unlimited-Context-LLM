@@ -6,6 +6,10 @@ All notable changes to `aether-context` are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+- LM Studio backend: `lmstudio/<model-id>` talks to the local OpenAI-compatible server at
+  `http://localhost:1234/v1` with no required API key (#61).
+
 ### Fixed
 - `run` now stores each non-empty user task and retrieves prior user/tool memory before model
   generation across CLI invocations using one pool directory, including the default pool mode

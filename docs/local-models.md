@@ -29,6 +29,7 @@ One string. The part before the slash/colon is the backend; the rest is the mode
 | `"ollama/qwen2.5"` | Ollama | recommended; talks to `localhost:11434` |
 | `"qwen2.5"` | Ollama | bare name → assumed Ollama |
 | `"ollama/llama3.1:8b"` | Ollama | tags work too |
+| `"lmstudio/qwen2.5-7b-instruct"` | LM Studio | local server at `localhost:1234`; no API key by default |
 | `"llamacpp:/models/qwen2.5-7b.gguf"` | llama.cpp | needs `pip install "aether-context[llamacpp]"` |
 | `"hf/Qwen/Qwen2.5-7B-Instruct"` | HF transformers | needs `pip install "aether-context[hf]"` |
 | `"mock"` | built-in | deterministic, offline, zero deps |
@@ -55,6 +56,20 @@ s = Session(model="ollama/llama3.1:8b", pool_gb=10)        # bigger pool = more 
 for chunk in s.stream("Walk the codebase and write a design doc."):
     print(chunk, end="", flush=True)
 ```
+
+### LM Studio — OpenAI-compatible local server
+
+LM Studio's local server speaks `/v1/chat/completions`. No extra Python dependency — start the
+server in LM Studio (**Developer → Local Server**, default port 1234) and load a model.
+
+```python
+s = Session(model="lmstudio/qwen2.5-7b-instruct", pool_gb=5)
+print(s.run("Summarize this repo, then refactor the auth module.").text)
+```
+
+No API key is required by default. If you turned on authentication in LM Studio, pass it
+explicitly: `Session(model="lmstudio/qwen2.5-7b-instruct", api_key="...", pool_gb=5)`. A custom
+listen address uses `base_url="http://127.0.0.1:1234/v1"`.
 
 ### llama.cpp — bring a `.gguf`
 

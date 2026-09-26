@@ -29,7 +29,7 @@ import os
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
-from typing import Iterator, Optional, Protocol, runtime_checkable
+from typing import Iterator, NoReturn, Optional, Protocol, runtime_checkable
 
 from aether_context._log import get_logger
 from aether_context.errors import (
@@ -46,8 +46,10 @@ _log = get_logger(__name__)
 DEFAULT_CONTEXT_WINDOW = 8192
 #: Default Ollama daemon host.
 DEFAULT_OLLAMA_HOST = "http://localhost:11434"
+#: Default LM Studio OpenAI-compatible local server (includes ``/v1``).
+DEFAULT_LMSTUDIO_BASE = "http://localhost:1234/v1"
 #: Recognised backends in a spec string.
-_BACKENDS = ("ollama", "llamacpp", "hf", "mock", "openai")
+_BACKENDS = ("ollama", "llamacpp", "hf", "mock", "openai", "lmstudio")
 #: HTTP timeout (seconds) for Ollama requests. Generation can be slow → generous.
 _OLLAMA_TIMEOUT = 600
 #: Best-effort metadata probe timeout (seconds) — short; failure is non-fatal.
@@ -102,7 +104,7 @@ class ModelSpec:
 
 _SPEC_HINT = (
     "Use one of: 'ollama/qwen2.5' (or a bare name -> ollama), "
-    "'llamacpp:/path/to/model.gguf', 'hf/org/model', or 'mock'."
+    "'lmstudio/<model-id>', 'llamacpp:/path/to/model.gguf', 'hf/org/model', or 'mock'."
 )
 
 
@@ -113,6 +115,7 @@ def parse_spec(spec: str) -> ModelSpec:
 
         ollama/<name>            -> Ollama (tags ok: ollama/llama3.1:8b)
         <name>                   -> bare name assumed Ollama
+        lmstudio/<model-id>      -> LM Studio local server (ids may contain '/')
         llamacpp:<path>          -> llama.cpp over a .gguf (first ':' splits; drive ':' kept)
         hf/<org>/<model>         -> HF transformers
         mock                     -> built-in deterministic model
@@ -156,6 +159,8 @@ def parse_spec(spec: str) -> ModelSpec:
             return ModelSpec(backend="hf", ref=ref)
         if head == "openai":
             return ModelSpec(backend="openai", ref=ref)
+        if head == "lmstudio":
+            return ModelSpec(backend="lmstudio", ref=ref)
         if head in _BACKENDS:
             return ModelSpec(backend=head, ref=ref)
         raise BackendUnavailable(
@@ -204,6 +209,8 @@ def load_model(spec: "str | LocalLLM", **kw: object) -> LocalLLM:
         return HFLLM(parsed.ref, **kw)  # type: ignore[arg-type]
     if backend == "openai":
         return OpenAICompatLLM(parsed.ref, **kw)  # type: ignore[arg-type]
+    if backend == "lmstudio":
+        return LMStudioLLM(parsed.ref, **kw)  # type: ignore[arg-type]
     raise BackendUnavailable(
         f"Unknown backend '{backend}'.", hint=_SPEC_HINT
     )
@@ -534,16 +541,34 @@ class OpenAICompatLLM:
     def _open(self, req: "urllib.request.Request"):
         return urllib.request.urlopen(req, timeout=_OPENAI_TIMEOUT)
 
+    def _request_headers(self, *, stream: bool) -> dict[str, str]:
+        """Build request headers. Authorization is omitted when ``api_key`` is empty."""
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream" if stream else "application/json",
+        }
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        return headers
+
+    def _raise_http_error(self, exc: urllib.error.HTTPError, detail: str) -> NoReturn:
+        raise BackendUnavailable(
+            f"OpenAI-compatible API HTTP {exc.code} from {self.base_url}.",
+            hint=f"Check model/key/credits. Detail: {detail}",
+        ) from exc
+
+    def _raise_connect_error(self, exc: BaseException) -> NoReturn:
+        raise BackendUnavailable(
+            f"Could not reach the API at {self.base_url}: {exc}",
+            hint="Check the base_url and your network.",
+        ) from exc
+
     def _request(self, payload: dict, *, stream: bool):
         body = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(
             f"{self.base_url}/chat/completions",
             data=body,
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.api_key}",
-                "Accept": "text/event-stream" if stream else "application/json",
-            },
+            headers=self._request_headers(stream=stream),
             method="POST",
         )
         try:
@@ -554,15 +579,9 @@ class OpenAICompatLLM:
                 detail = exc.read().decode("utf-8", errors="replace")[:300]
             except OSError:
                 detail = ""
-            raise BackendUnavailable(
-                f"OpenAI-compatible API HTTP {exc.code} from {self.base_url}.",
-                hint=f"Check model/key/credits. Detail: {detail}",
-            ) from exc
+            self._raise_http_error(exc, detail)
         except (urllib.error.URLError, OSError) as exc:
-            raise BackendUnavailable(
-                f"Could not reach the API at {self.base_url}: {exc}",
-                hint="Check the base_url and your network.",
-            ) from exc
+            self._raise_connect_error(exc)
 
     # -- streaming generate (LocalLLM protocol) ------------------------------
     def generate(
@@ -628,6 +647,52 @@ class OpenAICompatLLM:
     def count_tokens(self, text: str) -> int:
         """Estimate token count (chars/4) — these APIs expose no count endpoint."""
         return estimate(text)
+
+
+# ---------------------------------------------------------------------------
+# LMStudioLLM — local OpenAI-compatible server, no required API key.
+# ---------------------------------------------------------------------------
+class LMStudioLLM(OpenAICompatLLM):
+    """LM Studio adapter over the local OpenAI-compatible server.
+
+    Defaults to ``http://localhost:1234/v1``. No API key is required unless the user
+    enabled authentication in LM Studio and passes ``api_key=``. Streaming, ``stop``,
+    ``max_tokens``, and token counting reuse :class:`OpenAICompatLLM` (same SSE parser).
+    Remote OpenAI / OpenRouter env vars are intentionally ignored.
+    """
+
+    def __init__(
+        self,
+        ref: str,
+        *,
+        base_url: Optional[str] = None,
+        api_key: Optional[str] = None,
+        context_window: Optional[int] = None,
+        model_options: Optional[dict] = None,
+    ) -> None:
+        self.name: str = ref
+        self.base_url: str = (base_url or DEFAULT_LMSTUDIO_BASE).rstrip("/")
+        self.api_key: str = api_key or ""
+        self._context_window: int = context_window or DEFAULT_CONTEXT_WINDOW
+        self._model_options: dict = dict(model_options or {})
+
+    def _raise_http_error(self, exc: urllib.error.HTTPError, detail: str) -> NoReturn:
+        raise BackendUnavailable(
+            f"LM Studio returned HTTP {exc.code} for model '{self.name}' at {self.base_url}.",
+            hint=(
+                f"Load '{self.name}' in LM Studio (Developer → Local Server) and confirm "
+                f"the model id matches the spec. Detail: {detail}"
+            ),
+        ) from exc
+
+    def _raise_connect_error(self, exc: BaseException) -> NoReturn:
+        raise BackendUnavailable(
+            f"Could not reach LM Studio at {self.base_url}: {exc}",
+            hint=(
+                "Start LM Studio and enable the local server "
+                "(Developer → Local Server, default port 1234)."
+            ),
+        ) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -839,8 +904,10 @@ __all__ = [
     "MockLLM",
     "OllamaLLM",
     "OpenAICompatLLM",
+    "LMStudioLLM",
     "LlamaCppLLM",
     "HFLLM",
     "DEFAULT_CONTEXT_WINDOW",
     "DEFAULT_OLLAMA_HOST",
+    "DEFAULT_LMSTUDIO_BASE",
 ]
