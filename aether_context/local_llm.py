@@ -677,12 +677,19 @@ class LMStudioLLM(OpenAICompatLLM):
         self._model_options: dict = dict(model_options or {})
 
     def _raise_http_error(self, exc: urllib.error.HTTPError, detail: str) -> NoReturn:
-        raise BackendUnavailable(
-            f"LM Studio returned HTTP {exc.code} for model '{self.name}' at {self.base_url}.",
-            hint=(
+        if exc.code == 401:
+            hint = (
+                "LM Studio requires authentication. Pass a valid API token with "
+                f"api_key=... (Developer → Server Settings). Detail: {detail}"
+            )
+        else:
+            hint = (
                 f"Load '{self.name}' in LM Studio (Developer → Local Server) and confirm "
                 f"the model id matches the spec. Detail: {detail}"
-            ),
+            )
+        raise BackendUnavailable(
+            f"LM Studio returned HTTP {exc.code} for model '{self.name}' at {self.base_url}.",
+            hint=hint,
         ) from exc
 
     def _raise_connect_error(self, exc: BaseException) -> NoReturn:

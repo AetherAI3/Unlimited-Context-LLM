@@ -165,6 +165,22 @@ def test_model_http_error_is_actionable(monkeypatch):
     assert "lm studio" in ei.value.hint.lower()
 
 
+def test_auth_http_error_suggests_api_key(monkeypatch):
+    err = urllib.error.HTTPError(
+        url="http://localhost:1234/v1/chat/completions",
+        code=401,
+        msg="Unauthorized",
+        hdrs=None,  # type: ignore[arg-type]
+        fp=io.BytesIO(b'{"error":"Unauthorized"}'),
+    )
+    llm = LMStudioLLM("qwen")
+    monkeypatch.setattr(llm, "_open", lambda req: (_ for _ in ()).throw(err))
+    with pytest.raises(BackendUnavailable) as ei:
+        list(llm.generate("hi"))
+    assert "api_key" in ei.value.hint
+    assert "token" in ei.value.hint.lower()
+
+
 def test_openai_still_requires_api_key(monkeypatch):
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
