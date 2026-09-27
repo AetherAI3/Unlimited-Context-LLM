@@ -6,11 +6,14 @@ All notable changes to `aether-context` are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-09-27
+
 ### Added
 - LM Studio backend: `lmstudio/<model-id>` talks to the local OpenAI-compatible server at
   `http://localhost:1234/v1` with no required API key (#61).
 
 ### Fixed
+- LM Studio authentication errors now point users to the `api_key` setting.
 - `run` now stores each non-empty user task and retrieves prior user/tool memory before model
   generation across CLI invocations using one pool directory, including the default pool mode
   (#74). Model-authored spill requires `--include-model-memory` to enter the prompt. Retrieval
@@ -183,7 +186,8 @@ pool — local-first, numpy-only core.
   completion), hermetic via `MockLLM`.
 - Docs (`how-it-works`, `local-models`), examples, CI, Apache-2.0 license.
 
-[Unreleased]: https://github.com/AetherAI3/Unlimited-Context-LLM/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/AetherAI3/Unlimited-Context-LLM/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/AetherAI3/Unlimited-Context-LLM/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/AetherAI3/Unlimited-Context-LLM/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/AetherAI3/Unlimited-Context-LLM/releases/tag/v0.3.1
 [0.3.0]: https://github.com/AetherAI3/Unlimited-Context-LLM/releases/tag/v0.3.0
