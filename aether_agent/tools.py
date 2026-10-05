@@ -247,8 +247,8 @@ class Tools:
             next_cursor = base64.urlsafe_b64encode(payload.encode()).decode().rstrip("=")
         return json.dumps({"path": path, "entries": page, "next_cursor": next_cursor}, ensure_ascii=False)
 
-    def patch_file(self, path: str, expected_sha256: str, old_text: str, new_text: str,
-                   start_line: int | None = None) -> str:
+    def _patch_proposal(self, path: str, expected_sha256: str, old_text: str, new_text: str,
+                        start_line: int | None = None) -> tuple[str, os.stat_result, bytes, str, int, bytes]:
         ap = self._safe(path)
         if os.path.islink(ap) or not os.path.isfile(ap):
             raise ValueError("patch target must be a regular file")
@@ -282,6 +282,26 @@ class Tools:
             if start_line is not None and original[:position].count("\n") + 1 != start_line:
                 raise ValueError("hunk does not match start_line")
         replacement = (original[:position] + new_text + original[position + len(old_text):]).encode("utf-8")
+        return ap, original_stat, original_bytes, original, position, replacement
+
+    def preview_patch(self, path: str, expected_sha256: str, old_text: str, new_text: str,
+                      start_line: int | None = None) -> str:
+        _, _, _, original, position, _ = self._patch_proposal(
+            path, expected_sha256, old_text, new_text, start_line
+        )
+        before = original[:position]
+        line = before.count("\n") + 1
+        column = len(before.rsplit("\n", 1)[-1]) + 1
+        quoted = json.dumps(path, ensure_ascii=False)
+        return (f"--- {quoted}\n+++ {quoted}\n@@ line {line}, column {column} @@\n"
+                f"- {json.dumps(old_text, ensure_ascii=False)}\n"
+                f"+ {json.dumps(new_text, ensure_ascii=False)}")
+
+    def patch_file(self, path: str, expected_sha256: str, old_text: str, new_text: str,
+                   start_line: int | None = None) -> str:
+        ap, original_stat, original_bytes, _, _, replacement = self._patch_proposal(
+            path, expected_sha256, old_text, new_text, start_line
+        )
         staged = None
         try:
             with tempfile.NamedTemporaryFile(dir=os.path.dirname(ap), prefix=".aether-patch-", suffix=".tmp", delete=False) as handle:

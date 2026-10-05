@@ -33,6 +33,8 @@ def test_ranged_read_and_targeted_patch_conflict(tmp_path):
     assert read["content"] == "second"
     patch = {"path": "file.txt", "expected_sha256": read["sha256"],
              "old_text": "second", "new_text": "SECOND"}
+    assert '- "second"\n+ "SECOND"' in tools.preview_patch(**patch)
+    assert target.read_text(encoding="utf-8") == "first\nsecond\n"
     assert "patched" in tools.execute("patch_file", patch)
     assert target.read_text(encoding="utf-8") == "first\nSECOND\n"
     assert "conflict" in tools.execute("patch_file", patch)
