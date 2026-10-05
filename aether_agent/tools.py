@@ -99,7 +99,8 @@ class Tools:
                 hasher = hashlib.sha256()
                 utf8 = codecs.getincrementaldecoder("utf-8")("strict")
                 while block := handle.read(64 * 1024):
-                    if b"\0" in block:
+                    if any(byte == 0 or (byte < 32 and byte not in (9, 10, 13)) or byte == 127
+                           for byte in block):
                         return f"[binary file: {path}]"
                     try:
                         utf8.decode(block)
@@ -147,7 +148,7 @@ class Tools:
                 stopped = False
                 while not stopped and (block := handle.read(64 * 1024)):
                     for byte in block:
-                        if byte == 0:
+                        if byte == 0 or (byte < 32 and byte not in (9, 10, 13)) or byte == 127:
                             return f"[binary file: {path}]"
                         if byte == 10:
                             if finish_line(True):

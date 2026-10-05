@@ -74,6 +74,8 @@ def test_large_sparse_and_utf8_reads_remain_bounded(tmp_path):
     assert "binary file" in tools.read_file("binary.dat")
     (tmp_path / "control.dat").write_bytes(b"a\x01b")
     assert "binary file" in tools.read_file("control.dat")
+    assert "binary file" in tools.read_file("control.dat", start_line=1)
+    assert "binary file" in tools.read_file("control.dat", offset=2)
     (tmp_path / "invalid.txt").write_bytes(b"a\xffb")
     assert "invalid UTF-8" in tools.read_file("invalid.txt")
     (tmp_path / "long.txt").write_text("a" * 7000 + "\nnext", encoding="utf-8")
