@@ -21,7 +21,7 @@ from typing import Any, Iterable
 # (src/core/brain_protocol.ts) MUST carry the same number; the conformance
 # fixture (tests/fixtures/bridge_conformance.json) pins both. Canonical:
 # aether-code/docs/CONTRACTS.md.
-PROTOCOL_VERSION = 3
+PROTOCOL_VERSION = 4
 
 # --- brain -> host events (the brain emits these) -------------------------
 EV_STAGE = "stage"          # {name, face}  staged lifecycle marker
@@ -54,6 +54,8 @@ HOST_COMMANDS = frozenset({CMD_TASK, CMD_TOOL_RESULT, CMD_CONTROL})
 # work identically on a tuple.
 TOOLS = (
     "read_file",
+    "list_directory",
+    "patch_file",
     "write_file",
     "run_shell",
     "run_tests",

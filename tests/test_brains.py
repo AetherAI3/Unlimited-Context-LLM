@@ -118,7 +118,7 @@ def test_local_brain_emits_tool_call_result_and_done(tmp_path):
     assert "hello" in done["text"]
 
 
-def test_local_brain_supports_full_8_tool_schema():
+def test_local_brain_supports_full_10_tool_schema():
     # The schema the local brain advertises must be the canonical 8 tools.
     from aether_agent import protocol
 
@@ -126,7 +126,7 @@ def test_local_brain_supports_full_8_tool_schema():
     brain = LocalBrain(model="m", cwd=".", llm=chat)
     list(brain.run("noop"))
     # the brain offers the schema on every chat call; the canonical tuple is 8.
-    assert len(protocol.TOOLS) == 8
+    assert len(protocol.TOOLS) == 10
     offered = {t["function"]["name"] for t in (chat.last_tools or [])}
     assert set(protocol.TOOLS) == offered
 

@@ -30,6 +30,8 @@ from aether_context import Session
 _PHASE_BY_TOOL = {
     "repo_search": "scanning",
     "read_file": "scanning",
+    "list_directory": "scanning",
+    "patch_file": "anchoring",
     "write_file": "anchoring",
     "run_tests": "grounding",
     "run_shell": "grounding",
@@ -149,7 +151,7 @@ def run_agent_events(
             messages.append({"role": "tool", "tool_call_id": call.get("id", ""), "content": result})
             yield {"type": "tool_result", "name": name, "output": result}
 
-            if name == "write_file":
+            if name in {"write_file", "patch_file"}:
                 tested_since_edit = False
             if name == "run_tests":
                 tested_since_edit = True

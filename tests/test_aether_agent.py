@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import pytest
 
 from aether_agent.statusbar import render
@@ -44,6 +45,6 @@ def test_tool_schema_and_path_guard(tmp_path):
     assert {"read_file", "write_file", "run_shell", "run_tests", "repo_search", "git_commit"} <= names
     t = Tools(str(tmp_path))
     assert "[wrote" in t.write_file("a.txt", "hi")
-    assert t.read_file("a.txt") == "hi"
+    assert json.loads(t.read_file("a.txt"))["content"] == "hi"
     with pytest.raises(ValueError):
         t._safe("../escape")

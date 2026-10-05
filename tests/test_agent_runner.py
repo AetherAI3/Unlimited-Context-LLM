@@ -1,4 +1,6 @@
 # tests/test_agent_runner.py
+import json
+
 from aether_agent import agent_runner
 from aether_agent.agent_profile import Agent
 from aether_agent.tools import Tools
@@ -18,6 +20,42 @@ def test_policy_tools_ask_denies_destructive_without_confirm(tmp_path):
     assert "denied" in pt.execute("write_file", {"path": "x", "content": "y"}).lower()
     pt2 = agent_runner._PolicyTools(inner, allowed={"write_file"}, permission="ask", confirm=lambda n, a: True)
     assert "wrote" in pt2.execute("write_file", {"path": "x.txt", "content": "y"}).lower()
+
+
+def test_patch_preview_reaches_approval_before_mutation_and_stale_edits_conflict(tmp_path, capsys):
+    target = tmp_path / "space é.txt"
+    target.write_text("before\nafter\n", encoding="utf-8")
+    inner = Tools(str(tmp_path))
+    digest = json.loads(inner.read_file(target.name))["sha256"]
+    patch = {"path": target.name, "expected_sha256": digest,
+             "old_text": "before", "new_text": "updated"}
+    seen = []
+
+    def confirm(name, args):
+        assert name == "patch_file"
+        assert target.read_text(encoding="utf-8") == "before\nafter\n"
+        seen.append(args["_patch_preview"])
+        return True
+
+    policy = agent_runner._PolicyTools(inner, allowed={"patch_file"}, permission="ask", confirm=confirm)
+    assert "patched" in policy.execute("patch_file", patch)
+    assert target.read_text(encoding="utf-8") == "updated\nafter\n"
+    assert '- "before"\n+ "updated"' in seen[0]
+    assert seen[0] in capsys.readouterr().err
+
+    digest = json.loads(inner.read_file(target.name))["sha256"]
+    stale = {"path": target.name, "expected_sha256": digest,
+             "old_text": "updated", "new_text": "agent edit"}
+
+    def user_edits_after_preview(_name, args):
+        assert '- "updated"\n+ "agent edit"' in args["_patch_preview"]
+        target.write_text("user edit\nafter\n", encoding="utf-8")
+        return True
+
+    policy = agent_runner._PolicyTools(inner, allowed={"patch_file"}, permission="ask",
+                                       confirm=user_edits_after_preview)
+    assert "conflict" in policy.execute("patch_file", stale)
+    assert target.read_text(encoding="utf-8") == "user edit\nafter\n"
 
 
 def test_run_builds_session_with_agent_pool_and_streams(tmp_path, monkeypatch):

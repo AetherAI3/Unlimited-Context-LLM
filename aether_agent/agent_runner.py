@@ -12,6 +12,7 @@ is injectable (``session_factory``) so tests never touch numpy/disk.
 """
 from __future__ import annotations
 
+import sys
 from typing import Any, Callable, Iterator, Optional
 
 from aether_agent.adapter import OllamaChat
@@ -20,7 +21,7 @@ from aether_agent.agent_profile import Agent
 from aether_agent.tools import Tools, tool_schema
 
 #: tools that change the workspace / run code — gated by permission mode.
-DESTRUCTIVE = {"write_file", "run_shell", "git_commit"}
+DESTRUCTIVE = {"write_file", "patch_file", "run_shell", "git_commit"}
 ConfirmFn = Callable[[str, dict], bool]
 
 
@@ -59,7 +60,15 @@ class _PolicyTools:
         if name not in self._allowed:
             return f"[tool {name} not allowed for this agent]"
         if name in DESTRUCTIVE and self._permission != "skip":
-            if not self._confirm(name, args):
+            approval_args = args
+            if name == "patch_file":
+                try:
+                    preview = self._inner.preview_patch(**args)
+                except (OSError, ValueError, TypeError) as exc:
+                    return f"[patch rejected: {exc}]"
+                sys.stderr.write(preview + "\n")
+                approval_args = {**args, "_patch_preview": preview}
+            if not self._confirm(name, approval_args):
                 return f"[denied: {name} (permission={self._permission})]"
         if name in DESTRUCTIVE and self._write_lock is not None:
             with self._write_lock:
