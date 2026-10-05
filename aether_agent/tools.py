@@ -181,7 +181,7 @@ class Tools:
                     raise ValueError("invalid byte range")
                 handle.seek(begin)
                 raw = handle.read(min(size - begin, count))
-                if b"\0" in raw:
+                if any(byte == 0 or byte < 32 and byte not in (9, 10, 13) or byte == 127 for byte in raw):
                     return f"[binary file: {path}]"
                 end = len(raw)
                 while end > 0:
@@ -194,15 +194,37 @@ class Tools:
                     if begin < size:
                         raise ValueError("offset splits a UTF-8 character or invalid UTF-8")
                     chunk = ""
-                result = {"path": path, "sha256": digest, "offset": begin,
-                          "next_offset": begin + end if begin + end < size else None,
-                          "size": size,
-                          "validation_scope": "returned_range" if digest is None else "whole_file",
-                          "content": chunk}
+                handle.seek(max(0, begin - 1))
+                starts_mid_line = begin > 0 and handle.read(1) != b"\n"
+                while True:
+                    next_offset = begin + end
+                    result = {"path": path, "sha256": digest, "offset": begin,
+                              "range_end": next_offset,
+                              "next_offset": next_offset if next_offset < size else None,
+                              "size": size, "complete": begin == 0 and next_offset == size,
+                              "truncated": next_offset < size,
+                              "starts_mid_line": starts_mid_line,
+                              "ends_mid_line": next_offset < size and end > 0 and raw[end - 1] != 10,
+                              "validation_scope": "returned_range" if digest is None else "whole_file",
+                              "content": chunk}
+                    if len(json.dumps(result, ensure_ascii=False).encode("utf-8")) <= 8000:
+                        break
+                    end -= 1
+                    while end > 0:
+                        try:
+                            chunk = raw[:end].decode("utf-8")
+                            break
+                        except UnicodeDecodeError:
+                            end -= 1
+                    else:
+                        raise ValueError("read_file cannot fit a UTF-8 character within output budget")
             after = os.fstat(handle.fileno())
             if (before.st_size, before.st_mtime_ns, before.st_ino) != (after.st_size, after.st_mtime_ns, after.st_ino):
                 raise ValueError("read conflict: file changed during read")
-            return json.dumps(result, ensure_ascii=False)
+            output = json.dumps(result, ensure_ascii=False)
+            if len(output.encode("utf-8")) > 8000:
+                raise ValueError("read_file output exceeds budget; use offset/max_bytes")
+            return output
 
     def list_directory(self, path: str, cursor: str | None = None, limit: int = 50) -> str:
         ap = self._safe(path)

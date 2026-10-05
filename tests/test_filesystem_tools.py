@@ -53,9 +53,16 @@ def test_large_sparse_and_utf8_reads_remain_bounded(tmp_path):
     assert first["size"] == 32 * 1024 * 1024
     assert first["sha256"] is None
     assert first["validation_scope"] == "returned_range"
+    assert first["range_end"] == 4
+    assert first["truncated"] is True
+    assert first["complete"] is False
+    assert first["ends_mid_line"] is True
     (tmp_path / "unicode.txt").write_text("a😀b", encoding="utf-8")
     assert json.loads(tools.read_file("unicode.txt", max_bytes=4))["content"] == "a"
-    assert json.loads(tools.read_file("unicode.txt", offset=1, max_bytes=4))["content"] == "😀"
+    continuation = json.loads(tools.read_file("unicode.txt", offset=1, max_bytes=4))
+    assert continuation["content"] == "😀"
+    assert continuation["starts_mid_line"] is True
+    assert continuation["complete"] is False
     assert "splits a UTF-8 character" in tools.execute("read_file", {"path": "unicode.txt", "offset": 2, "max_bytes": 4})
     (tmp_path / "lines.txt").write_text("first\nlast", encoding="utf-8")
     assert json.loads(tools.read_file("lines.txt", start_line=1, max_lines=1))["next_start_line"] == 2
@@ -65,10 +72,16 @@ def test_large_sparse_and_utf8_reads_remain_bounded(tmp_path):
     assert json.loads(tools.read_file("empty.txt"))["content"] == ""
     (tmp_path / "binary.dat").write_bytes(b"a\0b")
     assert "binary file" in tools.read_file("binary.dat")
+    (tmp_path / "control.dat").write_bytes(b"a\x01b")
+    assert "binary file" in tools.read_file("control.dat")
     (tmp_path / "invalid.txt").write_bytes(b"a\xffb")
     assert "invalid UTF-8" in tools.read_file("invalid.txt")
     (tmp_path / "long.txt").write_text("a" * 7000 + "\nnext", encoding="utf-8")
     assert "line exceeds 6000 bytes" in json.loads(tools.read_file("long.txt", start_line=1))["note"]
+    (tmp_path / "escaped.txt").write_text("\t" * 4096, encoding="utf-8")
+    escaped = tools.read_file("escaped.txt")
+    assert len(escaped.encode("utf-8")) <= 8000
+    assert json.loads(escaped)["next_offset"] is not None
 
 
 def test_boundary_insertion_and_mode_preservation(tmp_path):
