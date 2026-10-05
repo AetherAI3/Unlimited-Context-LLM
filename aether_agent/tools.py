@@ -10,6 +10,7 @@ import json
 import os
 import subprocess
 import base64
+import codecs
 import hashlib
 import re
 import tempfile
@@ -96,10 +97,19 @@ class Tools:
             digest = None
             if size <= MAX_FILE_BYTES:
                 hasher = hashlib.sha256()
+                utf8 = codecs.getincrementaldecoder("utf-8")("strict")
                 while block := handle.read(64 * 1024):
                     if b"\0" in block:
                         return f"[binary file: {path}]"
+                    try:
+                        utf8.decode(block)
+                    except UnicodeDecodeError:
+                        return f"[invalid UTF-8 file: {path}]"
                     hasher.update(block)
+                try:
+                    utf8.decode(b"", final=True)
+                except UnicodeDecodeError:
+                    return f"[invalid UTF-8 file: {path}]"
                 digest = hasher.hexdigest()
             if start_line is not None or max_lines is not None:
                 if offset is not None or max_bytes is not None:
@@ -143,8 +153,13 @@ class Tools:
                             if finish_line(True):
                                 stopped = True
                                 break
-                        elif line >= start and len(current) <= 6000:
+                        elif line >= start:
                             current.append(byte)
+                            if len(selected) + len(current) + (1 if selected_lines else 0) > 6000:
+                                next_line = line
+                                too_long = selected_lines == 0
+                                stopped = True
+                                break
                 if not stopped:
                     finish_line(False)
                 if selected_lines == 0 and not too_long:

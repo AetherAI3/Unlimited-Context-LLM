@@ -62,6 +62,10 @@ def test_large_sparse_and_utf8_reads_remain_bounded(tmp_path):
     assert json.loads(tools.read_file("empty.txt"))["content"] == ""
     (tmp_path / "binary.dat").write_bytes(b"a\0b")
     assert "binary file" in tools.read_file("binary.dat")
+    (tmp_path / "invalid.txt").write_bytes(b"a\xffb")
+    assert "invalid UTF-8" in tools.read_file("invalid.txt")
+    (tmp_path / "long.txt").write_text("a" * 7000 + "\nnext", encoding="utf-8")
+    assert "line exceeds 6000 bytes" in json.loads(tools.read_file("long.txt", start_line=1))["note"]
 
 
 def test_boundary_insertion_and_mode_preservation(tmp_path):
