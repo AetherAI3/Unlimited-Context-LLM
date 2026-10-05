@@ -166,11 +166,13 @@ class Tools:
                     raise ValueError("start_line beyond EOF")
                 if too_long:
                     result = {"path": path, "sha256": digest, "start_line": start,
-                              "next_start_line": None, "size": size, "content": "",
+                              "next_start_line": None, "size": size,
+                              "validation_scope": "returned_range" if digest is None else "whole_file", "content": "",
                               "note": "line exceeds 6000 bytes; use offset/max_bytes"}
                 else:
                     result = {"path": path, "sha256": digest, "start_line": start,
                               "next_start_line": next_line, "size": size,
+                              "validation_scope": "returned_range" if digest is None else "whole_file",
                               "content": selected.decode("utf-8")}
             else:
                 begin = offset or 0
@@ -194,7 +196,9 @@ class Tools:
                     chunk = ""
                 result = {"path": path, "sha256": digest, "offset": begin,
                           "next_offset": begin + end if begin + end < size else None,
-                          "size": size, "content": chunk}
+                          "size": size,
+                          "validation_scope": "returned_range" if digest is None else "whole_file",
+                          "content": chunk}
             after = os.fstat(handle.fileno())
             if (before.st_size, before.st_mtime_ns, before.st_ino) != (after.st_size, after.st_mtime_ns, after.st_ino):
                 raise ValueError("read conflict: file changed during read")

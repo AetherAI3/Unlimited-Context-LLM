@@ -50,6 +50,7 @@ def test_large_sparse_and_utf8_reads_remain_bounded(tmp_path):
     assert first["next_offset"] == 4
     assert first["size"] == 32 * 1024 * 1024
     assert first["sha256"] is None
+    assert first["validation_scope"] == "returned_range"
     (tmp_path / "unicode.txt").write_text("a😀b", encoding="utf-8")
     assert json.loads(tools.read_file("unicode.txt", max_bytes=4))["content"] == "a"
     assert json.loads(tools.read_file("unicode.txt", offset=1, max_bytes=4))["content"] == "😀"
