@@ -90,53 +90,100 @@ class Tools:
         ap = self._safe(path)
         if os.path.islink(ap) or not os.path.isfile(ap):
             return f"[no such file: {path}]"
-        if os.path.getsize(ap) > MAX_FILE_BYTES:
-            return f"[file too large for digest/ranged read: {path}]"
-        raw = Path(ap).read_bytes()
-        if b"\0" in raw:
-            return f"[binary file: {path}]"
-        content = raw.decode("utf-8")
-        digest = hashlib.sha256(raw).hexdigest()
-        if start_line is not None or max_lines is not None:
-            if offset is not None or max_bytes is not None:
-                raise ValueError("line and byte ranges cannot be combined")
-            lines = content.split("\n")
-            start = start_line or 1
-            count = max_lines or 200
-            if start < 1 or count < 1 or count > 200 or start > len(lines):
-                raise ValueError("invalid line range")
-            selected = ""
-            next_line = None
-            for index in range(start - 1, min(len(lines), start - 1 + count)):
-                part = ("" if index == start - 1 else "\n") + lines[index]
-                if len((selected + part).encode("utf-8")) > 6000:
-                    next_line = index + 1
-                    break
-                selected += part
-            if next_line is None and start - 1 + count < len(lines):
-                next_line = start + count
-            note = {"note": "line exceeds 6000 bytes; use offset/max_bytes"} if next_line == start else {}
-            return json.dumps({"path": path, "sha256": digest, "start_line": start,
-                               "next_start_line": None if note else next_line, "size": len(raw),
-                               "content": selected, **note}, ensure_ascii=False)
-        begin = offset or 0
-        count = max_bytes or 4096
-        if begin < 0 or begin > len(raw) or count < 4 or count > 4096:
-            raise ValueError("invalid byte range")
-        end = min(len(raw), begin + count)
-        while end > begin:
-            try:
-                chunk = raw[begin:end].decode("utf-8")
-                break
-            except UnicodeDecodeError:
-                end -= 1
-        else:
-            if begin < len(raw):
-                raise ValueError("offset splits a UTF-8 character")
-            chunk = ""
-        return json.dumps({"path": path, "sha256": digest, "offset": begin,
-                           "next_offset": end if end < len(raw) else None,
-                           "size": len(raw), "content": chunk}, ensure_ascii=False)
+        with open(ap, "rb") as handle:
+            before = os.fstat(handle.fileno())
+            size = before.st_size
+            digest = None
+            if size <= MAX_FILE_BYTES:
+                hasher = hashlib.sha256()
+                while block := handle.read(64 * 1024):
+                    if b"\0" in block:
+                        return f"[binary file: {path}]"
+                    hasher.update(block)
+                digest = hasher.hexdigest()
+            if start_line is not None or max_lines is not None:
+                if offset is not None or max_bytes is not None:
+                    raise ValueError("line and byte ranges cannot be combined")
+                start = start_line or 1
+                count = max_lines or 200
+                if start < 1 or count < 1 or count > 200:
+                    raise ValueError("invalid line range")
+                handle.seek(0)
+                selected = bytearray()
+                current = bytearray()
+                line = 1
+                selected_lines = 0
+                next_line = None
+                too_long = False
+
+                def finish_line(has_newline: bool) -> bool:
+                    nonlocal line, current, selected_lines, next_line, too_long
+                    if line >= start:
+                        if len(selected) + len(current) + (1 if selected_lines else 0) > 6000:
+                            next_line = line
+                            too_long = selected_lines == 0
+                            return True
+                        if selected_lines:
+                            selected.extend(b"\n")
+                        selected.extend(current)
+                        selected_lines += 1
+                        if selected_lines >= count and has_newline:
+                            next_line = line + 1
+                            return True
+                    line += 1
+                    current = bytearray()
+                    return False
+
+                stopped = False
+                while not stopped and (block := handle.read(64 * 1024)):
+                    for byte in block:
+                        if byte == 0:
+                            return f"[binary file: {path}]"
+                        if byte == 10:
+                            if finish_line(True):
+                                stopped = True
+                                break
+                        elif line >= start and len(current) <= 6000:
+                            current.append(byte)
+                if not stopped:
+                    finish_line(False)
+                if selected_lines == 0 and not too_long:
+                    raise ValueError("start_line beyond EOF")
+                if too_long:
+                    result = {"path": path, "sha256": digest, "start_line": start,
+                              "next_start_line": None, "size": size, "content": "",
+                              "note": "line exceeds 6000 bytes; use offset/max_bytes"}
+                else:
+                    result = {"path": path, "sha256": digest, "start_line": start,
+                              "next_start_line": next_line, "size": size,
+                              "content": selected.decode("utf-8")}
+            else:
+                begin = offset or 0
+                count = max_bytes or 4096
+                if begin < 0 or begin > size or count < 4 or count > 4096:
+                    raise ValueError("invalid byte range")
+                handle.seek(begin)
+                raw = handle.read(min(size - begin, count))
+                if b"\0" in raw:
+                    return f"[binary file: {path}]"
+                end = len(raw)
+                while end > 0:
+                    try:
+                        chunk = raw[:end].decode("utf-8")
+                        break
+                    except UnicodeDecodeError:
+                        end -= 1
+                else:
+                    if begin < size:
+                        raise ValueError("offset splits a UTF-8 character or invalid UTF-8")
+                    chunk = ""
+                result = {"path": path, "sha256": digest, "offset": begin,
+                          "next_offset": begin + end if begin + end < size else None,
+                          "size": size, "content": chunk}
+            after = os.fstat(handle.fileno())
+            if (before.st_size, before.st_mtime_ns, before.st_ino) != (after.st_size, after.st_mtime_ns, after.st_ino):
+                raise ValueError("read conflict: file changed during read")
+            return json.dumps(result, ensure_ascii=False)
 
     def list_directory(self, path: str, cursor: str | None = None, limit: int = 50) -> str:
         ap = self._safe(path)

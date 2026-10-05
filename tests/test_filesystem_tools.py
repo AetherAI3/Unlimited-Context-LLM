@@ -39,6 +39,31 @@ def test_ranged_read_and_targeted_patch_conflict(tmp_path):
     assert target.read_text(encoding="utf-8") == "first\nSECOND\n"
 
 
+def test_large_sparse_and_utf8_reads_remain_bounded(tmp_path):
+    sparse = tmp_path / "large.txt"
+    sparse.write_bytes(b"start")
+    with sparse.open("r+b") as handle:
+        handle.truncate(32 * 1024 * 1024)
+    tools = Tools(str(tmp_path))
+    first = json.loads(tools.read_file("large.txt", max_bytes=4))
+    assert first["content"] == "star"
+    assert first["next_offset"] == 4
+    assert first["size"] == 32 * 1024 * 1024
+    assert first["sha256"] is None
+    (tmp_path / "unicode.txt").write_text("a😀b", encoding="utf-8")
+    assert json.loads(tools.read_file("unicode.txt", max_bytes=4))["content"] == "a"
+    assert json.loads(tools.read_file("unicode.txt", offset=1, max_bytes=4))["content"] == "😀"
+    assert "splits a UTF-8 character" in tools.execute("read_file", {"path": "unicode.txt", "offset": 2, "max_bytes": 4})
+    (tmp_path / "lines.txt").write_text("first\nlast", encoding="utf-8")
+    assert json.loads(tools.read_file("lines.txt", start_line=1, max_lines=1))["next_start_line"] == 2
+    assert json.loads(tools.read_file("lines.txt", start_line=2, max_lines=1))["next_start_line"] is None
+    assert "beyond EOF" in tools.execute("read_file", {"path": "lines.txt", "start_line": 3})
+    (tmp_path / "empty.txt").write_bytes(b"")
+    assert json.loads(tools.read_file("empty.txt"))["content"] == ""
+    (tmp_path / "binary.dat").write_bytes(b"a\0b")
+    assert "binary file" in tools.read_file("binary.dat")
+
+
 def test_boundary_insertion_and_mode_preservation(tmp_path):
     target = tmp_path / "bounds.txt"
     target.write_bytes(b"middle\n")
