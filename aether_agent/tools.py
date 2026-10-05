@@ -210,9 +210,13 @@ class Tools:
             return f"[no such directory: {path}]"
         if not 1 <= limit <= 100:
             raise ValueError("limit must be from 1 to 100")
-        entries = sorted(os.scandir(ap), key=lambda entry: entry.name)
-        if len(entries) > 10000:
-            raise ValueError("directory exceeds 10000-entry listing limit")
+        entries = []
+        with os.scandir(ap) as scan:
+            for entry in scan:
+                entries.append(entry)
+                if len(entries) > 10000:
+                    raise ValueError("directory exceeds 10000-entry listing limit")
+        entries.sort(key=lambda entry: entry.name)
         facts = [(entry.name, entry.stat(follow_symlinks=False)) for entry in entries]
         version = hashlib.sha256(repr([(name, st.st_mode, st.st_size, st.st_mtime_ns) for name, st in facts]).encode()).hexdigest()
         rel = os.path.relpath(ap, self.cwd)
