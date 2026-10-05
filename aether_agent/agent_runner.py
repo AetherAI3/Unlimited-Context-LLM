@@ -20,7 +20,7 @@ from aether_agent.agent_profile import Agent
 from aether_agent.tools import Tools, tool_schema
 
 #: tools that change the workspace / run code — gated by permission mode.
-DESTRUCTIVE = {"write_file", "run_shell", "git_commit"}
+DESTRUCTIVE = {"write_file", "patch_file", "run_shell", "git_commit"}
 ConfirmFn = Callable[[str, dict], bool]
 
 

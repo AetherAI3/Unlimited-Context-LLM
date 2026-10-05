@@ -290,6 +290,7 @@ def test_shell_nonzero_exit_and_stderr_captured(tmp_path):
 def test_protocol_version_matches_fixture():
     fx = json.loads(_FIXTURE.read_text(encoding="utf-8"))
     assert fx["protocol_version"] == protocol.PROTOCOL_VERSION
+    assert tuple(fx["tools"]) == protocol.TOOLS
 
 
 def test_every_fixture_message_is_in_the_vocab_and_round_trips():

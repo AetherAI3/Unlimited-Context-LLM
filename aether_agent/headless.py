@@ -33,6 +33,8 @@ ChatFn = Callable[[list[dict], list[dict]], dict[str, Any]]
 _PHASE_BY_TOOL = {
     "repo_search": "scanning",
     "read_file": "scanning",
+    "list_directory": "scanning",
+    "patch_file": "anchoring",
     "write_file": "anchoring",
     "run_tests": "grounding",
     "run_shell": "grounding",
@@ -251,7 +253,7 @@ def run_brain(
                 messages.append({"role": "tool", "tool_call_id": call_id, "content": output})
                 _drain_steers(steers, messages)
 
-                if name == "write_file":
+                if name in {"write_file", "patch_file"}:
                     edited_since_test = True
                 if name == "run_tests":
                     last_fail = 0 if kernel.tests_pass(output) else kernel.parse_fail_count(output)

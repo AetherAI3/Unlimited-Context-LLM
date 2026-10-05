@@ -9,9 +9,14 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import base64
+import hashlib
+import re
+import tempfile
 from pathlib import Path
 
 MAX_OUTPUT = 8000
+MAX_FILE_BYTES = 16 * 1024 * 1024
 
 
 def tool_schema() -> list[dict]:
@@ -28,7 +33,9 @@ def tool_schema() -> list[dict]:
     s = {"type": "string"}
     i = {"type": "integer"}
     return [
-        fn("read_file", "Read a file's contents (relative to the workspace).", {"path": s}, ["path"]),
+        fn("read_file", "Read a bounded byte or line range and return a SHA-256 digest.", {"path": s, "offset": i, "max_bytes": i, "start_line": i, "max_lines": i}, ["path"]),
+        fn("list_directory", "List one bounded directory page with path/type metadata.", {"path": s, "cursor": s, "limit": i}, ["path"]),
+        fn("patch_file", "Replace one unique exact text range using an expected SHA-256 digest.", {"path": s, "expected_sha256": s, "old_text": s, "new_text": s, "start_line": i}, ["path", "expected_sha256", "old_text", "new_text"]),
         fn("write_file", "Create or overwrite a file with the given content.", {"path": s, "content": s}, ["path", "content"]),
         fn("run_shell", "Run a shell command in the workspace and return its output.", {"command": s}, ["command"]),
         fn("run_tests", "Run the test suite (default: pytest -q).", {"command": s}, []),
@@ -78,11 +85,152 @@ class Tools:
         except subprocess.TimeoutExpired:
             return f"[timeout after {timeout}s]"
 
-    def read_file(self, path: str) -> str:
+    def read_file(self, path: str, offset: int | None = None, max_bytes: int | None = None,
+                  start_line: int | None = None, max_lines: int | None = None) -> str:
         ap = self._safe(path)
-        if not os.path.isfile(ap):
+        if os.path.islink(ap) or not os.path.isfile(ap):
             return f"[no such file: {path}]"
-        return Path(ap).read_text(encoding="utf-8", errors="replace")[:MAX_OUTPUT]
+        if os.path.getsize(ap) > MAX_FILE_BYTES:
+            return f"[file too large for digest/ranged read: {path}]"
+        raw = Path(ap).read_bytes()
+        if b"\0" in raw:
+            return f"[binary file: {path}]"
+        content = raw.decode("utf-8")
+        digest = hashlib.sha256(raw).hexdigest()
+        if start_line is not None or max_lines is not None:
+            if offset is not None or max_bytes is not None:
+                raise ValueError("line and byte ranges cannot be combined")
+            lines = content.split("\n")
+            start = start_line or 1
+            count = max_lines or 200
+            if start < 1 or count < 1 or count > 200 or start > len(lines):
+                raise ValueError("invalid line range")
+            selected = ""
+            next_line = None
+            for index in range(start - 1, min(len(lines), start - 1 + count)):
+                part = ("" if index == start - 1 else "\n") + lines[index]
+                if len((selected + part).encode("utf-8")) > 6000:
+                    next_line = index + 1
+                    break
+                selected += part
+            if next_line is None and start - 1 + count < len(lines):
+                next_line = start + count
+            note = {"note": "line exceeds 6000 bytes; use offset/max_bytes"} if next_line == start else {}
+            return json.dumps({"path": path, "sha256": digest, "start_line": start,
+                               "next_start_line": None if note else next_line, "size": len(raw),
+                               "content": selected, **note}, ensure_ascii=False)
+        begin = offset or 0
+        count = max_bytes or 4096
+        if begin < 0 or begin > len(raw) or count < 4 or count > 4096:
+            raise ValueError("invalid byte range")
+        end = min(len(raw), begin + count)
+        while end > begin:
+            try:
+                chunk = raw[begin:end].decode("utf-8")
+                break
+            except UnicodeDecodeError:
+                end -= 1
+        else:
+            if begin < len(raw):
+                raise ValueError("offset splits a UTF-8 character")
+            chunk = ""
+        return json.dumps({"path": path, "sha256": digest, "offset": begin,
+                           "next_offset": end if end < len(raw) else None,
+                           "size": len(raw), "content": chunk}, ensure_ascii=False)
+
+    def list_directory(self, path: str, cursor: str | None = None, limit: int = 50) -> str:
+        ap = self._safe(path)
+        if os.path.islink(ap) or not os.path.isdir(ap):
+            return f"[no such directory: {path}]"
+        if not 1 <= limit <= 100:
+            raise ValueError("limit must be from 1 to 100")
+        entries = sorted(os.scandir(ap), key=lambda entry: entry.name)
+        if len(entries) > 10000:
+            raise ValueError("directory exceeds 10000-entry listing limit")
+        facts = [(entry.name, entry.stat(follow_symlinks=False)) for entry in entries]
+        version = hashlib.sha256(repr([(name, st.st_mode, st.st_size, st.st_mtime_ns) for name, st in facts]).encode()).hexdigest()
+        rel = os.path.relpath(ap, self.cwd)
+        after = ""
+        if cursor is not None:
+            try:
+                decoded = json.loads(base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)))
+            except (ValueError, UnicodeError) as exc:
+                raise ValueError("invalid directory cursor") from exc
+            if decoded.get("path") != rel or decoded.get("version") != version or not isinstance(decoded.get("after"), str):
+                raise ValueError("directory listing conflict: path or contents changed")
+            after = decoded["after"]
+        remaining = [entry for entry in entries if entry.name > after]
+        page = []
+        for entry in remaining[:limit]:
+            kind = "symlink" if entry.is_symlink() else "directory" if entry.is_dir(follow_symlinks=False) else "file" if entry.is_file(follow_symlinks=False) else "other"
+            item = {"path": "./" + os.path.relpath(entry.path, self.cwd).replace(os.sep, "/"), "type": kind}
+            if kind == "file":
+                item["size"] = entry.stat(follow_symlinks=False).st_size
+            if len(json.dumps({"entries": [*page, item]}, ensure_ascii=False).encode()) > 6500:
+                break
+            page.append(item)
+        if not page and remaining:
+            raise ValueError("directory entry exceeds output budget")
+        next_cursor = None
+        if len(page) < len(remaining):
+            payload = json.dumps({"path": rel, "version": version, "after": remaining[len(page) - 1].name})
+            next_cursor = base64.urlsafe_b64encode(payload.encode()).decode().rstrip("=")
+        return json.dumps({"path": path, "entries": page, "next_cursor": next_cursor}, ensure_ascii=False)
+
+    def patch_file(self, path: str, expected_sha256: str, old_text: str, new_text: str,
+                   start_line: int | None = None) -> str:
+        ap = self._safe(path)
+        if os.path.islink(ap) or not os.path.isfile(ap):
+            raise ValueError("patch target must be a regular file")
+        original_stat = os.stat(ap, follow_symlinks=False)
+        if original_stat.st_size > MAX_FILE_BYTES:
+            raise ValueError("patch target too large")
+        original_bytes = Path(ap).read_bytes()
+        digest = hashlib.sha256(original_bytes).hexdigest()
+        if not re.fullmatch(r"[a-f0-9]{64}", expected_sha256):
+            raise ValueError("expected_sha256 must be lowercase SHA-256")
+        if digest != expected_sha256:
+            raise ValueError(f"conflict: file changed since read (current sha256 {digest})")
+        if b"\0" in original_bytes:
+            raise ValueError("binary patch target")
+        original = original_bytes.decode("utf-8")
+        if old_text == new_text:
+            raise ValueError("patch has no change")
+        if not old_text:
+            if start_line is None or start_line < 1:
+                raise ValueError("start_line required for insertion")
+            starts = [0] + [i + 1 for i, char in enumerate(original) if char == "\n"]
+            if start_line > len(starts) + (0 if original.endswith("\n") else 1):
+                raise ValueError("start_line beyond EOF")
+            position = starts[start_line - 1] if start_line <= len(starts) else len(original)
+        else:
+            position = original.find(old_text)
+            if position < 0:
+                raise ValueError("hunk does not match")
+            if original.find(old_text, position + 1) >= 0:
+                raise ValueError("ambiguous hunk: old_text occurs more than once")
+            if start_line is not None and original[:position].count("\n") + 1 != start_line:
+                raise ValueError("hunk does not match start_line")
+        replacement = (original[:position] + new_text + original[position + len(old_text):]).encode("utf-8")
+        staged = None
+        try:
+            with tempfile.NamedTemporaryFile(dir=os.path.dirname(ap), prefix=".aether-patch-", suffix=".tmp", delete=False) as handle:
+                staged = handle.name
+                handle.write(replacement)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.chmod(staged, original_stat.st_mode)
+            current_stat = os.stat(ap, follow_symlinks=False)
+            if (os.path.islink(ap) or current_stat.st_mode != original_stat.st_mode
+                    or current_stat.st_ino != original_stat.st_ino
+                    or current_stat.st_mtime_ns != original_stat.st_mtime_ns
+                    or Path(ap).read_bytes() != original_bytes):
+                raise ValueError("conflict: file changed while patch was staged")
+            os.replace(staged, ap)
+            return f"[patched {path} · sha256 {hashlib.sha256(replacement).hexdigest()}]"
+        finally:
+            if staged is not None and os.path.exists(staged):
+                os.unlink(staged)
 
     def write_file(self, path: str, content: str) -> str:
         ap = self._safe(path)
@@ -106,7 +254,11 @@ class Tools:
     def execute(self, name: str, args: dict) -> str:
         try:
             if name == "read_file":
-                return self.read_file(args["path"])
+                return self.read_file(args["path"], args.get("offset"), args.get("max_bytes"), args.get("start_line"), args.get("max_lines"))
+            if name == "list_directory":
+                return self.list_directory(args["path"], args.get("cursor"), args.get("limit", 50))
+            if name == "patch_file":
+                return self.patch_file(args["path"], args["expected_sha256"], args["old_text"], args["new_text"], args.get("start_line"))
             if name == "write_file":
                 return self.write_file(args["path"], args.get("content", ""))
             if name == "run_shell":
