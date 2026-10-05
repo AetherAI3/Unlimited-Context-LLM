@@ -99,6 +99,19 @@ def test_boundary_insertion_and_mode_preservation(tmp_path):
     assert target.stat().st_mode & 0o777 == mode
 
 
+def test_patch_preserves_utf8_bom_outside_the_hunk(tmp_path):
+    target = tmp_path / "bom.txt"
+    target.write_bytes("\ufefffirst\ntarget\n".encode("utf-8"))
+    tools = Tools(str(tmp_path))
+    first_page = json.loads(tools.read_file("bom.txt", max_bytes=4))
+    assert first_page["content"] == "\ufefff"
+    assert first_page["next_offset"] == 4
+    patch = {"path": "bom.txt", "expected_sha256": first_page["sha256"],
+             "old_text": "target", "new_text": "changed"}
+    assert "patched" in tools.execute("patch_file", patch)
+    assert target.read_bytes() == "\ufefffirst\nchanged\n".encode("utf-8")
+
+
 def test_ambiguous_and_nonmatching_hunks_do_not_write(tmp_path):
     target = tmp_path / "same.txt"
     target.write_bytes(b"same\nsame\n")
