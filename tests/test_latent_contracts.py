@@ -3,6 +3,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from typing import get_args
 
 import pytest
 
@@ -10,8 +11,10 @@ pytest.importorskip("pydantic")
 
 from aether_context import contracts  # noqa: E402
 from aether_context.contracts import NamespaceV1, canonical, digest  # noqa: E402
+from aether_context.contracts import latent_v1  # noqa: E402
 from aether_context.contracts.latent_v1 import (  # noqa: E402
-    ContextHandoffGrantV1, LatentCapsuleV1, LatentUseReceiptV1, TensorRefV1,
+    DTYPE_BYTES, ContextHandoffGrantV1, Dtype, LatentCapsuleV1, LatentUseReceiptV1, TensorRefV1,
+    verify_latent_use,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -46,20 +49,21 @@ def capsule(**over):
 
 
 def grant(cap: LatentCapsuleV1, **over):
-    base = dict(grant_id="grant-1", namespace=NS, capsule_digest=digest(cap), anchor_digest=cap.anchor_digest,
-                sender_principal_id="agent-3", recipient_principal_id="agent-4",
-                recipient_model_id=cap.source_model_id, recipient_adapter_id=cap.source_adapter_id,
-                max_slots=8, fence=1, policy_digest=digest("policy"), issued_at=T0, expires_at=T0 + 3600)
+    base = dict(grant_id="grant-1", namespace=NS, lane_id="lane-a", capsule_digest=digest(cap),
+                anchor_digest=cap.anchor_digest, sender_principal_id="agent-3",
+                recipient_principal_id="agent-4", recipient_model_id=cap.source_model_id,
+                recipient_adapter_id=cap.source_adapter_id, max_slots=8, fence=1,
+                policy_digest=digest("policy"), issued_at=T0, expires_at=T0 + 600)
     base.update(over)
     return ContextHandoffGrantV1(**base)
 
 
 def receipt(cap: LatentCapsuleV1, g: ContextHandoffGrantV1, **over):
-    base = dict(receipt_id="use-1", namespace=NS, grant_digest=digest(g), capsule_digest=digest(cap),
-                recipient_model_id=cap.source_model_id, recipient_adapter_id=cap.source_adapter_id,
-                injection_point="soft_prefix", slots_injected=8, positions=list(range(8)),
-                template_boundary_digest=digest("template"), mask_digest=digest("mask"),
-                outcome="INJECTED", reason_code=None, fence=1, used_at=T0 + 100)
+    base = dict(receipt_id="use-1", namespace=NS, lane_id="lane-a", grant_digest=digest(g),
+                capsule_digest=digest(cap), recipient_model_id=cap.source_model_id,
+                recipient_adapter_id=cap.source_adapter_id, injection_point="soft_prefix",
+                slots_injected=8, positions=list(range(8)), template_boundary_digest=digest("template"),
+                mask_digest=digest("mask"), outcome="INJECTED", reason_code=None, fence=1, used_at=T0 + 100)
     base.update(over)
     return LatentUseReceiptV1(**base)
 
@@ -81,7 +85,15 @@ def test_tensor_ref_byte_count_must_match_dtype_and_shape():
         tensor(byte_count=1)
     with pytest.raises(ValueError):
         tensor(shape=[0, 4])
+    with pytest.raises(ValueError):
+        tensor(shape=[-8, -4096])
+    with pytest.raises(ValueError):
+        tensor(shape=[2**30, 2**30, 16], byte_count=1)
     assert tensor(dtype="int8", shape=[3, 5], byte_count=15).byte_count == 15
+
+
+def test_dtype_table_matches_literal():
+    assert set(get_args(Dtype)) == set(DTYPE_BYTES)
 
 
 def test_models_are_closed_and_strict():
@@ -93,12 +105,14 @@ def test_models_are_closed_and_strict():
         capsule(created_at=1.5)
     with pytest.raises(ValueError):
         capsule(slots=4)                                  # tensor leading dim is 8
+    with pytest.raises(ValueError):
+        capsule(source_model_id="m x")                    # not an Ident
 
 
 def test_grant_is_bounded():
     cap = capsule()
     with pytest.raises(ValueError):
-        grant(cap, expires_at=T0 + 8 * 86400)
+        grant(cap, expires_at=T0 + 901)
     with pytest.raises(ValueError):
         grant(cap, expires_at=T0)
     with pytest.raises(ValueError):
@@ -117,9 +131,44 @@ def test_receipt_outcome_rules():
     with pytest.raises(ValueError):
         receipt(cap, g, positions=[0, 0, 1, 2, 3, 4, 5, 6])              # duplicate position
     with pytest.raises(ValueError):
+        receipt(cap, g, positions=[1, 0, 2, 3, 4, 5, 6, 7])              # not increasing
+    with pytest.raises(ValueError):
+        receipt(cap, g, positions=[-1, 1, 2, 3, 4, 5, 6, 7])             # negative position
+    with pytest.raises(ValueError):
         receipt(cap, g, outcome="NOT_RUN", reason_code="transport")     # still injected 8
-    ok = receipt(cap, g, outcome="NOT_RUN", reason_code="transport", slots_injected=0, positions=[])
+    with pytest.raises(ValueError):
+        receipt(cap, g, outcome="REFUSED", reason_code="policy")        # still 8 slots
+    refused = receipt(cap, g, outcome="REFUSED", reason_code="policy", slots_injected=0, positions=[],
+                      template_boundary_digest=None, mask_digest=None)
+    assert refused.outcome == "REFUSED"
+    with pytest.raises(ValueError):
+        receipt(cap, g, mask_digest=None)                               # INJECTED needs both digests
+    with pytest.raises(ValueError):
+        receipt(cap, g, outcome="NOT_RUN", reason_code="transport", slots_injected=0, positions=[],
+                mask_digest=None)                                       # keeps its template digest
+    ok = receipt(cap, g, outcome="NOT_RUN", reason_code="transport", slots_injected=0, positions=[],
+                 template_boundary_digest=None, mask_digest=None)
     assert ok.outcome == "NOT_RUN"
+
+
+def test_verify_latent_use_binds_capsule_grant_receipt():
+    cap = capsule()
+    g = grant(cap)
+    verify_latent_use(cap, g, receipt(cap, g))
+    g9 = grant(cap, max_slots=9)
+    cases = [
+        (cap, g, receipt(cap, g, slots_injected=9, positions=list(range(9)))),   # more than max_slots
+        (cap, g9, receipt(cap, g9)),                                             # grant exceeds capsule slots
+        (cap, g, receipt(cap, g, fence=2)),
+        (cap, g, receipt(cap, g, lane_id="lane-b")),
+        (cap, g, receipt(cap, g, recipient_model_id="other-model")),
+        (cap, g, receipt(cap, g, used_at=T0 + 600)),                             # equal to expires_at
+        (cap, g, receipt(cap, g, used_at=T0 - 1)),
+        (cap, g, receipt(capsule(capsule_id="cap-2"), g)),                       # different capsule digest
+    ]
+    for c, gr, r in cases:
+        with pytest.raises(ValueError):
+            verify_latent_use(c, gr, r)
 
 
 def test_existing_hosted_contracts_and_schema_export_unchanged():
@@ -134,7 +183,7 @@ def test_existing_hosted_contracts_and_schema_export_unchanged():
     assert list(exported) == names
     for name in names:
         assert getattr(contracts, name).model_json_schema() == exported[name]
-    assert not any(name.startswith("Latent") or name == "ContextHandoffGrantV1" for name in dir(contracts))
+    assert set(latent_v1.__all__).isdisjoint(dir(contracts))
 
 
 def test_numpy_only_core_never_imports_latent_contracts_or_pydantic():
