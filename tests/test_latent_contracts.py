@@ -161,7 +161,9 @@ def test_verify_latent_use_binds_capsule_grant_receipt():
     g9 = grant(cap, max_slots=9)
     ga = grant(cap, anchor_digest=digest("other"))
     ns2 = NamespaceV1(owner_id="owner", project_id="prj", objective_id="obj", context_cycle_id="cyc-2")
+    g_ns2 = grant(cap, namespace=ns2)                   # grant + receipt agree, capsule is from another namespace
     cases = [
+        ((cap, g_ns2, receipt(cap, g_ns2, namespace=ns2)), "namespace mismatch"),
         ((capsule(capsule_id="cap-2"), g, receipt(cap, g)), "grant does not bind this capsule"),
         ((cap, g, receipt(cap, g, grant_digest=digest("old"))), "receipt does not bind this grant"),
         ((cap, g, receipt(capsule(capsule_id="cap-2"), g)), "receipt capsule differs"),
@@ -182,6 +184,10 @@ def test_verify_latent_use_binds_capsule_grant_receipt():
     with pytest.raises(ValueError):
         receipt(cap, g, reason_code="has space", outcome="REFUSED", slots_injected=0, positions=[],
                 template_boundary_digest=None, mask_digest=None)                 # reason_code is an Ident
+    with pytest.raises(ValueError):
+        grant(cap, fence=0)                                                      # fences start at 1
+    with pytest.raises(ValueError):
+        capsule(codec_version=0)
 
 
 def test_integers_are_bounded_to_digestable_range():
