@@ -22,6 +22,8 @@ Dtype = Literal["float16", "bfloat16", "float32", "int8", "uint8"]
 DTYPE_BYTES = MappingProxyType({"float16": 2, "bfloat16": 2, "float32": 4, "int8": 1, "uint8": 1})
 # Largest integer that survives a JSON/IEEE-754 round trip (2**53 - 1), so digests stay portable.
 SAFE_INT = 9007199254740991
+SafeInt = Annotated[int, Field(ge=0, le=SAFE_INT)]
+PositiveSafeInt = Annotated[int, Field(ge=1, le=SAFE_INT)]
 # Hosted short-lived authority cap, same as RetentionCommandV1.
 MAX_GRANT_SECONDS = 900
 
@@ -56,13 +58,13 @@ class LatentCapsuleV1(Closed):
     source_model_id: Ident
     source_adapter_id: Ident
     codec_id: Ident
-    codec_version: int = Field(ge=1)
+    codec_version: PositiveSafeInt
     codebook_digest: Digest | None = None
     slots: int = Field(ge=1, le=4096)
     tensor: TensorRefV1
     anchor_digest: Digest
     base_revision: Digest
-    created_at: int = Field(ge=0)
+    created_at: SafeInt
     lossless: Literal[False] = False
 
     @model_validator(mode="after")
@@ -90,17 +92,17 @@ class ContextHandoffGrantV1(Closed):
     recipient_model_id: Ident
     recipient_adapter_id: Ident
     max_slots: int = Field(ge=1, le=4096)
-    fence: int = Field(ge=1)
+    fence: PositiveSafeInt
     policy_digest: Digest
-    issued_at: int = Field(ge=0)
-    expires_at: int = Field(ge=0)
+    issued_at: SafeInt
+    expires_at: SafeInt
 
     @model_validator(mode="after")
     def bounded_grant(self) -> "ContextHandoffGrantV1":
         if self.sender_principal_id == self.recipient_principal_id:
             raise ValueError("handoff sender and recipient must differ")
         if self.expires_at <= self.issued_at or self.expires_at - self.issued_at > MAX_GRANT_SECONDS:
-            raise ValueError("handoff grant must be short-lived (at most 900 seconds)")
+            raise ValueError(f"handoff grant must be short-lived (at most {MAX_GRANT_SECONDS} seconds)")
         return self
 
 
@@ -123,13 +125,13 @@ class LatentUseReceiptV1(Closed):
     recipient_adapter_id: Ident
     injection_point: Literal["soft_prefix", "embedding_slots", "kv_update"]
     slots_injected: int = Field(ge=0, le=4096)
-    positions: list[Annotated[int, Field(ge=0, le=SAFE_INT)]] = Field(default_factory=list, max_length=4096)
+    positions: list[SafeInt] = Field(default_factory=list, max_length=4096)
     template_boundary_digest: Digest | None = None
     mask_digest: Digest | None = None
     outcome: Literal["INJECTED", "REFUSED", "NOT_RUN"]
     reason_code: Ident | None = None
-    fence: int = Field(ge=1)
-    used_at: int = Field(ge=0)
+    fence: PositiveSafeInt
+    used_at: SafeInt
 
     @model_validator(mode="after")
     def outcome_evidence(self) -> "LatentUseReceiptV1":
@@ -153,7 +155,8 @@ class LatentUseReceiptV1(Closed):
 def verify_latent_use(capsule: LatentCapsuleV1, grant: ContextHandoffGrantV1, receipt: LatentUseReceiptV1) -> None:
     """Check that a capsule, its grant and the receiver's receipt bind to one another.
 
-    Raises ``ValueError`` on the first failed check.
+    Raises ``ValueError`` on the first failed check. Checks binding only; a passing receipt may still be
+    REFUSED or NOT_RUN and does not imply an injection happened.
     """
     if grant.capsule_digest != digest(capsule):
         raise ValueError("grant does not bind this capsule")

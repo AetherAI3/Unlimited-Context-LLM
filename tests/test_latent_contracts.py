@@ -13,7 +13,7 @@ from aether_context import contracts  # noqa: E402
 from aether_context.contracts import NamespaceV1, canonical, digest  # noqa: E402
 from aether_context.contracts import latent_v1  # noqa: E402
 from aether_context.contracts.latent_v1 import (  # noqa: E402
-    DTYPE_BYTES, ContextHandoffGrantV1, Dtype, LatentCapsuleV1, LatentUseReceiptV1, TensorRefV1,
+    DTYPE_BYTES, SAFE_INT, ContextHandoffGrantV1, Dtype, LatentCapsuleV1, LatentUseReceiptV1, TensorRefV1,
     verify_latent_use,
 )
 
@@ -135,6 +135,8 @@ def test_receipt_outcome_rules():
     with pytest.raises(ValueError):
         receipt(cap, g, positions=[-1, 1, 2, 3, 4, 5, 6, 7])             # negative position
     with pytest.raises(ValueError):
+        receipt(cap, g, slots_injected=1, positions=[SAFE_INT + 1])     # position beyond the safe range
+    with pytest.raises(ValueError):
         receipt(cap, g, outcome="NOT_RUN", reason_code="transport")     # still injected 8
     with pytest.raises(ValueError):
         receipt(cap, g, outcome="REFUSED", reason_code="policy")        # still 8 slots
@@ -155,20 +157,40 @@ def test_verify_latent_use_binds_capsule_grant_receipt():
     cap = capsule()
     g = grant(cap)
     verify_latent_use(cap, g, receipt(cap, g))
+    verify_latent_use(cap, g, receipt(cap, g, used_at=T0))                       # equal to issued_at passes
     g9 = grant(cap, max_slots=9)
+    ga = grant(cap, anchor_digest=digest("other"))
+    ns2 = NamespaceV1(owner_id="owner", project_id="prj", objective_id="obj", context_cycle_id="cyc-2")
     cases = [
-        (cap, g, receipt(cap, g, slots_injected=9, positions=list(range(9)))),   # more than max_slots
-        (cap, g9, receipt(cap, g9)),                                             # grant exceeds capsule slots
-        (cap, g, receipt(cap, g, fence=2)),
-        (cap, g, receipt(cap, g, lane_id="lane-b")),
-        (cap, g, receipt(cap, g, recipient_model_id="other-model")),
-        (cap, g, receipt(cap, g, used_at=T0 + 600)),                             # equal to expires_at
-        (cap, g, receipt(cap, g, used_at=T0 - 1)),
-        (cap, g, receipt(capsule(capsule_id="cap-2"), g)),                       # different capsule digest
+        ((capsule(capsule_id="cap-2"), g, receipt(cap, g)), "grant does not bind this capsule"),
+        ((cap, g, receipt(cap, g, grant_digest=digest("old"))), "receipt does not bind this grant"),
+        ((cap, g, receipt(capsule(capsule_id="cap-2"), g)), "receipt capsule differs"),
+        ((cap, ga, receipt(cap, ga)), "grant anchor differs"),
+        ((cap, g, receipt(cap, g, namespace=ns2)), "namespace mismatch"),
+        ((cap, g, receipt(cap, g, lane_id="lane-b")), "receipt lane differs"),
+        ((cap, g, receipt(cap, g, fence=2)), "receipt fence differs"),
+        ((cap, g, receipt(cap, g, recipient_model_id="other-model")), "receipt recipient differs"),
+        ((cap, g, receipt(cap, g, recipient_adapter_id="other-adapter")), "receipt recipient differs"),
+        ((cap, g9, receipt(cap, g9)), "grant allows more slots"),
+        ((cap, g, receipt(cap, g, slots_injected=9, positions=list(range(9)))), "injected more slots"),
+        ((cap, g, receipt(cap, g, used_at=T0 + 600)), "outside the grant window"),   # equal to expires_at
+        ((cap, g, receipt(cap, g, used_at=T0 - 1)), "outside the grant window"),
     ]
-    for c, gr, r in cases:
-        with pytest.raises(ValueError):
-            verify_latent_use(c, gr, r)
+    for args, message in cases:
+        with pytest.raises(ValueError, match=message):
+            verify_latent_use(*args)
+    with pytest.raises(ValueError):
+        receipt(cap, g, reason_code="has space", outcome="REFUSED", slots_injected=0, positions=[],
+                template_boundary_digest=None, mask_digest=None)                 # reason_code is an Ident
+
+
+def test_integers_are_bounded_to_digestable_range():
+    cap = capsule()
+    with pytest.raises(ValueError):
+        capsule(created_at=SAFE_INT + 1)
+    with pytest.raises(ValueError):
+        grant(cap, fence=SAFE_INT + 1)
+    assert len(digest(capsule(created_at=SAFE_INT))) == 64
 
 
 def test_existing_hosted_contracts_and_schema_export_unchanged():
