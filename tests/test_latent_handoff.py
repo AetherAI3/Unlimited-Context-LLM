@@ -9,7 +9,7 @@ pytest.importorskip("pydantic")
 from aether_context.contracts import NamespaceV1, digest  # noqa: E402
 from aether_context.contracts.latent_v1 import LatentCapsuleV1, verify_latent_use  # noqa: E402
 from aether_context.latent import handoff  # noqa: E402
-from aether_context.latent.tensor_codec import tensor_bytes  # noqa: E402
+from aether_context.latent.tensor_codec import TensorIntegrityError, load_tensor, tensor_bytes  # noqa: E402
 
 NS = NamespaceV1(owner_id="owner", project_id="prj", objective_id="obj", context_cycle_id="cyc-1")
 T0 = 1_700_000_000
@@ -32,8 +32,9 @@ def grant_for(cap, **over):
     return handoff.issue_grant(cap, **base)
 
 
-def reason(cap, grant, raw, now=T0 + 1, model=MODEL, adapter=ADAPTER, width=6):
-    return handoff.admission_reason(cap, grant, raw, model_id=model, adapter_id=adapter, width=width, now=now)
+def reason(cap, grant, raw, now=T0 + 1, model=MODEL, adapter=ADAPTER, width=6, **extra):
+    return handoff.admission_reason(cap, grant, raw, model_id=model, adapter_id=adapter, width=width, now=now,
+                                    **extra)
 
 
 def test_issue_grant_binds_same_model_pair():
@@ -117,3 +118,74 @@ def test_max_slots_bounds():
     with pytest.raises(ValueError):
         grant_for(cap, max_slots=5)
     assert grant_for(cap, max_slots=2).max_slots == 2
+
+
+def test_grant_exceeds_capsule():
+    cap, raw = make()
+    g = grant_for(cap).model_copy(update={"max_slots": 5})
+    assert reason(cap, g, raw) == "GRANT_EXCEEDS_CAPSULE"
+
+
+def test_forged_slots_claim_refused():
+    cap, raw = make()
+    forged = cap.model_copy(update={"slots": 8})
+    assert reason(forged, grant_for(forged), raw) == "TENSOR_SHAPE_MISMATCH"
+
+
+def test_forged_ref_shape_refused_without_raising():
+    cap, raw = make()
+    bad_ref = cap.tensor.model_copy(update={"shape": [5, 6]})  # 5*6*2 bytes != byte_count 48
+    forged = cap.model_copy(update={"tensor": bad_ref})
+    assert reason(forged, grant_for(forged), raw) == "TENSOR_SHAPE_MISMATCH"
+    with pytest.raises(TensorIntegrityError):
+        load_tensor(bad_ref, raw)
+
+
+def test_truncated_bytes_refused_by_admission():
+    cap, raw = make()
+    assert reason(cap, grant_for(cap), raw[:-1]) == "TENSOR_DIGEST_MISMATCH"
+
+
+def test_non_float_dtype_refused_before_loading():
+    cap, raw = make()
+    forged = cap.model_copy(update={"tensor": cap.tensor.model_copy(update={"dtype": "int8"})})
+    assert reason(forged, grant_for(forged), raw) == "TENSOR_DTYPE_UNSUPPORTED"
+
+
+def test_principal_mismatch():
+    cap, raw = make()
+    g = grant_for(cap)
+    assert reason(cap, g, raw, principal_id="receiver") is None
+    assert reason(cap, g, raw, principal_id="intruder") == "PRINCIPAL_MISMATCH"
+
+
+def test_stale_fence():
+    cap, raw = make()
+    g = grant_for(cap)
+    assert reason(cap, g, raw, current_fence=1) is None
+    assert reason(cap, g, raw, current_fence=2) == "STALE_FENCE"
+
+
+def test_reason_codes_listed_in_check_order():
+    assert handoff.REASON_CODES == (
+        "CAPSULE_NOT_GRANTED", "ANCHOR_MISMATCH", "NAMESPACE_MISMATCH", "RECIPIENT_MISMATCH", "PRINCIPAL_MISMATCH",
+        "STALE_FENCE", "SOURCE_MISMATCH", "GRANT_NOT_YET_VALID", "GRANT_EXPIRED", "GRANT_EXCEEDS_CAPSULE",
+        "TENSOR_DTYPE_UNSUPPORTED", "TENSOR_DIGEST_MISMATCH", "TENSOR_SHAPE_MISMATCH", "TENSOR_NONFINITE")
+
+
+def test_refused_receipt_rejects_unknown_reason():
+    cap, _ = make()
+    with pytest.raises(ValueError, match="reason"):
+        handoff.refused_receipt(grant_for(cap), receipt_id="r-3", model_id=MODEL, adapter_id=ADAPTER,
+                                reason_code="MADE_UP", used_at=T0 + 2)
+
+
+def test_injected_receipt_rejects_too_many_positions_and_wrong_recipient():
+    cap, _ = make()
+    g = grant_for(cap, max_slots=2)
+    common = dict(template_boundary_digest=digest("tpl"), mask_digest=digest("mask"), used_at=T0 + 1)
+    with pytest.raises(ValueError, match="positions"):
+        handoff.injected_receipt(g, receipt_id="r-4", model_id=MODEL, adapter_id=ADAPTER, positions=[1, 2, 3],
+                                 **common)
+    with pytest.raises(ValueError, match="recipient"):
+        handoff.injected_receipt(g, receipt_id="r-5", model_id=MODEL, adapter_id="other", positions=[1, 2], **common)

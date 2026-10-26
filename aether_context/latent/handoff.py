@@ -2,6 +2,9 @@
 
 NumPy + pydantic only. Binding is checked here (and again by ``verify_latent_use``);
 nothing is injected unless ``admission_reason`` returns ``None``.
+
+Grants are unsigned manifests in ``latent_v1``: who issued a grant must be established
+by the transport/authority layer, not here. ``policy_digest`` is carried, not evaluated.
 """
 
 from __future__ import annotations
@@ -12,7 +15,14 @@ import numpy as np
 
 from ..contracts import digest
 from ..contracts.latent_v1 import ContextHandoffGrantV1, LatentCapsuleV1, LatentUseReceiptV1
-from .tensor_codec import TensorIntegrityError, load_tensor
+from .tensor_codec import SUPPORTED_DTYPES, TensorIntegrityError, TensorShapeError, load_tensor
+
+# Every admission refusal code, in the order the checks run (first failure wins).
+REASON_CODES: tuple[str, ...] = (
+    "CAPSULE_NOT_GRANTED", "ANCHOR_MISMATCH", "NAMESPACE_MISMATCH", "RECIPIENT_MISMATCH", "PRINCIPAL_MISMATCH",
+    "STALE_FENCE", "SOURCE_MISMATCH", "GRANT_NOT_YET_VALID", "GRANT_EXPIRED", "GRANT_EXCEEDS_CAPSULE",
+    "TENSOR_DTYPE_UNSUPPORTED", "TENSOR_DIGEST_MISMATCH", "TENSOR_SHAPE_MISMATCH", "TENSOR_NONFINITE",
+)
 
 
 def issue_grant(
@@ -35,9 +45,13 @@ def issue_grant(
 
 def admission_reason(
     capsule: LatentCapsuleV1, grant: ContextHandoffGrantV1, tensor: bytes, *, model_id: str, adapter_id: str,
-    width: int, now: int,
+    width: int, now: int, principal_id: Optional[str] = None, current_fence: Optional[int] = None,
 ) -> Optional[str]:
-    """Return ``None`` when the receiver may inject, else the first failing reason code."""
+    """Return ``None`` when the receiver may inject, else the first failing reason code.
+
+    Never raises for a forged capsule or grant reference; ``principal_id`` and ``current_fence``
+    are checked only when supplied.
+    """
     if grant.capsule_digest != digest(capsule):
         return "CAPSULE_NOT_GRANTED"
     if grant.anchor_digest != capsule.anchor_digest:
@@ -46,6 +60,10 @@ def admission_reason(
         return "NAMESPACE_MISMATCH"
     if (grant.recipient_model_id, grant.recipient_adapter_id) != (model_id, adapter_id):
         return "RECIPIENT_MISMATCH"
+    if principal_id is not None and principal_id != grant.recipient_principal_id:
+        return "PRINCIPAL_MISMATCH"
+    if current_fence is not None and grant.fence != current_fence:
+        return "STALE_FENCE"
     if (capsule.source_model_id, capsule.source_adapter_id) != (model_id, adapter_id):
         return "SOURCE_MISMATCH"
     if now < grant.issued_at:
@@ -54,11 +72,15 @@ def admission_reason(
         return "GRANT_EXPIRED"
     if grant.max_slots > capsule.slots:
         return "GRANT_EXCEEDS_CAPSULE"
+    if capsule.tensor.dtype not in SUPPORTED_DTYPES:
+        return "TENSOR_DTYPE_UNSUPPORTED"
     try:
         values = load_tensor(capsule.tensor, tensor)
+    except TensorShapeError:
+        return "TENSOR_SHAPE_MISMATCH"
     except TensorIntegrityError:
         return "TENSOR_DIGEST_MISMATCH"
-    if values.ndim != 2 or values.shape[1] != width:
+    if values.ndim != 2 or values.shape[0] != capsule.slots or values.shape[1] != width:
         return "TENSOR_SHAPE_MISMATCH"
     if not np.isfinite(values).all():
         return "TENSOR_NONFINITE"
@@ -69,6 +91,10 @@ def injected_receipt(
     grant: ContextHandoffGrantV1, *, receipt_id: str, model_id: str, adapter_id: str, positions: list[int],
     template_boundary_digest: str, mask_digest: str, used_at: int,
 ) -> LatentUseReceiptV1:
+    if len(positions) > grant.max_slots:
+        raise ValueError("positions exceed the grant's max_slots")
+    if (model_id, adapter_id) != (grant.recipient_model_id, grant.recipient_adapter_id):
+        raise ValueError("receipt recipient does not match the grant's recipient")
     return LatentUseReceiptV1(
         receipt_id=receipt_id, namespace=grant.namespace, lane_id=grant.lane_id, grant_digest=digest(grant),
         capsule_digest=grant.capsule_digest, recipient_model_id=model_id, recipient_adapter_id=adapter_id,
@@ -82,6 +108,8 @@ def refused_receipt(
     grant: ContextHandoffGrantV1, *, receipt_id: str, model_id: str, adapter_id: str, reason_code: str,
     used_at: int, outcome: Literal["REFUSED", "NOT_RUN"] = "REFUSED",
 ) -> LatentUseReceiptV1:
+    if reason_code not in REASON_CODES:
+        raise ValueError(f"unknown reason_code {reason_code!r}")
     return LatentUseReceiptV1(
         receipt_id=receipt_id, namespace=grant.namespace, lane_id=grant.lane_id, grant_digest=digest(grant),
         capsule_digest=grant.capsule_digest, recipient_model_id=model_id, recipient_adapter_id=adapter_id,
@@ -90,4 +118,4 @@ def refused_receipt(
     )
 
 
-__all__ = ["issue_grant", "admission_reason", "injected_receipt", "refused_receipt"]
+__all__ = ["REASON_CODES", "issue_grant", "admission_reason", "injected_receipt", "refused_receipt"]

@@ -7,7 +7,7 @@ import pytest
 pytest.importorskip("pydantic")
 
 from aether_context.contracts import canonical  # noqa: E402
-from aether_context.latent.tensor_codec import TensorIntegrityError, load_tensor, tensor_bytes  # noqa: E402
+from aether_context.latent.tensor_codec import TensorIntegrityError, TensorShapeError, load_tensor, tensor_bytes  # noqa: E402
 
 
 @pytest.mark.parametrize("dtype", ["float16", "float32"])
@@ -43,6 +43,15 @@ def test_overflow_to_inf_rejected():
         tensor_bytes(np.array([[1e6]], np.float32), "float16")
 
 
-def test_unsupported_dtype():
+@pytest.mark.parametrize("dtype", ["bfloat16", "int8", "uint8"])
+def test_unsupported_dtype(dtype):
     with pytest.raises(ValueError, match="dtype"):
-        tensor_bytes(np.ones((1, 1), np.float32), "bfloat16")
+        tensor_bytes(np.ones((1, 1), np.float32), dtype)
+
+
+def test_shape_inconsistent_with_byte_count_refused():
+    ref, raw = tensor_bytes(np.ones((2, 3), np.float32), "float16")
+    forged = ref.model_copy(update={"shape": [5, 6]})
+    with pytest.raises(TensorShapeError, match="byte_count"):
+        load_tensor(forged, raw)
+    assert issubclass(TensorShapeError, TensorIntegrityError)

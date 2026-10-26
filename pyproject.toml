@@ -39,7 +39,7 @@ llamacpp = ["llama-cpp-python>=0.2"]
 hf       = ["transformers>=4.40", "torch>=2.2"]
 fast     = ["hnswlib>=0.8"]                # faster ANN; flat numpy index is the fallback
 hosted   = ["pydantic>=2.10,<3", "cryptography>=44,<51"]
-latent   = ["torch>=2.2", "transformers>=4.56", "pydantic>=2.10,<3"]   # learned soft-prefix handoff (W7)
+latent   = ["torch>=2.2", "transformers>=4.56", "pydantic>=2.10,<3"]   # learned soft-prefix handoff (W7); transformers>=4.56 for the dtype= loading kwarg
 all      = ["aether-context[llamacpp,hf,fast]"]
 dev      = ["pytest>=8", "pytest-cov", "ruff>=0.5", "mypy>=1.10", "pyyaml>=6", "aether-context[hosted]"]
 

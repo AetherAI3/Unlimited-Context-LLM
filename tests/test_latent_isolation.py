@@ -25,7 +25,8 @@ def test_core_never_imports_latent_or_torch():
 
 
 def test_latent_package_import_is_torch_free():
-    loaded = _modules_after(["aether_context.latent", "aether_context.latent.protocol"])
+    loaded = _modules_after(["aether_context.latent", "aether_context.latent.protocol", "aether_context.latent.tensor_codec",
+                            "aether_context.latent.handoff"])
     assert "torch" not in loaded and "transformers" not in loaded
 
 
