@@ -52,7 +52,7 @@ def test_name_pools_are_large_unique_disjoint_single_capitalised_words():
     assert not set(tasks.TRAIN_NAMES) & set(tasks.EVAL_NAMES)
     for name in (*tasks.TRAIN_NAMES, *tasks.EVAL_NAMES):
         assert name.isascii() and name.isalpha() and name[0].isupper() and name[1:].islower()
-        assert name.lower() not in _all_values()
+        assert all(v not in name.lower() for v in _all_values())  # no answer word inside a name
         assert name.lower() not in COMMON_NOUN_NAMES
 
 

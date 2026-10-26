@@ -73,7 +73,7 @@ YES_NO_CANDIDATES = ("Yes", "No")
 TRUE_CLAIMS_PER_DOC = 2  # of the 4 yes/no items per eval doc, exactly this many are true
 
 TRAIN_NAMES = (
-    "Aaron", "Abigail", "Adrian", "Agnes", "Alan", "Albert", "Alexa", "Alfred", "Alice", "Alina",
+    "Aaron", "Abigail", "Adrian", "Agnes", "Alan", "Albert", "Alexa", "Alice", "Alina",
     "Amelia", "Anders", "Andrei", "Angela", "Anika", "Anton", "Arjun", "Astrid", "Aurelio", "Axel",
     "Bastian", "Beatrice", "Benedict", "Bernard", "Bianca", "Birgit", "Bjorn", "Blanca", "Bruno",
     "Bertram", "Camila", "Carla", "Carmen", "Cecilia", "Cedric", "Celeste", "Charlotte",
@@ -98,7 +98,7 @@ TRAIN_NAMES = (
     "Selma", "Serena", "Sergei", "Silvia", "Simone", "Sofia", "Stefan", "Stella", "Svetlana",
     "Tamara", "Tariq", "Teodor", "Tessa", "Theo", "Theresa", "Thomas", "Tobias", "Tomas", "Trudy",
     "Ulrich", "Ulla", "Uri", "Ursula", "Valentin", "Valeria", "Vera", "Viktor", "Vincent",
-    "Vivian", "Vesna", "Walter", "Wanda", "Wendell", "Wilhelm", "Winifred", "Wolfram", "Xavier",
+    "Vivian", "Vesna", "Walter", "Wanda", "Wendell", "Wilhelm", "Wolfram", "Xavier",
     "Ximena", "Yasmin", "Yusuf", "Yolanda", "Yuri", "Zoltan", "Zora", "Zachary",
 )
 EVAL_NAMES = (
@@ -118,12 +118,12 @@ EVAL_NAMES = (
     "Paolo", "Pedro", "Penelope", "Percival", "Petr", "Phoebe", "Placido", "Prisca", "Radek",
     "Raimund", "Regina", "Rita", "Rodrigo", "Rosalie", "Rudolf", "Ruth", "Reza", "Saskia",
     "Sergio", "Silas", "Soren", "Sven", "Sybil", "Szilvia", "Samira", "Sandor", "Talia", "Tamsin",
-    "Tancred", "Teresa", "Tibor", "Tilda", "Timur", "Tristan", "Tove", "Udo", "Ugo", "Umar", "Una",
+    "Teresa", "Tibor", "Tilda", "Timur", "Tristan", "Tove", "Udo", "Ugo", "Umar", "Una",
     "Uwe", "Valentina", "Vasco", "Vlad", "Vigdis", "Veronika", "Wenzel", "Wilma", "Willa",
     "Wiktor", "Wojtek", "Yara", "Yvonne", "Yannick", "Yevgenia", "Zane", "Zdenek", "Zeno",
-    "Zinaida", "Zofia", "Zuzana", "Abel", "Ambrose", "Anatole", "Bela", "Benno", "Borys", "Cato",
+    "Zinaida", "Zofia", "Zuzana", "Abel", "Ambrose", "Anatole", "Bela", "Benno", "Borys",
     "Cyril", "Dennis", "Ellis", "Emmett", "Eskil", "Fabio", "Gerhard", "Gregoire", "Hubert",
-    "Idris", "Ilya", "Ismael", "Jerome", "Joris", "Kajetan", "Lazar", "Leandro", "Marek",
+    "Idris", "Ilya", "Ismael", "Joris", "Kajetan", "Lazar", "Leandro", "Marek",
     "Matthias", "Milo", "Nikita", "Orlando", "Ottokar", "Pierre", "Rainer", "Rasmus", "Reuben",
     "Stanislav", "Teodoro", "Ulf", "Viggo", "Waldemar", "Yaroslav", "Zacharias", "Zenon", "Aline",
     "Berta", "Dorota", "Elsa", "Hedy", "Inge", "Jana", "Lotte", "Magda", "Olivia",
@@ -132,6 +132,9 @@ EVAL_NAMES = (
 
 @dataclass(frozen=True)
 class Document:
+    """One record. Read-only; not picklable (``MappingProxyType``): pass it between processes
+    via ``to_json``/``from_json``."""
+
     doc_id: str
     name: str
     values: Mapping[str, str]
