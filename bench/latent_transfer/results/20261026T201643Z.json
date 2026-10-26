@@ -1,0 +1,253 @@
+{
+  "arm_means": {
+    "unseen_template": {
+      "blank": 0.095,
+      "mismatched": 0.05625,
+      "no_prefix": 0.11,
+      "paired": 0.5475,
+      "shuffled": 0.1125,
+      "text_context": 0.995
+    },
+    "yes_no": {
+      "blank": 0.50625,
+      "mismatched": 0.51125,
+      "no_prefix": 0.4875,
+      "paired": 0.49625,
+      "shuffled": 0.495,
+      "text_context": 0.99875
+    }
+  },
+  "bootstrap_seed": 0,
+  "config": {
+    "batch_size": 4,
+    "d_attn": 512,
+    "dataset_seed": 20261025,
+    "fence": 1,
+    "grant_ttl": 300,
+    "lane_id": "l7-latent-transfer",
+    "lr": 0.001,
+    "model_ref": "Qwen/Qwen2.5-0.5B-Instruct",
+    "model_revision": "7ae557604adf67be50417f59c2c2f167def9a775",
+    "n_eval": 200,
+    "n_train": 2000,
+    "policy": "g-w7-bench/v1",
+    "receiver_principal": "l7-receiver",
+    "score_batch": 16,
+    "sender_layer": null,
+    "sender_principal": "l7-sender",
+    "slots": 8,
+    "steps": 3000,
+    "storage_dtype": "float16",
+    "system": "Answer with a single word.",
+    "train_seed": 0
+  },
+  "cost": {
+    "capsule_bytes_per_handoff": 14336.0,
+    "device_info": {
+      "cpu_count": 12,
+      "cuda_used": false,
+      "device": "cpu",
+      "numpy": "2.3.2",
+      "platform": "Windows-10-10.0.19045-SP0",
+      "processor": "Intel64 Family 6 Model 158 Stepping 10, GenuineIntel",
+      "python": "3.13.5",
+      "torch": "2.12.1+cpu",
+      "torch_threads": 6,
+      "transformers": "4.57.6"
+    },
+    "flops": {
+      "encode_sender": 11844280118528,
+      "evaluate": {
+        "blank": 43981809982464,
+        "mismatched": 43981809982464,
+        "no_prefix": 34819618315264,
+        "paired": 43981809982464,
+        "shuffled": 43981809982464,
+        "text_context": 75322231854080
+      },
+      "evaluate_total": 286069090099200,
+      "total_incl_training": 965256755106304,
+      "train": 619599060951552,
+      "train_sender": 47744323937024
+    },
+    "mean_receiver_tokens_per_item": {
+      "paired": 38.0225,
+      "text_context": 65.3875
+    },
+    "peak_rss_bytes": {
+      "encode": 2619879424,
+      "evaluate": 2653900800,
+      "prepare": 2478403584,
+      "train": 3183943680
+    },
+    "scored_capsule_uses": 6400,
+    "training_flops_amortised_per_capsule_use": 104272403888.84,
+    "wall_s": {
+      "encode": 145.71420030016452,
+      "evaluate": 1222.557330999989,
+      "prepare": 14.214692499954253,
+      "total": 5334.915689600166,
+      "train": 3952.429465800058
+    }
+  },
+  "diffs": {
+    "unseen_template": {
+      "paired-blank": {
+        "hi": 0.4737812499999998,
+        "lo": 0.43125,
+        "mean": 0.4525,
+        "n": 200
+      },
+      "paired-mismatched": {
+        "hi": 0.5025,
+        "lo": 0.47996875,
+        "mean": 0.49125,
+        "n": 200
+      },
+      "paired-no_prefix": {
+        "hi": 0.4637812499999998,
+        "lo": 0.40875,
+        "mean": 0.4375,
+        "n": 200
+      },
+      "paired-shuffled": {
+        "hi": 0.4525,
+        "lo": 0.415,
+        "mean": 0.435,
+        "n": 200
+      },
+      "text_context-paired": {
+        "hi": 0.465,
+        "lo": 0.42875,
+        "mean": 0.4475,
+        "n": 200
+      }
+    },
+    "yes_no": {
+      "paired-blank": {
+        "hi": 0.0275,
+        "lo": -0.0475,
+        "mean": -0.01,
+        "n": 200
+      },
+      "paired-mismatched": {
+        "hi": 0.0075,
+        "lo": -0.03875,
+        "mean": -0.015,
+        "n": 200
+      },
+      "paired-no_prefix": {
+        "hi": 0.04375,
+        "lo": -0.02625,
+        "mean": 0.00875,
+        "n": 200
+      },
+      "paired-shuffled": {
+        "hi": 0.02503124999999983,
+        "lo": -0.0225,
+        "mean": 0.00125,
+        "n": 200
+      },
+      "text_context-paired": {
+        "hi": 0.5262812499999998,
+        "lo": 0.47875,
+        "mean": 0.5025,
+        "n": 200
+      }
+    }
+  },
+  "digests": {
+    "adapter_id": "hf-soft-prefix@9e1fa4b4b95ef4a4",
+    "base": "916cea2ea000b2a2b701ac9cac8993229c5db09554c0e63e2bf6f3c3008f9762",
+    "codebook": "9e1fa4b4b95ef4a444d9654c2394307823263e7ea45eda75cc9b4082a57c4e8d",
+    "dataset": "f64b64338ada8ae08b711c4111d48eb188bcf242afb3f4d16fbdc898e37dc0c8"
+  },
+  "follow": {
+    "unseen_template": {
+      "mismatched": {
+        "hi": 0.57,
+        "lo": 0.53625,
+        "mean": 0.5525,
+        "n": 200
+      },
+      "shuffled": {
+        "hi": 0.58125,
+        "lo": 0.5475,
+        "mean": 0.56375,
+        "n": 200
+      }
+    },
+    "yes_no": {
+      "mismatched": {
+        "hi": 0.23875,
+        "lo": 0.18496875,
+        "mean": 0.21125,
+        "n": 200
+      },
+      "shuffled": {
+        "hi": 0.26625,
+        "lo": 0.20875,
+        "mean": 0.2375,
+        "n": 200
+      }
+    }
+  },
+  "generated_utc": "2026-10-26T20:16:43Z",
+  "integrity": {
+    "H4": true,
+    "anchors_verified": 200,
+    "base_digests": {
+      "encode": "916cea2ea000b2a2b701ac9cac8993229c5db09554c0e63e2bf6f3c3008f9762",
+      "evaluate": "916cea2ea000b2a2b701ac9cac8993229c5db09554c0e63e2bf6f3c3008f9762",
+      "train_after": "916cea2ea000b2a2b701ac9cac8993229c5db09554c0e63e2bf6f3c3008f9762",
+      "train_before": "916cea2ea000b2a2b701ac9cac8993229c5db09554c0e63e2bf6f3c3008f9762"
+    },
+    "checks": {
+      "anchors_verified": true,
+      "base_digest_unchanged": true,
+      "every_scored_use_injected": true,
+      "probe_count_complete": true,
+      "probes_all_matched": true,
+      "receipts_log_matches": true,
+      "receipts_reverified_from_artifacts": true,
+      "same_adapter": true
+    },
+    "n_eval_docs": 200,
+    "probes_matched": 140,
+    "probes_total": 140,
+    "receipts_injected": 6400,
+    "receipts_logged_injected": 6400,
+    "receipts_reverified": 6400,
+    "receipts_verified": 6400
+  },
+  "margin": 0.1,
+  "pins": {
+    "git": {
+      "dirty": false,
+      "head": "c802a3cba6b615d8b2695155e52ec7119e5cfd97"
+    },
+    "model_ref": "Qwen/Qwen2.5-0.5B-Instruct",
+    "model_revision": "7ae557604adf67be50417f59c2c2f167def9a775"
+  },
+  "resamples": 2000,
+  "run_id": "g-w7-confirm-2",
+  "tie_rates": {
+    "blank": 0.0,
+    "mismatched": 0.0,
+    "no_prefix": 0.0,
+    "paired": 0.0,
+    "shuffled": 0.0,
+    "text_context": 0.0
+  },
+  "train_loss": {
+    "first": 3.252473473548889,
+    "last": 0.6203180313110351,
+    "steps": 3000
+  },
+  "verdicts": {
+    "H1": true,
+    "H2": false,
+    "H4": true,
+    "overall": "SUPPORTED"
+  }
+}
