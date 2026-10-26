@@ -30,5 +30,6 @@ class NativeMemoryLLM(Protocol):
 
     def receive(
         self, capsule: "LatentCapsuleV1", grant: "ContextHandoffGrantV1", tensor: bytes, prompt: str, *,
-        receipt_id: str, now: int, max_tokens: int = 32,
+        receipt_id: str, now: int, max_tokens: int = 32, principal_id: Optional[str] = None,
+        current_fence: Optional[int] = None,
     ) -> "tuple[Optional[str], LatentUseReceiptV1]": ...

@@ -1171,6 +1171,10 @@ __all__ = ["TrainExample", "TrainStats", "train_projector"]
 
 ### Task 7: bench tasks + analysis (pure python, CI-tested)
 
+> Superseded in review: the shipped generator uses 249 train / 234 eval names (eval names unique per
+> document, none containing a value word), exactly 2 true and 2 false yes/no claims per document and
+> strict paired bootstraps. `bench/latent_transfer/tasks.py` and `PREREGISTRATION.md` are normative.
+
 **Files:** Create `bench/latent_transfer/__init__.py` (one-line docstring), `bench/latent_transfer/tasks.py`, `bench/latent_transfer/analysis.py`, `tests/test_latent_bench_tasks.py`, `tests/test_latent_bench_analysis.py`.
 
 `tasks.py` normative constants (must match PREREGISTRATION.md):
@@ -1219,6 +1223,9 @@ Tests (`pytest.importorskip("pydantic")`): deterministic for one seed, different
 ---
 
 ### Task 8: timing pilot, then PREREGISTRATION.md (committed before any result)
+
+> Done after Task 9 in practice: the run CLI was written and reviewed first, then the preregistration
+> was committed alone (4918fc8) before any confirmatory result.
 
 Pilot (train split only; no eval doc is encoded and no eval arm is scored): seconds per training step at the chosen batch and per scoring batch on the real model. Fix sample sizes and steps so the full run fits about 3 h of CPU; record pilot numbers in the prereg. Write `bench/latent_transfer/PREREGISTRATION.md` (question, model + pin, generator + seed, arms, controls, families, metric, sample size, training budget, analysis, H1/H2 promotion rules, integrity probes, cost accounting, deviations policy). Commit alone: `docs(bench): preregister latent-transfer experiment (G-W7)`.
 

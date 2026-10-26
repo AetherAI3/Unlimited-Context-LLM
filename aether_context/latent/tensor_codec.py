@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import math
+from typing import cast
 
 import numpy as np
 
-from ..contracts.latent_v1 import TensorRefV1
+from ..contracts.latent_v1 import Dtype, TensorRefV1
 
 # Soft-prefix capsules are float tensors. The contract also allows bfloat16 (no NumPy dtype)
 # and int8/uint8 (would need a codebook/dequant path that does not exist), so none are emitted
@@ -34,7 +35,7 @@ def tensor_bytes(array: np.ndarray, dtype: str = "float32") -> tuple[TensorRefV1
     if not np.isfinite(arr).all():
         raise ValueError("tensor values must be finite in the storage dtype")
     raw = arr.tobytes(order="C")
-    ref = TensorRefV1(digest=hashlib.sha256(raw).hexdigest(), dtype=dtype,
+    ref = TensorRefV1(digest=hashlib.sha256(raw).hexdigest(), dtype=cast(Dtype, dtype),
                       shape=[int(d) for d in arr.shape], byte_count=len(raw))
     return ref, raw
 
