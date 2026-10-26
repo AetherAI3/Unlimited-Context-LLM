@@ -73,3 +73,19 @@ def test_write_new_json_never_overwrites(tmp_path):
     first = report.write_new_json(tmp_path, "20260101T000000Z", {"a": 1})
     second = report.write_new_json(tmp_path, "20260101T000000Z", {"a": 2})
     assert first != second and first.read_text(encoding="utf-8") != second.read_text(encoding="utf-8")
+
+
+def test_overall_verdict_follows_the_preregistered_rule():
+    assert report.overall_verdict(True, False, True) == "SUPPORTED"
+    assert report.overall_verdict(True, True, True) == "SUPPORTED, including the unseen task family"
+    assert report.overall_verdict(True, True, False) == "NOT SUPPORTED"
+    assert report.overall_verdict(False, True, True) == "NOT SUPPORTED"
+
+
+def test_check_phase_agreement_rejects_drift():
+    base = {"steps": 10, "lr": 0.001, "batch_size": 4, "train_seed": 0, "n_eval": 3}
+    same = {p: {"config": dict(base)} for p in ("prepare", "train", "encode", "evaluate")}
+    assert report.check_phase_agreement(same)["steps"] == 10
+    drifted = dict(same, evaluate={"config": dict(base, steps=11)})
+    with pytest.raises(RuntimeError, match="different configs"):
+        report.check_phase_agreement(drifted)

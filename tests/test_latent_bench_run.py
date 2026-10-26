@@ -40,7 +40,7 @@ def finished(tmp_path_factory):
     run.prepare(run_dir, CONFIG, factory, check_tokens=False)
     run.train(run_dir, CONFIG, factory)
     run.encode(run_dir, CONFIG, factory)
-    evaluate(run_dir, CONFIG, factory)
+    evaluate(run_dir, CONFIG, factory, check_tokens=False)
     results = run.run_phase("report", run_dir, CONFIG, factory, results_dir=root / "results",
                             report_path=root / "REPORT.md")
     return {"root": root, "run_dir": run_dir, "report": results}
@@ -100,9 +100,9 @@ def test_every_injected_receipt_verified(finished):
 
 def test_report_has_verdicts_and_markdown(finished):
     res = finished["report"]
-    assert set(res["verdicts"]) == {"H1", "H2", "H4"} and res["verdicts"]["H4"] is True
+    assert set(res["verdicts"]) == {"H1", "H2", "H4", "overall"} and res["verdicts"]["H4"] is True
     stored = json.loads(Path(res["results_path"]).read_text(encoding="utf-8"))
-    assert set(stored["verdicts"]) == {"H1", "H2", "H4"} and stored["pins"]["model_revision"] == "0"
+    assert set(stored["verdicts"]) == {"H1", "H2", "H4", "overall"} and stored["pins"]["model_revision"] == "0"
     assert stored["cost"]["flops"]["total_incl_training"] > 0
     md = (finished["root"] / "REPORT.md").read_bytes().decode("utf-8")
     assert "## Interpretation" in md and "H1" in md
@@ -118,7 +118,7 @@ def test_report_refuses_to_overwrite_report(finished):
 
 def test_evaluate_needs_only_receiver_files(finished, tmp_path):
     view = receiver_copy(finished["run_dir"], tmp_path / "recv")
-    ev = evaluate(view, CONFIG, factory)
+    ev = evaluate(view, CONFIG, factory, check_tokens=False)
     assert ev["receipts_injected"] == ev["receipts_verified"]
     assert not (view / "dataset.json").exists()
 
@@ -130,7 +130,7 @@ def test_scored_arm_refusal_aborts(finished, tmp_path):
     raw = target.read_bytes()
     target.write_bytes(bytes([raw[0] ^ 1]) + raw[1:])
     with pytest.raises(EvaluationAbort, match="TENSOR_DIGEST_MISMATCH"):
-        evaluate(view, CONFIG, factory)
+        evaluate(view, CONFIG, factory, check_tokens=False)
 
 
 def test_later_phase_rejects_drifted_config(finished):
@@ -152,3 +152,26 @@ def test_cli_rejects_unknown_config_keys_and_parses_overrides():
     args = run._parser().parse_args(["train", "--run-id", "x", "--steps", "5", "--lr", "0.5", "--n-eval", "9",
                                       "--batch-size", "8"])
     assert run._overrides(args) == {"steps": 5, "lr": 0.5, "n_eval": 9, "batch_size": 8}
+
+
+def test_evaluate_aborts_on_colliding_candidate_tokens(finished, tmp_path):
+    view = receiver_copy(finished["run_dir"], tmp_path / "recv")
+    with pytest.raises(EvaluationAbort, match="collide"):
+        evaluate(view, CONFIG, factory)
+
+
+def test_report_reverifies_every_receipt_from_saved_grants(finished):
+    integ = finished["report"]["integrity"]
+    assert integ["receipts_reverified"] == N_EVAL * ITEMS_PER_DOC * 4
+    assert integ["checks"]["receipts_reverified_from_artifacts"]
+    assert finished["report"]["verdicts"]["overall"] in {
+        "SUPPORTED", "SUPPORTED, including the unseen task family", "NOT SUPPORTED"}
+    grants = read_jsonl(finished["run_dir"] / "grants.jsonl")
+    assert len(grants) == len(read_jsonl(finished["run_dir"] / "receipts.jsonl"))
+
+
+def test_all_refuses_a_non_empty_run_dir(finished, tmp_path):
+    root = finished["run_dir"].parent
+    code = run.main(["all", "--run-id", finished["run_dir"].name, f"--runs-root={root}",
+                     f"--report-path={tmp_path / 'R.md'}", f"--results-dir={tmp_path / 'res'}"])
+    assert code == 2

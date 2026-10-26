@@ -36,6 +36,7 @@ from bench.latent_transfer.common import (
     chunks,
     first_token,
     flop_pair,
+    load_pinned_model,
     open_text,
     phase_record,
     read_json,
@@ -53,11 +54,11 @@ CONFIG: dict[str, Any] = {
     "sender_layer": None,
     "system": "Answer with a single word.",
     "storage_dtype": "float16",
-    "steps": 800,
-    "batch_size": 16,
+    "steps": 3000,
+    "batch_size": 4,
     "lr": 1e-3,
     "train_seed": 0,
-    "score_batch": 32,
+    "score_batch": 16,
     "grant_ttl": 300,
     "lane_id": "l7-latent-transfer",
     "fence": 1,
@@ -82,8 +83,9 @@ def make_config(**overrides: Any) -> dict[str, Any]:
 def default_backend_factory(config: dict[str, Any]) -> Any:
     from aether_context.latent.hf_soft_prefix import HFSoftPrefixBackend
 
-    return HFSoftPrefixBackend.from_pretrained(
-        config["model_ref"], revision=config["model_revision"], slots=config["slots"],
+    model, tok = load_pinned_model(config["model_ref"], config["model_revision"])
+    return HFSoftPrefixBackend(
+        model, tok, model_id=f"{config['model_ref']}@{config['model_revision']}", slots=config["slots"],
         d_attn=config["d_attn"], sender_layer=config["sender_layer"], system=config["system"],
         storage_dtype=config["storage_dtype"])
 
@@ -236,6 +238,15 @@ def _overrides(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _run_all(args: argparse.Namespace) -> int:
+    """Run every phase as its own process; refuse up front what would only fail hours later."""
+    run_dir = args.runs_root / args.run_id
+    if run_dir.exists() and any(run_dir.iterdir()):
+        print(f"{run_dir} is not empty; a restart needs a new --run-id (record it in REPORT.md)",
+              file=sys.stderr)
+        return 2
+    if args.report_path.exists():
+        print(f"{args.report_path} exists; move it or pass --report-path", file=sys.stderr)
+        return 2
     flags = [f"--{k.replace('_', '-')}={v}" for k, v in _overrides(args).items()]
     flags += [f"--runs-root={args.runs_root}", f"--results-dir={args.results_dir}",
               f"--report-path={args.report_path}"]

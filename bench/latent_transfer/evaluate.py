@@ -26,6 +26,7 @@ from bench.latent_transfer import cost
 from bench.latent_transfer.common import (
     ARMS,
     ARMS_CAPSULE,
+    PROBE_DOCS,
     BackendFactory,
     append_jsonl,
     chunks,
@@ -37,7 +38,6 @@ from bench.latent_transfer.common import (
     write_json,
 )
 
-PROBE_DOCS = 20
 RECEIVER_FILES = frozenset({"questions.json", "anchors.json", "capsule_index.json", "projector.pt"})
 RECEIVER_DIRS = frozenset({"capsules"})
 PROBE_EXPECTED = {
@@ -96,10 +96,11 @@ class CapsuleStore:
 class Run:
     """Per-call state: backend, config-derived constants and the receipts log."""
 
-    def __init__(self, backend: Any, config: dict[str, Any], receipts_fh: Any) -> None:
+    def __init__(self, backend: Any, config: dict[str, Any], receipts_fh: Any, grants_fh: Any) -> None:
         self.backend = backend
         self.config = config
         self.receipts_fh = receipts_fh
+        self.grants_fh = grants_fh
         self.adapter_id = backend.adapter_id
         self.policy_digest = digest({"policy": config["policy"]})
         self.injected = 0
@@ -119,6 +120,7 @@ class Run:
         kw.setdefault("adapter_id", self.adapter_id)  # cached: the projector is fixed in this phase
         adm = self.backend.admit(capsule, grant, raw, question, receipt_id=receipt_id, now=now, **kw)
         append_jsonl(self.receipts_fh, adm.receipt.model_dump(mode="json"))
+        append_jsonl(self.grants_fh, {"receipt_id": receipt_id, "grant": grant.model_dump(mode="json")})
         return adm
 
 
@@ -214,8 +216,8 @@ def _score_arm(run: Run, arm: str, questions: list[dict[str, Any]], build: Calla
             "flops": cost.forward_flops(blocks, head, n_tokens, len(questions))}
 
 
-def evaluate(run_dir: Path, config: dict[str, Any], backend_factory: BackendFactory | None = None,
-             ) -> dict[str, Any]:
+def evaluate(run_dir: Path, config: dict[str, Any], backend_factory: BackendFactory | None = None, *,
+             check_tokens: bool = True) -> dict[str, Any]:
     from bench.latent_transfer.run import default_backend_factory
 
     t0 = time.perf_counter()
@@ -226,6 +228,9 @@ def evaluate(run_dir: Path, config: dict[str, Any], backend_factory: BackendFact
     store = CapsuleStore(view)
     tok = backend.tokenizer
     token_ids = {c: first_token(tok, c) for q in questions for c in q["candidates"]}
+    for q in questions if check_tokens else ():  # prepare checks too; the receiver cannot read prepare.json
+        if len({token_ids[c] for c in q["candidates"]}) != len(q["candidates"]):
+            raise EvaluationAbort(f"candidate first tokens collide for {q['item_id']}")
     layouts: dict[str, int] = {}
 
     def layout_len(q: dict[str, Any]) -> int:
@@ -236,9 +241,11 @@ def evaluate(run_dir: Path, config: dict[str, Any], backend_factory: BackendFact
 
     arm_stats: dict[str, Any] = {}
     anchors_verified = 0
-    with open_text(run_dir / "items.jsonl") as rows_fh, open_text(run_dir / "receipts.jsonl") as receipts_fh:
-        run = Run(backend, config, receipts_fh)
+    with open_text(run_dir / "items.jsonl") as rows_fh, open_text(run_dir / "receipts.jsonl") as receipts_fh, \
+            open_text(run_dir / "grants.jsonl") as grants_fh:
+        run = Run(backend, config, receipts_fh, grants_fh)
         probes = run_probes(run, store, index, questions)
+        anchors_verified = verify_anchors(store, index, anchors)  # before any arm is scored
         for arm in ARMS:
             if arm in ARMS_CAPSULE:
                 def build(q: dict[str, Any], arm: str = arm) -> tuple:
@@ -248,8 +255,6 @@ def evaluate(run_dir: Path, config: dict[str, Any], backend_factory: BackendFact
                 def build(q: dict[str, Any]) -> tuple:
                     return None, None, layout_len(q), None
             else:
-                anchors_verified = verify_anchors(store, index, anchors)
-
                 def build(q: dict[str, Any]) -> tuple:
                     ctx = anchors[q["doc_id"]]["text"]
                     n_ctx = len(tok(ctx + "\n\n", add_special_tokens=False).input_ids)

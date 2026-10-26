@@ -16,10 +16,19 @@ from typing import Any
 
 import numpy as np
 
+from aether_context.contracts.latent_v1 import (
+    ContextHandoffGrantV1,
+    LatentCapsuleV1,
+    LatentUseReceiptV1,
+    verify_latent_use,
+)
 from bench.latent_transfer import analysis, tasks
 from bench.latent_transfer.common import (
     ARMS,
     ARMS_CAPSULE,
+    PINNED_KEYS,
+    PROBE_DOCS,
+    TRAIN_KEYS,
     REPORT_PATH,
     RESULTS_DIR,
     BackendFactory,
@@ -36,13 +45,15 @@ RESAMPLES = 2000
 BOOT_SEED = 0
 ITEMS_PER_DOC = 4
 PROBES_PER_DOC = 7
-PROBE_DOCS = 20
 LOSS_WINDOW = 10
 CONTROLS = ("blank", "shuffled", "mismatched", "no_prefix")
 GATE_DIFFS = {f"paired-{c}": ("paired", c) for c in CONTROLS}
 DIFFS = GATE_DIFFS | {"text_context-paired": ("text_context", "paired")}
 FOLLOW_ARMS = ("shuffled", "mismatched")
-CostPhases = ("prepare", "train", "encode", "evaluate")
+COST_PHASES = ("prepare", "train", "encode", "evaluate")
+VERDICT_SUPPORTED = "SUPPORTED"
+VERDICT_SUPPORTED_UNSEEN_FAMILY = "SUPPORTED, including the unseen task family"
+VERDICT_NOT_SUPPORTED = "NOT SUPPORTED"
 
 
 def score_rows(rows: list[dict[str, Any]], ds: tasks.Dataset) -> list[dict[str, Any]]:
@@ -96,26 +107,68 @@ def analyse(records: list[dict[str, Any]]) -> dict[str, Any]:
     return {"arm_means": arm_means, "diffs": diffs, "follow": follow, "tie_rates": ties, "gate": gate}
 
 
+def overall_verdict(h1: bool, h2: bool, h4: bool) -> str:
+    """Preregistration section 6: H1 and H4 support the claim; H2 extends it to the unseen family."""
+    if h1 and h4:
+        return VERDICT_SUPPORTED_UNSEEN_FAMILY if h2 else VERDICT_SUPPORTED
+    return VERDICT_NOT_SUPPORTED
+
+
+def check_phase_agreement(records: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
+    """Every phase must have run with the same dataset, model pair and training settings."""
+    keys = (*PINNED_KEYS, *TRAIN_KEYS)
+    configs = {phase: rec["config"] for phase, rec in records.items()}
+    drift = {k: {p: c.get(k) for p, c in configs.items()} for k in keys
+             if len({repr(c.get(k)) for c in configs.values()}) > 1}
+    if drift:
+        raise RuntimeError(f"phases ran with different configs: {drift}")
+    return dict(configs["train"])
+
+
+def reverify_receipts(run_dir: Path, rows: list[dict[str, Any]]) -> dict[str, int]:
+    """Re-run ``verify_latent_use`` for every INJECTED receipt from the saved grants and capsule
+    manifests, and check that every capsule-arm item row points at one of those receipts."""
+    grants = {g["receipt_id"]: g["grant"] for g in read_jsonl(run_dir / "grants.jsonl")}
+    injected: set[str] = set()
+    for rec in read_jsonl(run_dir / "receipts.jsonl"):
+        if rec["outcome"] != "INJECTED":
+            continue
+        grant = ContextHandoffGrantV1.model_validate(grants[rec["receipt_id"]])
+        manifest = (run_dir / "capsules" / f"{rec['capsule_digest']}.json").read_text(encoding="utf-8")
+        verify_latent_use(LatentCapsuleV1.model_validate_json(manifest), grant,
+                          LatentUseReceiptV1.model_validate(rec))
+        injected.add(rec["receipt_id"])
+    scored = [r for r in rows if r["arm"] in ARMS_CAPSULE]
+    unbound = [r["item_id"] for r in scored if r["receipt_id"] not in injected]
+    if unbound:
+        raise RuntimeError(f"capsule-arm rows without an INJECTED receipt: {unbound[:5]}")
+    return {"reverified": len(injected), "scored_rows_bound": len(scored)}
+
+
 def integrity(train: Mapping[str, Any], encode: Mapping[str, Any], ev: Mapping[str, Any],
-              receipts_path: Path) -> dict[str, Any]:
+              receipts_path: Path, n_eval_docs: int, n_items: int, rechecked: Mapping[str, int],
+              ) -> dict[str, Any]:
     probes = ev["probes"]
     logged = sum(1 for r in read_jsonl(receipts_path) if r["outcome"] == "INJECTED")
     digests = {"train_before": train["base_digest_before"], "train_after": train["base_digest_after"],
                "encode": encode["base_digest"], "evaluate": ev["base_digest"]}
-    expected_injected = ev["n_items"] * len(ARMS_CAPSULE)
+    expected_injected = n_items * len(ARMS_CAPSULE)
     checks = {
         "probes_all_matched": bool(probes) and all(p["matched"] for p in probes),
-        "probe_count_complete": len(probes) == PROBES_PER_DOC * min(PROBE_DOCS, ev["n_eval_docs"]),
-        "every_injected_receipt_verified": ev["receipts_injected"] == ev["receipts_verified"] == expected_injected,
+        "probe_count_complete": len(probes) == PROBES_PER_DOC * min(PROBE_DOCS, n_eval_docs),
+        "every_scored_use_injected": ev["receipts_injected"] == expected_injected,
+        "receipts_reverified_from_artifacts": rechecked["reverified"] == expected_injected
+        and rechecked["scored_rows_bound"] == expected_injected,
         "receipts_log_matches": logged == ev["receipts_injected"],
-        "anchors_verified": ev["anchors_verified"] == ev["n_eval_docs"],
+        "anchors_verified": ev["anchors_verified"] == n_eval_docs,
         "base_digest_unchanged": len(set(digests.values())) == 1,
         "same_adapter": train["adapter_id"] == encode["adapter_id"] == ev["adapter_id"],
     }
     return {"checks": checks, "base_digests": digests, "probes_total": len(probes),
             "probes_matched": sum(p["matched"] for p in probes), "receipts_injected": ev["receipts_injected"],
             "receipts_verified": ev["receipts_verified"], "receipts_logged_injected": logged,
-            "anchors_verified": ev["anchors_verified"], "n_eval_docs": ev["n_eval_docs"],
+            "anchors_verified": ev["anchors_verified"], "n_eval_docs": n_eval_docs,
+            "receipts_reverified": rechecked["reverified"],
             "H4": all(checks.values())}
 
 
@@ -171,9 +224,9 @@ def _cost_rows(c: Mapping[str, Any]) -> list[str]:
     fl, w, rss, tok = c["flops"], c["wall_s"], c["peak_rss_bytes"], c["mean_receiver_tokens_per_item"]
     amort = c["training_flops_amortised_per_capsule_use"]
     rows = [
-        ("wall s (prepare / train / encode / evaluate)", " / ".join(f"{w[p]:.1f}" for p in CostPhases)),
+        ("wall s (prepare / train / encode / evaluate)", " / ".join(f"{w[p]:.1f}" for p in COST_PHASES)),
         ("wall s total", f"{w['total']:.1f}"),
-        ("peak RSS bytes (prepare / train / encode / evaluate)", " / ".join(str(rss[p]) for p in CostPhases)),
+        ("peak RSS bytes (prepare / train / encode / evaluate)", " / ".join(str(rss[p]) for p in COST_PHASES)),
         ("FLOPs sender during training (est.)", f"{fl['train_sender']:.3e}"),
         ("FLOPs training (est.)", f"{fl['train']:.3e}"),
         ("FLOPs encode, sender (est.)", f"{fl['encode_sender']:.3e}"),
@@ -208,6 +261,7 @@ def render_markdown(res: Mapping[str, Any]) -> str:
     for fam, d in res["diffs"].items():
         lines += _ci_rows(fam, d)
     lines += ["", "## Hypotheses", "",
+              f"**Overall: {v['overall']}**", "",
               f"Promotion margin: lower CI bound of every paired-minus-control difference >= {MARGIN}.", "",
               f"- H1 (unseen question phrasings): **{'PASS' if v['H1'] else 'FAIL'}**",
               f"- H2 (unseen yes/no task family): **{'PASS' if v['H2'] else 'FAIL'}**",
@@ -219,7 +273,8 @@ def render_markdown(res: Mapping[str, Any]) -> str:
     lines += ["", "## Integrity", "", "| check | result |", "|---|---|",
               *[f"| {k} | {'ok' if ok else 'FAILED'} |" for k, ok in integ["checks"].items()], "",
               f"{integ['probes_matched']}/{integ['probes_total']} probes refused with the expected code; "
-              f"{integ['receipts_verified']}/{integ['receipts_injected']} injected receipts verified; "
+              f"{integ['receipts_reverified']}/{integ['receipts_injected']} injected receipts re-verified "
+              "from saved grants and manifests; "
               f"{integ['anchors_verified']}/{integ['n_eval_docs']} anchors verified.", "",
               "## Cost", "", "| item | value |", "|---|---|", *_cost_rows(res["cost"])]
     di = res["cost"]["device_info"]
@@ -238,24 +293,29 @@ def report(run_dir: Path, config: dict[str, Any], backend_factory: BackendFactor
     if report_path.exists():
         raise FileExistsError(f"{report_path} exists; pass another --report-path or move it first")
     prepared, train, encode, ev = (read_json(run_dir / f"{p}.json") for p in ("prepare", "train", "encode", "evaluate"))
+    # The report's own CLI flags do not matter: the recorded config is the one every phase ran with.
+    config = check_phase_agreement({"prepare": prepared, "train": train, "encode": encode, "evaluate": ev})
     ds = tasks.from_json(read_json(run_dir / "dataset.json"))
     if tasks.dataset_digest(ds) != prepared["dataset_digest"]:
         raise RuntimeError("dataset.json does not match the digest recorded by prepare")
-    res = analyse(score_rows(read_jsonl(run_dir / "items.jsonl"), ds))
+    rows = read_jsonl(run_dir / "items.jsonl")
+    res = analyse(score_rows(rows, ds))
     gate = res.pop("gate")
-    integ = integrity(train, encode, ev, run_dir / "receipts.jsonl")
+    integ = integrity(train, encode, ev, run_dir / "receipts.jsonl", len(ds.eval_docs), len(ds.eval_items),
+                      reverify_receipts(run_dir, rows))
+    h1, h2 = analysis.verdict(gate["unseen_template"], MARGIN), analysis.verdict(gate["yes_no"], MARGIN)
     res.update(
-        verdicts={"H1": analysis.verdict(gate["unseen_template"], MARGIN),
-                  "H2": analysis.verdict(gate["yes_no"], MARGIN), "H4": integ["H4"]},
+        verdicts={"H1": h1, "H2": h2, "H4": integ["H4"], "overall": overall_verdict(h1, h2, integ["H4"])},
         integrity=integ, cost=cost_block(prepared, train, encode, ev), train_loss=_loss_summary(train),
         generated_utc=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), run_id=run_dir.name, config=config,
         margin=MARGIN, resamples=RESAMPLES, bootstrap_seed=BOOT_SEED,
         pins={"model_ref": config["model_ref"], "model_revision": config["model_revision"], "git": git_pin()},
         digests={"dataset": prepared["dataset_digest"], "codebook": train["codebook_digest"],
                  "adapter_id": train["adapter_id"], "base": train["base_digest_before"]})
+    markdown = render_markdown(res)  # render before creating any file, so a failure leaves nothing behind
     path = write_new_json(results_dir, time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()), res)
     with open_text(report_path, "x") as fh:
-        fh.write(render_markdown(res))
+        fh.write(markdown)
     record = phase_record("report", config, time.perf_counter() - t0, results_path=str(path),
                           report_path=str(report_path), verdicts=res["verdicts"])
     write_json(run_dir / "report.json", record)

@@ -17,10 +17,13 @@ BENCH_DIR = Path(__file__).resolve().parent
 RUNS_ROOT = BENCH_DIR / "runs"
 RESULTS_DIR = BENCH_DIR / "results"
 REPORT_PATH = BENCH_DIR / "REPORT.md"
-ARMS_CAPSULE =("paired", "blank", "shuffled", "mismatched")
+ARMS_CAPSULE = ("paired", "blank", "shuffled", "mismatched")
+PROBE_DOCS = 20  # integrity probes run on the first PROBE_DOCS evaluation documents
 ARMS = (*ARMS_CAPSULE, "no_prefix", "text_context")
 BackendFactory = Callable[[dict[str, Any]], Any]
 
+# Training settings every phase record must agree on (checked by the report phase).
+TRAIN_KEYS = ("steps", "batch_size", "lr", "train_seed")
 # Config keys that fix the dataset and the model pair; every phase after ``prepare`` must agree.
 PINNED_KEYS = (
     "model_ref", "model_revision", "dataset_seed", "n_train", "n_eval", "slots", "d_attn",
@@ -93,6 +96,45 @@ def flop_pair(backend: Any) -> tuple[int, int]:
 def chunks(items: list[Any], size: int) -> Iterable[list[Any]]:
     for i in range(0, len(items), size):
         yield items[i: i + size]
+
+
+def load_pinned_model(model_ref: str, revision: str) -> tuple[Any, Any]:
+    """Load the pinned checkpoint from the local HF cache without memory-mapping the weights.
+
+    ``from_pretrained`` memory-maps ``model.safetensors``; on this shared Windows host that
+    page-in failed with an access violation under memory pressure. Reading the file into memory
+    and loading the state dict gives the same float32 weights (the base digest proves it).
+    """
+    import torch
+    from huggingface_hub import hf_hub_download
+    from safetensors.torch import load as load_safetensors
+    from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
+
+    tok = AutoTokenizer.from_pretrained(model_ref, revision=revision)
+    config = AutoConfig.from_pretrained(model_ref, revision=revision)
+    with torch.device("meta"):
+        model = AutoModelForCausalLM.from_config(config, dtype=torch.float32)
+    weights = Path(hf_hub_download(model_ref, "model.safetensors", revision=revision))
+    raw = weights.read_bytes()
+    state = load_safetensors(raw)
+    del raw
+    for key in list(state):  # convert one tensor at a time to bound peak memory
+        state[key] = state[key].to(torch.float32)
+    missing, unexpected = model.load_state_dict(state, strict=False, assign=True)
+    del state
+    tied = getattr(config, "tie_word_embeddings", False)
+    if unexpected or set(missing) - ({"lm_head.weight"} if tied else set()):
+        raise RuntimeError(f"checkpoint mismatch: missing={missing} unexpected={unexpected}")
+    if tied:
+        model.tie_weights()
+    # Non-persistent buffers (rotary inv_freq) are not in the checkpoint: rebuild those modules on CPU.
+    for name, module in list(model.named_modules()):
+        if any(b.is_meta for b in module.buffers(recurse=False)):
+            parent, _, attr = name.rpartition(".")
+            setattr(model.get_submodule(parent) if parent else model, attr, type(module)(config=config))
+    if any(t.is_meta for t in (*model.parameters(), *model.buffers())):
+        raise RuntimeError("tensors left on the meta device after loading")
+    return model.eval(), tok
 
 
 def first_token(tokenizer: Any, text: str) -> int:

@@ -79,9 +79,14 @@ def bootstrap_diff(
     return float(diffs.mean()), float(lo), float(hi), n
 
 
+# Per-document differences are multiples of 0.25, so percentile bounds can land a hair under an exact
+# margin through float interpolation; a bound within 1e-9 of the margin counts as meeting it.
+BOUNDARY_TOL = 1e-9
+
+
 def verdict(diffs: Mapping[str, tuple[float, float, float, int]], margin: float) -> bool:
     """True iff there is at least one diff and every lower bound is at least ``margin``.
 
     An empty ``diffs`` is never a pass: no evidence cannot promote a claim.
     """
-    return bool(diffs) and all(d[1] >= margin for d in diffs.values())
+    return bool(diffs) and all(d[1] >= margin - BOUNDARY_TOL for d in diffs.values())
