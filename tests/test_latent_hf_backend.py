@@ -69,6 +69,20 @@ def test_admit_tampered_refused(backend):
     assert adm.receipt.reason_code == "TENSOR_DIGEST_MISMATCH"
 
 
+def test_admit_wrong_principal_or_stale_fence_refused(backend):
+    cap, raw = capsule_for(backend)
+    g = grant(cap)
+    wrong = backend.admit(cap, g, raw, Q, receipt_id="r1", now=T0 + 1, principal_id="other")
+    assert wrong.prefix is None and wrong.receipt.outcome == "REFUSED"
+    assert wrong.receipt.reason_code == "PRINCIPAL_MISMATCH"
+    stale = backend.admit(cap, g, raw, Q, receipt_id="r2", now=T0 + 1, principal_id="r", current_fence=2)
+    assert stale.prefix is None and stale.receipt.reason_code == "STALE_FENCE"
+    ok = backend.admit(cap, g, raw, Q, receipt_id="r3", now=T0 + 1, principal_id="r", current_fence=1)
+    assert ok.prefix is not None and ok.receipt.outcome == "INJECTED"
+    text, receipt = backend.receive(cap, g, raw, Q, receipt_id="r4", now=T0 + 1, max_tokens=2, principal_id="other")
+    assert text is None and receipt.reason_code == "PRINCIPAL_MISMATCH"
+
+
 def test_next_token_logprobs_depend_on_prefix(backend):
     a = backend.encode_prefixes([DOC])[0]
     b = backend.encode_prefixes(["Record for Ada . Ada lives in Oslo ."])[0]

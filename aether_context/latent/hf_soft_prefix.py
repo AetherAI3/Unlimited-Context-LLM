@@ -188,10 +188,12 @@ class HFSoftPrefixBackend:
         return batch, mask
 
     def admit(self, capsule: LatentCapsuleV1, grant: ContextHandoffGrantV1, tensor: bytes, question: str, *,
-              receipt_id: str, now: int) -> Admission:
+              receipt_id: str, now: int, principal_id: Optional[str] = None,
+              current_fence: Optional[int] = None) -> Admission:
         adapter = self.adapter_id
         code = handoff.admission_reason(capsule, grant, tensor, model_id=self.model_id, adapter_id=adapter,
-                                        width=self.width, now=now)
+                                        width=self.width, now=now, principal_id=principal_id,
+                                        current_fence=current_fence)
         if code is not None:
             return Admission(None, handoff.refused_receipt(grant, receipt_id=receipt_id, model_id=self.model_id,
                                                            adapter_id=adapter, reason_code=code, used_at=now))
@@ -242,8 +244,10 @@ class HFSoftPrefixBackend:
         return self.tokenizer.decode(out[0], skip_special_tokens=True)
 
     def receive(self, capsule: LatentCapsuleV1, grant: ContextHandoffGrantV1, tensor: bytes, prompt: str, *,
-                receipt_id: str, now: int, max_tokens: int = 32) -> tuple[Optional[str], LatentUseReceiptV1]:
-        adm = self.admit(capsule, grant, tensor, prompt, receipt_id=receipt_id, now=now)
+                receipt_id: str, now: int, max_tokens: int = 32, principal_id: Optional[str] = None,
+                current_fence: Optional[int] = None) -> tuple[Optional[str], LatentUseReceiptV1]:
+        adm = self.admit(capsule, grant, tensor, prompt, receipt_id=receipt_id, now=now,
+                         principal_id=principal_id, current_fence=current_fence)
         if adm.prefix is None:
             return None, adm.receipt
         return self.generate(adm.prefix, prompt, max_tokens=max_tokens), adm.receipt
