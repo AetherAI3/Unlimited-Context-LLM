@@ -7,12 +7,17 @@ Everything is deterministic from ``random.Random`` streams derived from one inte
 stream (train docs, eval docs, mismatches, permutation, items, training questions) is independent,
 so changing ``n_eval`` never changes the training documents. The constants below are normative and
 must match ``PREREGISTRATION.md``.
+
+Reproducibility note: Python only guarantees the ``random.random()`` sequence of a seeded
+generator across versions; ``choice``/``sample``/``shuffle`` may change between releases. The
+committed dataset digest (``dataset_digest``) is the source of truth, not the seed.
 """
 from __future__ import annotations
 
 import random
 from collections.abc import Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any
 
 from aether_context.contracts import digest
@@ -65,19 +70,63 @@ YES_NO = {  # unseen task family, never trained
 
 FAMILIES = ("unseen_template", "yes_no")
 YES_NO_CANDIDATES = ("Yes", "No")
-YES_PROBABILITY = 0.5
+TRUE_CLAIMS_PER_DOC = 2  # of the 4 yes/no items per eval doc, exactly this many are true
 
 TRAIN_NAMES = (
-    "Alice", "Bruno", "Carla", "Dmitri", "Elena", "Felix", "Gloria", "Hector", "Irene", "Jonas",
-    "Katya", "Leon", "Marta", "Nikolai", "Pavel", "Quentin", "Rosa", "Stefan", "Tessa", "Ulrich",
-    "Vera", "Walter", "Xavier", "Yasmin", "Zoltan", "Andrei", "Beatrice", "Conrad", "Daphne",
-    "Edmund", "Fiona", "Gustav", "Helena", "Ivan", "Judith", "Konrad", "Lena", "Magnus", "Nadia",
-    "Oscar", "Petra", "Rafael", "Sabine", "Tobias", "Ursula", "Viktor", "Wanda", "Yusuf",
+    "Aaron", "Abigail", "Adrian", "Agnes", "Alan", "Albert", "Alexa", "Alfred", "Alice", "Alina",
+    "Amelia", "Anders", "Andrei", "Angela", "Anika", "Anton", "Arjun", "Astrid", "Aurelio", "Axel",
+    "Bastian", "Beatrice", "Benedict", "Bernard", "Bianca", "Birgit", "Bjorn", "Blanca", "Bruno",
+    "Bertram", "Camila", "Carla", "Carmen", "Cecilia", "Cedric", "Celeste", "Charlotte",
+    "Christoph", "Cornelia", "Conrad", "Cyrus", "Dagmar", "Damian", "Daniela", "Darius", "Davina",
+    "Dmitri", "Dominic", "Donato", "Dorothea", "Dylan", "Eamon", "Edmund", "Edith", "Eduardo",
+    "Elena", "Eleanor", "Elias", "Elisa", "Emil", "Emilia", "Enrique", "Erik", "Esme", "Eugene",
+    "Fabian", "Farah", "Felicia", "Felix", "Fernando", "Filip", "Fiona", "Florian", "Frances",
+    "Franz", "Freya", "Gabriel", "Gaspar", "Gemma", "Georg", "Gerald", "Gianna", "Gilbert",
+    "Gloria", "Gregor", "Gunnar", "Gustav", "Giselle", "Hannah", "Hans", "Harriet", "Hector",
+    "Heidi", "Helena", "Henrik", "Herman", "Hilda", "Horace", "Hana", "Ian", "Ibrahim", "Igor",
+    "Ilse", "Imani", "Irene", "Isabel", "Isidor", "Ivan", "Ilana", "Jacqueline", "Jakob", "Janet",
+    "Jasper", "Javier", "Jelena", "Joachim", "Johanna", "Jonas", "Josephine", "Judith", "Julian",
+    "Juliet", "Jurgen", "Kamal", "Karen", "Karl", "Katarina", "Katya", "Kenji", "Klara", "Konrad",
+    "Kristof", "Kurt", "Lars", "Laura", "Lazlo", "Lena", "Leon", "Leonora", "Liam", "Lidia",
+    "Linus", "Livia", "Lorenzo", "Lucia", "Ludwig", "Luther", "Magnus", "Malik", "Manuel",
+    "Margit", "Marta", "Matteo", "Mathilde", "Maxim", "Melina", "Miriam", "Mirko", "Monica",
+    "Moritz", "Nadia", "Natalia", "Nathan", "Nestor", "Nicola", "Nikolai", "Nina", "Noah", "Nora",
+    "Norbert", "Octavia", "Olaf", "Oliver", "Orson", "Oscar", "Osvaldo", "Otto", "Odette", "Pablo",
+    "Paloma", "Pascal", "Patrice", "Paula", "Pavel", "Petra", "Philip", "Pilar", "Priya",
+    "Quentin", "Rafael", "Ramon", "Raquel", "Reinhard", "Renata", "Ricardo", "Rolf", "Roman",
+    "Rosa", "Rosalind", "Rufus", "Sabine", "Salma", "Samuel", "Santiago", "Sara", "Sebastian",
+    "Selma", "Serena", "Sergei", "Silvia", "Simone", "Sofia", "Stefan", "Stella", "Svetlana",
+    "Tamara", "Tariq", "Teodor", "Tessa", "Theo", "Theresa", "Thomas", "Tobias", "Tomas", "Trudy",
+    "Ulrich", "Ulla", "Uri", "Ursula", "Valentin", "Valeria", "Vera", "Viktor", "Vincent",
+    "Vivian", "Vesna", "Walter", "Wanda", "Wendell", "Wilhelm", "Winifred", "Wolfram", "Xavier",
+    "Ximena", "Yasmin", "Yusuf", "Yolanda", "Yuri", "Zoltan", "Zora", "Zachary",
 )
 EVAL_NAMES = (
-    "Ada", "Boris", "Clara", "Dario", "Esther", "Farid", "Greta", "Hugo", "Ingrid", "Jorge",
-    "Kira", "Lukas", "Mara", "Nils", "Olga", "Pedro", "Rita", "Soren", "Talia", "Umar",
-    "Vlad", "Willa", "Yara", "Zane",
+    "Ada", "Adela", "Adnan", "Alberto", "Alma", "Amir", "Anselm", "Arvid", "Aziz", "Alexei",
+    "Anneliese", "Barnaby", "Beata", "Bogdan", "Boris", "Brigitte", "Bruna", "Bartosz", "Caleb",
+    "Camille", "Casimir", "Clara", "Claudio", "Constance", "Corinna", "Cosmo", "Callum", "Dario",
+    "Delia", "Desmond", "Dieter", "Dina", "Dorian", "Dunstan", "Dalia", "Edda", "Egon", "Elif",
+    "Elmer", "Emeric", "Ernesto", "Esther", "Evander", "Ezra", "Eliska", "Farid", "Fatima",
+    "Fenella", "Fergus", "Finn", "Flavia", "Frieda", "Fritz", "Gael", "Gideon", "Greta",
+    "Gretchen", "Guido", "Gwen", "Gerda", "Gaia", "Hadrian", "Halima", "Hartmut", "Hedda", "Hugo",
+    "Humberto", "Hanne", "Ida", "Ignacio", "Ingrid", "Iona", "Irina", "Isolde", "Ivo", "Isaac",
+    "Jaime", "Jarek", "Joaquin", "Jorge", "Jovan", "Judit", "Jonathan", "Jelka", "Kasimir",
+    "Katrin", "Kira", "Kleo", "Kofi", "Kostas", "Kristina", "Kaspar", "Lamar", "Leopold", "Leila",
+    "Lorna", "Lothar", "Lukas", "Luna", "Lucian", "Larissa", "Mara", "Marcel", "Mario", "Marit",
+    "Mehmet", "Mercedes", "Mikhail", "Milena", "Mina", "Murat", "Nabil", "Natasha", "Neville",
+    "Nico", "Nigel", "Nils", "Noemi", "Nuno", "Olga", "Omar", "Ondrej", "Orla", "Osman", "Ottilie",
+    "Paolo", "Pedro", "Penelope", "Percival", "Petr", "Phoebe", "Placido", "Prisca", "Radek",
+    "Raimund", "Regina", "Rita", "Rodrigo", "Rosalie", "Rudolf", "Ruth", "Reza", "Saskia",
+    "Sergio", "Silas", "Soren", "Sven", "Sybil", "Szilvia", "Samira", "Sandor", "Talia", "Tamsin",
+    "Tancred", "Teresa", "Tibor", "Tilda", "Timur", "Tristan", "Tove", "Udo", "Ugo", "Umar", "Una",
+    "Uwe", "Valentina", "Vasco", "Vlad", "Vigdis", "Veronika", "Wenzel", "Wilma", "Willa",
+    "Wiktor", "Wojtek", "Yara", "Yvonne", "Yannick", "Yevgenia", "Zane", "Zdenek", "Zeno",
+    "Zinaida", "Zofia", "Zuzana", "Abel", "Ambrose", "Anatole", "Bela", "Benno", "Borys", "Cato",
+    "Cyril", "Dennis", "Ellis", "Emmett", "Eskil", "Fabio", "Gerhard", "Gregoire", "Hubert",
+    "Idris", "Ilya", "Ismael", "Jerome", "Joris", "Kajetan", "Lazar", "Leandro", "Marek",
+    "Matthias", "Milo", "Nikita", "Orlando", "Ottokar", "Pierre", "Rainer", "Rasmus", "Reuben",
+    "Stanislav", "Teodoro", "Ulf", "Viggo", "Waldemar", "Yaroslav", "Zacharias", "Zenon", "Aline",
+    "Berta", "Dorota", "Elsa", "Hedy", "Inge", "Jana", "Lotte", "Magda", "Olivia",
 )
 
 
@@ -85,10 +134,16 @@ EVAL_NAMES = (
 class Document:
     doc_id: str
     name: str
-    values: dict[str, str]
+    values: Mapping[str, str]
     order: tuple[str, ...]
-    variants: dict[str, int]
+    variants: Mapping[str, int]
     text: str
+
+    def __post_init__(self) -> None:
+        # Read-only views so a document cannot drift from its text and anchor digest.
+        object.__setattr__(self, "values", MappingProxyType(dict(self.values)))
+        object.__setattr__(self, "order", tuple(self.order))
+        object.__setattr__(self, "variants", MappingProxyType(dict(self.variants)))
 
 
 @dataclass(frozen=True)
@@ -137,19 +192,10 @@ def _stream(seed: int, label: str) -> random.Random:
     return random.Random(f"{seed}:{label}")
 
 
-def _name_cycle(rng: random.Random, names: tuple[str, ...], count: int) -> list[str]:
-    """Every name once per pass (shuffled), repeating only when ``count`` exceeds the list."""
-    out: list[str] = []
-    while len(out) < count:
-        out.extend(rng.sample(names, len(names)))
-    return out[:count]
-
-
-def _make_docs(
-    rng: random.Random, prefix: str, names: tuple[str, ...], count: int
-) -> tuple[Document, ...]:
+def _make_docs(rng: random.Random, prefix: str, names: list[str]) -> tuple[Document, ...]:
+    """Documents for ``names``; ``rng`` only ever draws values, never names."""
     docs = []
-    for i, name in enumerate(_name_cycle(rng, names, count)):
+    for i, name in enumerate(names):
         order = tuple(rng.sample(list(ATTRIBUTES), len(ATTRIBUTES)))
         variants = {a: rng.randrange(2) for a in ATTRIBUTES}
         values = {a: rng.choice(ATTRIBUTES[a]) for a in ATTRIBUTES}
@@ -164,6 +210,20 @@ def _make_docs(
             )
         )
     return tuple(docs)
+
+
+def _eval_names(rng: random.Random, count: int) -> list[str]:
+    """Unique eval names: a shuffled prefix, so the first k names do not depend on ``count``."""
+    if count > len(EVAL_NAMES):
+        raise ValueError(f"n_eval {count} exceeds the {len(EVAL_NAMES)} available eval names")
+    pool = list(EVAL_NAMES)
+    rng.shuffle(pool)
+    return pool[:count]
+
+
+def _train_names(rng: random.Random, count: int) -> list[str]:
+    """Train names are drawn independently per doc and may repeat."""
+    return [rng.choice(TRAIN_NAMES) for _ in range(count)]
 
 
 def blank(doc: Document) -> Document:
@@ -204,6 +264,8 @@ def anchor_digest(doc: Document) -> str:
 
 def gold_under(item: EvalItem, doc: Document) -> str:
     """The correct answer to ``item`` if ``doc`` were the truth."""
+    if item.attribute not in doc.values:
+        raise ValueError(f"doc {doc.doc_id} has no value for attribute {item.attribute!r}")
     actual = doc.values[item.attribute]
     if item.family == "unseen_template":
         return actual
@@ -244,9 +306,10 @@ def _eval_items(rng: random.Random, docs: tuple[Document, ...]) -> tuple[EvalIte
                     None,
                 )
             )
+        true_attrs = set(rng.sample(list(ATTRIBUTES), TRUE_CLAIMS_PER_DOC))
         for a in ATTRIBUTES:
             truth = doc.values[a]
-            if rng.random() < YES_PROBABILITY:
+            if a in true_attrs:
                 claim = truth
             else:
                 claim = rng.choice([v for v in ATTRIBUTES[a] if v != truth])
@@ -266,9 +329,15 @@ def _eval_items(rng: random.Random, docs: tuple[Document, ...]) -> tuple[EvalIte
 
 
 def build(seed: int, n_train: int, n_eval: int) -> Dataset:
-    """Generate the full dataset. Names repeat (shuffled passes) if a split exceeds its list."""
-    train_docs = _make_docs(_stream(seed, "train"), "train", TRAIN_NAMES, n_train)
-    eval_docs = _make_docs(_stream(seed, "eval"), "eval", EVAL_NAMES, n_eval)
+    """Generate the full dataset.
+
+    Eval names are unique (``ValueError`` if ``n_eval`` exceeds ``len(EVAL_NAMES)``); train names
+    may repeat. Names come from their own streams, so document values do not depend on them.
+    """
+    train_names = _train_names(_stream(seed, "names_train"), n_train)
+    eval_names = _eval_names(_stream(seed, "names_eval"), n_eval)
+    train_docs = _make_docs(_stream(seed, "train"), "train", train_names)
+    eval_docs = _make_docs(_stream(seed, "eval"), "eval", eval_names)
     mm_rng = _stream(seed, "mismatch")
     return Dataset(
         train_docs=train_docs,

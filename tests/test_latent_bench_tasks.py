@@ -37,13 +37,47 @@ def test_changing_n_eval_does_not_change_train_docs(ds):
     assert other.train_examples == ds.train_examples
 
 
-def test_name_lists_are_sized_disjoint_single_capitalised_words():
-    assert len(tasks.TRAIN_NAMES) == 48 and len(tasks.EVAL_NAMES) == 24
-    assert len(set(tasks.TRAIN_NAMES)) == 48 and len(set(tasks.EVAL_NAMES)) == 24
+COMMON_NOUN_NAMES = {
+    "rose", "ruby", "olive", "hunter", "baker", "cooper", "fox", "hazel", "violet", "amber",
+    "pearl", "jade", "iris", "daisy", "lily", "holly", "ivy", "willow", "mason", "chase", "hope",
+    "joy", "grace", "mark", "will", "bill", "jack", "sage", "summer", "autumn", "robin", "drake",
+    "wolf", "duke", "king", "knight", "major", "penny", "sandy", "dawn", "faith", "page", "miles",
+}
+
+
+def test_name_pools_are_large_unique_disjoint_single_capitalised_words():
+    assert len(tasks.EVAL_NAMES) >= 220 and len(tasks.TRAIN_NAMES) >= 240
+    assert len(set(tasks.EVAL_NAMES)) == len(tasks.EVAL_NAMES)
+    assert len(set(tasks.TRAIN_NAMES)) == len(tasks.TRAIN_NAMES)
     assert not set(tasks.TRAIN_NAMES) & set(tasks.EVAL_NAMES)
     for name in (*tasks.TRAIN_NAMES, *tasks.EVAL_NAMES):
-        assert name.isalpha() and name[0].isupper() and name[1:].islower()
+        assert name.isascii() and name.isalpha() and name[0].isupper() and name[1:].islower()
         assert name.lower() not in _all_values()
+        assert name.lower() not in COMMON_NOUN_NAMES
+
+
+def test_eval_docs_have_unique_names_and_oversized_n_eval_is_rejected(ds):
+    names = [d.name for d in ds.eval_docs]
+    assert len(set(names)) == len(names)
+    full = tasks.build(SEED, 4, len(tasks.EVAL_NAMES))
+    assert len({d.name for d in full.eval_docs}) == len(tasks.EVAL_NAMES)
+    with pytest.raises(ValueError):
+        tasks.build(SEED, 4, len(tasks.EVAL_NAMES) + 1)
+
+
+def test_train_names_may_repeat_beyond_the_pool():
+    big = tasks.build(SEED, len(tasks.TRAIN_NAMES) * 2, 2)
+    assert len(big.train_docs) == len(tasks.TRAIN_NAMES) * 2
+    assert {d.name for d in big.train_docs} <= set(tasks.TRAIN_NAMES)
+
+
+def test_eval_docs_are_prefix_stable_when_n_eval_changes(ds):
+    small = tasks.build(SEED, 48, 10)
+    for a, b in zip(small.eval_docs, ds.eval_docs[:10], strict=True):
+        assert a == b
+    assert [small.mismatched[d.doc_id] for d in small.eval_docs] == [
+        ds.mismatched[d.doc_id] for d in ds.eval_docs[:10]
+    ]
 
 
 def test_train_and_eval_docs_use_disjoint_names(ds):
@@ -105,6 +139,8 @@ def test_shuffle_source_is_a_derangement_covering_every_eval_doc(ds):
     assert sorted(ds.shuffle_source) == sorted(ids)
     assert sorted(ds.shuffle_source.values()) == sorted(ids)
     assert all(k != v for k, v in ds.shuffle_source.items())
+    names = {d.doc_id: d.name for d in ds.eval_docs}
+    assert all(names[k] != names[v] for k, v in ds.shuffle_source.items())
 
 
 def test_shuffle_source_needs_at_least_two_eval_docs():
@@ -166,13 +202,52 @@ def test_anchor_digests_are_stable_and_distinct(ds):
     assert tasks.anchor_digest(ds.blanks["eval-0000"]) != digests[0]
 
 
-def test_yes_no_truth_rate_is_balanced_at_200_docs():
+def test_yes_no_split_is_exactly_half_true_per_doc():
     big = tasks.build(SEED, 4, 200)
     docs = {d.doc_id: d for d in big.eval_docs}
     yn = [i for i in big.eval_items if i.family == "yes_no"]
     assert len(yn) == 800
-    rate = sum(tasks.gold_under(i, docs[i.doc_id]) == "Yes" for i in yn) / len(yn)
-    assert 0.35 <= rate <= 0.65
+    per_doc: dict[str, list[str]] = {}
+    for i in yn:
+        per_doc.setdefault(i.doc_id, []).append(tasks.gold_under(i, docs[i.doc_id]))
+    assert len(per_doc) == 200
+    assert tasks.TRUE_CLAIMS_PER_DOC == 2
+    for answers in per_doc.values():
+        assert answers.count("Yes") == 2 and answers.count("No") == 2
+    # which attributes carry the true claims varies across documents
+    true_sets = {
+        frozenset(i.attribute for i in yn
+                  if i.doc_id == d and tasks.gold_under(i, docs[d]) == "Yes")
+        for d in per_doc
+    }
+    assert len(true_sets) > 1
+
+
+def test_gold_under_rejects_a_doc_without_the_attribute(ds):
+    item = ds.eval_items[0]
+    with pytest.raises(ValueError, match=item.attribute):
+        tasks.gold_under(item, ds.blanks[item.doc_id])
+
+
+def test_unseen_template_gold_always_changes_under_mismatched(ds):
+    docs = {d.doc_id: d for d in ds.eval_docs}
+    unseen = [i for i in ds.eval_items if i.family == "unseen_template"]
+    assert unseen
+    for it in unseen:
+        assert tasks.gold_under(it, ds.mismatched[it.doc_id]) != tasks.gold_under(
+            it, docs[it.doc_id]
+        )
+
+
+def test_document_is_read_only(ds):
+    doc = ds.eval_docs[0]
+    with pytest.raises(TypeError):
+        doc.values["city"] = "Rome"  # type: ignore[index]
+    with pytest.raises(TypeError):
+        doc.variants["city"] = 1  # type: ignore[index]
+    assert isinstance(doc.order, tuple)
+    with pytest.raises(AttributeError):
+        doc.text = "x"  # type: ignore[misc]
 
 
 def test_every_doc_text_contains_each_value_and_the_record_prefix(ds):
@@ -187,9 +262,24 @@ def test_every_doc_text_contains_each_value_and_the_record_prefix(ds):
     assert len(orders) > 1  # field order is shuffled per document
 
 
+def _assert_float_free(value) -> None:
+    assert not isinstance(value, float)
+    if isinstance(value, dict):
+        for k, v in value.items():
+            assert isinstance(k, str)
+            _assert_float_free(v)
+    elif isinstance(value, list):
+        for v in value:
+            _assert_float_free(v)
+    else:
+        assert value is None or isinstance(value, (str, int, bool))
+
+
 def test_json_round_trip_is_equal_and_float_free(ds):
     payload = tasks.to_json(ds)
+    _assert_float_free(payload)
     wire = json.loads(json.dumps(payload))
     assert tasks.from_json(wire) == ds
     assert tasks.to_json(tasks.from_json(wire)) == payload
     assert len(tasks.dataset_digest(ds)) == 64
+    assert tasks.dataset_digest(tasks.from_json(wire)) == tasks.dataset_digest(ds)

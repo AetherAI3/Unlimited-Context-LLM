@@ -20,9 +20,17 @@ DEFAULT_RESAMPLES = 2000
 
 
 def per_doc(
-    records: Iterable[Mapping[str, Any]], arm: str, family: str, key: str = "correct"
+    records: Iterable[Mapping[str, Any]],
+    arm: str,
+    family: str,
+    key: str = "correct",
+    expected_per_doc: int | None = None,
 ) -> dict[str, float]:
-    """Mean of ``key`` per ``doc_id`` over the records of one arm and task family."""
+    """Mean of ``key`` per ``doc_id`` over the records of one arm and task family.
+
+    If ``expected_per_doc`` is given, every document must have exactly that many records
+    (a missing item would otherwise silently reweight the per-document mean).
+    """
     sums: dict[str, float] = {}
     counts: dict[str, int] = {}
     for rec in records:
@@ -31,6 +39,10 @@ def per_doc(
         doc_id = rec["doc_id"]
         sums[doc_id] = sums.get(doc_id, 0.0) + float(rec[key])
         counts[doc_id] = counts.get(doc_id, 0) + 1
+    if expected_per_doc is not None:
+        bad = {d: c for d, c in counts.items() if c != expected_per_doc}
+        if bad:
+            raise ValueError(f"docs with item count != {expected_per_doc}: {sorted(bad.items())}")
     return {doc_id: sums[doc_id] / counts[doc_id] for doc_id in sums}
 
 
@@ -40,14 +52,21 @@ def bootstrap_diff(
     *,
     resamples: int = DEFAULT_RESAMPLES,
     seed: int = 0,
+    strict: bool = True,
 ) -> tuple[float, float, float, int]:
     """Paired bootstrap of ``mean(a - b)`` over the sorted shared doc ids.
 
-    Returns ``(mean, lo, hi, n)`` with a percentile 95% interval. Raises ``ValueError`` when the
-    arms share no documents or ``resamples`` is not positive.
+    Returns ``(mean, lo, hi, n)`` with a percentile 95% interval. Raises ``ValueError`` when
+    ``resamples`` is not positive, the arms share no documents, or (``strict``, the default) the
+    two arms cover different document sets. ``strict=False`` uses the intersection.
     """
     if resamples < 1:
         raise ValueError("resamples must be positive")
+    if strict and set(a) != set(b):
+        raise ValueError(
+            f"arms cover different docs: only in a={sorted(set(a) - set(b))[:5]}, "
+            f"only in b={sorted(set(b) - set(a))[:5]}"
+        )
     shared = sorted(set(a) & set(b))
     if not shared:
         raise ValueError("arms share no doc ids")

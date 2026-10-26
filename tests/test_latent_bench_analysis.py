@@ -52,15 +52,43 @@ def test_same_seed_same_ci_and_interval_brackets_mean():
     assert analysis.bootstrap_diff(a, b, seed=4)[1:3] != (lo, hi)
 
 
-def test_only_shared_doc_ids_are_used():
+def test_strict_pairing_rejects_mismatched_doc_sets():
     a = {"d1": 1.0, "d2": 1.0, "only_a": 0.0}
     b = {"d1": 0.0, "d2": 0.0, "only_b": 1.0}
-    assert analysis.bootstrap_diff(a, b) == (1.0, 1.0, 1.0, 2)
+    with pytest.raises(ValueError):
+        analysis.bootstrap_diff(a, b)
+    with pytest.raises(ValueError):
+        analysis.bootstrap_diff(a, {"d1": 0.0, "d2": 0.0})
+
+
+def test_non_strict_uses_only_shared_doc_ids():
+    a = {"d1": 1.0, "d2": 1.0, "only_a": 0.0}
+    b = {"d1": 0.0, "d2": 0.0, "only_b": 1.0}
+    assert analysis.bootstrap_diff(a, b, strict=False) == (1.0, 1.0, 1.0, 2)
 
 
 def test_no_shared_ids_raises():
     with pytest.raises(ValueError):
-        analysis.bootstrap_diff({"a": 1.0}, {"b": 1.0})
+        analysis.bootstrap_diff({"a": 1.0}, {"b": 1.0}, strict=False)
+    with pytest.raises(ValueError):
+        analysis.bootstrap_diff({}, {})
+
+
+def test_resamples_below_one_raises():
+    with pytest.raises(ValueError):
+        analysis.bootstrap_diff({"a": 1.0}, {"a": 0.0}, resamples=0)
+
+
+def test_per_doc_expected_count_is_enforced():
+    recs = [
+        {"doc_id": "a", "arm": "x", "family": "f", "correct": 1},
+        {"doc_id": "a", "arm": "x", "family": "f", "correct": 0},
+        {"doc_id": "b", "arm": "x", "family": "f", "correct": 1},
+    ]
+    assert analysis.per_doc(recs, "x", "f", expected_per_doc=None) == {"a": 0.5, "b": 1.0}
+    with pytest.raises(ValueError):
+        analysis.per_doc(recs, "x", "f", expected_per_doc=2)
+    assert analysis.per_doc(recs[:2], "x", "f", expected_per_doc=2) == {"a": 0.5}
 
 
 def test_verdict_requires_every_lower_bound_to_clear_the_margin():
