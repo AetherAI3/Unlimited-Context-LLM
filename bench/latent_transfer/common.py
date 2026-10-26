@@ -99,15 +99,16 @@ def chunks(items: list[Any], size: int) -> Iterable[list[Any]]:
 
 
 def load_pinned_model(model_ref: str, revision: str) -> tuple[Any, Any]:
-    """Load the pinned checkpoint from the local HF cache without memory-mapping the weights.
+    """Load the pinned checkpoint from the local HF cache, streaming one tensor at a time.
 
     ``from_pretrained`` memory-maps ``model.safetensors``; on this shared Windows host that
-    page-in failed with an access violation under memory pressure. Reading the file into memory
-    and loading the state dict gives the same float32 weights (the base digest proves it).
+    page-in failed with an access violation under memory pressure, and reading the whole file
+    first ran out of memory. This reads the safetensors header, then each tensor's byte range,
+    converting to float32 as it goes, so peak memory is the float32 model plus one tensor. The
+    weights are the same (the base digest is recorded by every phase).
     """
     import torch
     from huggingface_hub import hf_hub_download
-    from safetensors.torch import load as load_safetensors
     from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
     tok = AutoTokenizer.from_pretrained(model_ref, revision=revision)
@@ -115,11 +116,7 @@ def load_pinned_model(model_ref: str, revision: str) -> tuple[Any, Any]:
     with torch.device("meta"):
         model = AutoModelForCausalLM.from_config(config, dtype=torch.float32)
     weights = Path(hf_hub_download(model_ref, "model.safetensors", revision=revision))
-    raw = weights.read_bytes()
-    state = load_safetensors(raw)
-    del raw
-    for key in list(state):  # convert one tensor at a time to bound peak memory
-        state[key] = state[key].to(torch.float32)
+    state = dict(_stream_safetensors(weights))
     missing, unexpected = model.load_state_dict(state, strict=False, assign=True)
     del state
     tied = getattr(config, "tie_word_embeddings", False)
@@ -135,6 +132,30 @@ def load_pinned_model(model_ref: str, revision: str) -> tuple[Any, Any]:
     if any(t.is_meta for t in (*model.parameters(), *model.buffers())):
         raise RuntimeError("tensors left on the meta device after loading")
     return model.eval(), tok
+
+
+_SAFETENSORS_DTYPES = {"BF16": "bfloat16", "F16": "float16", "F32": "float32"}
+
+
+def _stream_safetensors(path: Path) -> Iterable[tuple[str, Any]]:
+    """Yield ``(name, float32 tensor)`` from a safetensors file, reading one tensor at a time."""
+    import struct
+
+    import torch
+
+    with open(path, "rb") as fh:
+        (header_len,) = struct.unpack("<Q", fh.read(8))
+        header = json.loads(fh.read(header_len))
+        base = 8 + header_len
+        for name, meta in header.items():
+            if name == "__metadata__":
+                continue
+            start, end = meta["data_offsets"]
+            fh.seek(base + start)
+            buf = bytearray(fh.read(end - start))
+            dtype = getattr(torch, _SAFETENSORS_DTYPES[meta["dtype"]])
+            raw = torch.frombuffer(buf, dtype=dtype) if buf else torch.empty(0, dtype=dtype)
+            yield name, raw.reshape(meta["shape"]).to(torch.float32)
 
 
 def first_token(tokenizer: Any, text: str) -> int:

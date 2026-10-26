@@ -79,7 +79,9 @@ class HFSoftPrefixBackend:
         self._embed = model.get_input_embeddings()
         self._head = model.get_output_embeddings()
         self.width = int(self._embed.weight.shape[1])
-        embed_rms = float(self._embed.weight.detach().float().pow(2).mean(-1).sqrt().mean())
+        weight = self._embed.weight.detach()
+        # Mean per-row RMS, via row norms so no vocab x width temporary is allocated.
+        embed_rms = float((torch.linalg.vector_norm(weight.float(), dim=-1) / weight.shape[1] ** 0.5).mean())
         with torch.random.fork_rng(devices=[]):
             torch.manual_seed(seed)
             self.projector = SoftPrefixProjector(self.width, slots, d_attn, embed_rms=embed_rms)
