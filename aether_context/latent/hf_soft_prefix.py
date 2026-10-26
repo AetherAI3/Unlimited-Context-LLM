@@ -116,7 +116,8 @@ class HFSoftPrefixBackend:
     def base_digest(self) -> str:
         h = hashlib.sha256()
         for name, t in self.model.state_dict().items():
-            h.update(name.encode() + b"\0" + t.detach().cpu().contiguous().view(torch.uint8).numpy().tobytes())
+            h.update(name.encode() + b"\0")
+            h.update(t.detach().cpu().contiguous().view(torch.uint8).numpy())  # buffer, no copy
         return h.hexdigest()
 
     def flop_params(self) -> tuple[int, int]:
