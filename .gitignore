@@ -51,3 +51,6 @@ runs/
 # Node (npm launcher)
 node_modules/
 *.tgz
+
+# latent-transfer bench run artifacts (weights, capsule bytes); only results/ and REPORT.md are evidence
+bench/latent_transfer/runs/
