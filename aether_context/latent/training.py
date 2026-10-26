@@ -11,6 +11,7 @@ import torch
 from .hf_soft_prefix import HFSoftPrefixBackend
 
 SENDER_BATCH = 16
+GRAD_CLIP = 1.0
 
 
 @dataclass(frozen=True)
@@ -35,6 +36,11 @@ class TrainStats:
     trainable_params: int
     base_digest_before: str
     base_digest_after: str
+    grad_clip: float
+    adapter_id: str
+    codebook_digest: str
+    sender_layer: int
+    slots: int
     losses: list[float] = field(default_factory=list)
 
 
@@ -67,7 +73,7 @@ def train_projector(backend: HFSoftPrefixBackend, examples: Sequence[TrainExampl
         loss, counts = backend.answer_loss(prefixes, [e.question for e in batch], [e.answer for e in batch])
         opt.zero_grad(set_to_none=True)
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(params, 1.0)
+        torch.nn.utils.clip_grad_norm_(params, GRAD_CLIP)
         opt.step()
         losses.append(float(loss.detach()))
         receiver_tokens += counts["tokens"]
@@ -83,7 +89,9 @@ def train_projector(backend: HFSoftPrefixBackend, examples: Sequence[TrainExampl
                       wall_s=wall, sender_wall_s=sender_wall, sender_tokens=sender_tokens,
                       receiver_tokens=receiver_tokens, head_tokens=head_tokens,
                       trainable_params=sum(p.numel() for p in params), base_digest_before=before,
-                      base_digest_after=after, losses=losses)
+                      base_digest_after=after, grad_clip=GRAD_CLIP, adapter_id=backend.adapter_id,
+                      codebook_digest=backend.codebook_digest(), sender_layer=backend.sender_layer,
+                      slots=backend.slots, losses=losses)
 
 
-__all__ = ["TrainExample", "TrainStats", "train_projector"]
+__all__ = ["GRAD_CLIP", "TrainExample", "TrainStats", "train_projector"]

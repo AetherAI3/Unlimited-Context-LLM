@@ -28,7 +28,7 @@ from .tensor_codec import load_tensor, tensor_bytes
 
 CODEC_ID = "hf-soft-prefix"
 CODEC_VERSION = 1
-_MARK = "⁣"  # INVISIBLE SEPARATOR: splits the rendered template, never tokenized
+_MARK = "\u2063"  # INVISIBLE SEPARATOR: splits the rendered template, never tokenized
 
 
 @dataclass(frozen=True)
@@ -47,6 +47,13 @@ class Admission:
 
 
 class HFSoftPrefixBackend:
+    """Frozen same-model sender/receiver pair with a trainable soft-prefix projector.
+
+    The backend owns ``tokenizer``: it sets right padding (and a pad token when missing).
+    The adapter identity binds the projector weights and :meth:`codec_config`, so a capsule
+    made under another layer, slot count, system prompt, storage dtype or model is refused.
+    """
+
     injection_point = "soft_prefix"
 
     def __init__(self, model, tokenizer, *, model_id: str, slots: int = 8, sender_layer: Optional[int] = None,
@@ -61,6 +68,7 @@ class HFSoftPrefixBackend:
         tokenizer.padding_side = "right"
         self.model_id = model_id
         self.slots = slots
+        self.d_attn = d_attn
         self.system = system
         self.storage_dtype = storage_dtype
         layers = int(model.config.num_hidden_layers)
@@ -72,20 +80,30 @@ class HFSoftPrefixBackend:
         self._head = model.get_output_embeddings()
         self.width = int(self._embed.weight.shape[1])
         embed_rms = float(self._embed.weight.detach().float().pow(2).mean(-1).sqrt().mean())
-        torch.manual_seed(seed)
-        self.projector = SoftPrefixProjector(self.width, slots, d_attn, embed_rms=embed_rms)
+        with torch.random.fork_rng(devices=[]):
+            torch.manual_seed(seed)
+            self.projector = SoftPrefixProjector(self.width, slots, d_attn, embed_rms=embed_rms)
 
     @classmethod
     def from_pretrained(cls, model_ref: str, *, revision: Optional[str] = None, **kw) -> "HFSoftPrefixBackend":
+        """Load a pinned model; ``revision`` (a commit sha) is required so ``model_id`` names exact weights."""
+        if not revision:
+            raise ValueError("from_pretrained needs a pinned revision")
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
         tok = AutoTokenizer.from_pretrained(model_ref, revision=revision)
         model = AutoModelForCausalLM.from_pretrained(model_ref, revision=revision, dtype=torch.float32)
-        return cls(model, tok, model_id=f"{model_ref}@{revision}" if revision else model_ref, **kw)
+        return cls(model, tok, model_id=f"{model_ref}@{revision}", **kw)
 
     # -- identity --------------------------------------------------------------------------
+    def codec_config(self) -> dict:
+        """Everything besides the projector weights that shapes what a capsule means."""
+        return {"codec_id": CODEC_ID, "codec_version": CODEC_VERSION, "model_id": self.model_id,
+                "sender_layer": self.sender_layer, "slots": self.slots, "d_attn": self.d_attn,
+                "system": self.system, "storage_dtype": self.storage_dtype}
+
     def codebook_digest(self) -> str:
-        h = hashlib.sha256()
+        h = hashlib.sha256(digest(self.codec_config()).encode())
         for name, t in sorted(self.projector.state_dict().items()):
             arr = t.detach().cpu().float().contiguous().numpy()
             h.update(name.encode() + b"\0" + repr(tuple(arr.shape)).encode() + b"\0" + arr.tobytes())
@@ -107,17 +125,21 @@ class HFSoftPrefixBackend:
         return int(blocks), int(self._head.weight.numel())
 
     def save_projector(self, path: "str | Path") -> None:
-        torch.save(self.projector.state_dict(), Path(path))
+        torch.save({"config": self.codec_config(), "state": self.projector.state_dict()}, Path(path))
 
     def load_projector(self, path: "str | Path") -> None:
-        self.projector.load_state_dict(torch.load(Path(path), weights_only=True))
+        saved = torch.load(Path(path), weights_only=True)
+        if saved.get("config") != self.codec_config():
+            raise ValueError("projector was trained under a different codec config")
+        self.projector.load_state_dict(saved["state"])
         self.projector.eval()
 
     # -- sender ----------------------------------------------------------------------------
     @torch.no_grad()
     def sender_states(self, texts: Sequence[str]) -> list[torch.Tensor]:
         enc = self.tokenizer(list(texts), add_special_tokens=False, padding=True, return_tensors="pt")
-        out = self._base(input_ids=enc.input_ids, attention_mask=enc.attention_mask, output_hidden_states=True)
+        out = self._base(input_ids=enc.input_ids, attention_mask=enc.attention_mask, output_hidden_states=True,
+                         use_cache=False)
         hidden = out.hidden_states[self.sender_layer].float()
         return [hidden[i, :n].clone() for i, n in enumerate(enc.attention_mask.sum(-1).tolist())]
 
@@ -189,8 +211,14 @@ class HFSoftPrefixBackend:
 
     def admit(self, capsule: LatentCapsuleV1, grant: ContextHandoffGrantV1, tensor: bytes, question: str, *,
               receipt_id: str, now: int, principal_id: Optional[str] = None,
-              current_fence: Optional[int] = None) -> Admission:
-        adapter = self.adapter_id
+              current_fence: Optional[int] = None, adapter_id: Optional[str] = None) -> Admission:
+        """Admit ``capsule`` for one question, or refuse it; always returns a receipt.
+
+        ``adapter_id`` lets a caller pass a cached :attr:`adapter_id` (it must be this backend's
+        current id; it is trusted, not recomputed). The receipt describes the unpadded receiver
+        sequence for ``question``; score it with the returned prefix and the same question.
+        """
+        adapter = adapter_id or self.adapter_id
         code = handoff.admission_reason(capsule, grant, tensor, model_id=self.model_id, adapter_id=adapter,
                                         width=self.width, now=now, principal_id=principal_id,
                                         current_fence=current_fence)
@@ -198,12 +226,13 @@ class HFSoftPrefixBackend:
             return Admission(None, handoff.refused_receipt(grant, receipt_id=receipt_id, model_id=self.model_id,
                                                            adapter_id=adapter, reason_code=code, used_at=now))
         prefix = torch.from_numpy(load_tensor(capsule.tensor, tensor)[: grant.max_slots].astype(np.float32))
-        seq, lay = self._sequence(prefix, question)
+        lay = self.layout(question)
         start = len(lay.before)
+        length = start + int(prefix.shape[0]) + len(lay.after)
         receipt = handoff.injected_receipt(
             grant, receipt_id=receipt_id, model_id=self.model_id, adapter_id=adapter,
             positions=list(range(start, start + prefix.shape[0])), template_boundary_digest=lay.boundary_digest(),
-            mask_digest=digest({"mask": [1] * int(seq.shape[0])}), used_at=now)
+            mask_digest=digest({"mask": [1] * length}), used_at=now)
         return Admission(prefix, receipt)
 
     @torch.no_grad()
@@ -211,9 +240,9 @@ class HFSoftPrefixBackend:
                             contexts: Optional[Sequence[Optional[str]]] = None) -> torch.Tensor:
         """Log-probabilities of the first answer token, one row per item."""
         ctx = list(contexts) if contexts is not None else [None] * len(questions)
-        seqs = [self._sequence(p, q, c)[0] for p, q, c in zip(prefixes, questions, ctx)]
+        seqs = [self._sequence(p, q, c)[0] for p, q, c in _strict_zip(prefixes, questions, ctx)]
         batch, mask = self._pad(seqs)
-        hidden = self._base(inputs_embeds=batch, attention_mask=mask).last_hidden_state
+        hidden = self._base(inputs_embeds=batch, attention_mask=mask, use_cache=False).last_hidden_state
         last = hidden[torch.arange(len(seqs)), mask.sum(-1) - 1]
         return torch.log_softmax(self._head(last).float(), dim=-1)
 
@@ -221,14 +250,16 @@ class HFSoftPrefixBackend:
                     ) -> tuple[torch.Tensor, dict]:
         """Mean token cross-entropy of ``answers`` given prefix + question (grad flows to ``prefixes``)."""
         seqs, targets, starts = [], [], []
-        for prefix, q, a in zip(prefixes, questions, answers):
+        for prefix, q, a in _strict_zip(prefixes, questions, answers):
             ids = self._ids(a)
+            if not ids:
+                raise ValueError(f"answer {a!r} tokenizes to nothing")
             seq, _ = self._sequence(prefix, q, answer=ids)
             seqs.append(seq)
             targets.append(ids)
             starts.append(seq.shape[0] - len(ids))
         batch, mask = self._pad(seqs)
-        hidden = self._base(inputs_embeds=batch, attention_mask=mask).last_hidden_state
+        hidden = self._base(inputs_embeds=batch, attention_mask=mask, use_cache=False).last_hidden_state
         rows = [hidden[i, s - 1: s - 1 + len(t)] for i, (s, t) in enumerate(zip(starts, targets))]
         logits = self._head(torch.cat(rows, dim=0)).float()
         gold = torch.tensor([tok for t in targets for tok in t], dtype=torch.long)
@@ -239,7 +270,8 @@ class HFSoftPrefixBackend:
     def generate(self, prefix: Optional[torch.Tensor], question: str, *, max_tokens: int = 32) -> str:
         seq, _ = self._sequence(prefix, question)
         out = self.model.generate(inputs_embeds=seq[None], attention_mask=torch.ones(1, seq.shape[0], dtype=torch.long),
-                                  max_new_tokens=max_tokens, do_sample=False,
+                                  max_new_tokens=max_tokens, do_sample=False, repetition_penalty=1.0,
+                                  temperature=None, top_p=None, top_k=None,
                                   pad_token_id=self.tokenizer.pad_token_id)
         return self.tokenizer.decode(out[0], skip_special_tokens=True)
 
@@ -251,6 +283,13 @@ class HFSoftPrefixBackend:
         if adm.prefix is None:
             return None, adm.receipt
         return self.generate(adm.prefix, prompt, max_tokens=max_tokens), adm.receipt
+
+
+def _strict_zip(*seqs: Sequence) -> zip:
+    """``zip`` that refuses unequal lengths with ValueError (items must never silently drop)."""
+    if len({len(seq) for seq in seqs}) != 1:
+        raise ValueError("batched inputs must have equal lengths")
+    return zip(*seqs)
 
 
 __all__ = ["CODEC_ID", "CODEC_VERSION", "Layout", "Admission", "HFSoftPrefixBackend"]
