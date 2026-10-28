@@ -36,4 +36,5 @@ Manifests contain integers, strings and hashes only, so the existing
 `canonical` / `digest` functions apply unchanged. Tensor bytes are separate
 hashed objects and never ride inside a manifest. The twenty-one exported hosted
 schemas in `schema-v1.json` are unchanged, and the NumPy-only core never imports
-this module. Nothing trains, injects or transports a capsule yet; that is lane L7.
+this module. Training, injection and transport live in the optional `[latent]` extra:
+see [LATENT_HANDOFF.md](LATENT_HANDOFF.md).

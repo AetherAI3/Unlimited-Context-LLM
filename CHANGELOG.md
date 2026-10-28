@@ -6,6 +6,16 @@ All notable changes to `aether-context` are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+- Optional `[latent]` extra (torch + transformers + pydantic) with `aether_context.latent`: a
+  `NativeMemoryLLM` protocol, a digest-verified tensor codec, grant/admission/receipt helpers for
+  the `latent_v1` manifests, and an HF soft-prefix backend that runs one frozen model as a
+  same-model sender/receiver pair with a trainable projector. The NumPy-only core is unchanged and
+  never imports it. See `docs/LATENT_HANDOFF.md`.
+- `bench/latent_transfer/`: a preregistered experiment (G-W7) testing whether the learned capsule
+  carries context on unseen documents, phrasings and a yes/no task family against blank,
+  shuffled, mismatched and no-capsule controls, with cost including training.
+
 ## [0.5.0] — 2026-09-27
 
 ### Added
